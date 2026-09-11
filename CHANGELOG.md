@@ -12,8 +12,8 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (#1087, #1071).** Two surfaces answered a dependency failure with a statement
   about the client, and both were wrong in the same way.
 
-  `leoflow validate`-style token checks aside, **any authenticated request during
-  a database outage returned `401 invalid token`**. `Authenticate` joined
+  **Any authenticated request during a database outage returned
+  `401 invalid token`**. `Authenticate` joined
   `ErrInvalidToken` onto every store failure, so a dead database and a forged
   token were the same value, and the middleware — which inspected only
   `err == nil` — answered 401. Measured against a real stopped Postgres: 401
@@ -42,8 +42,14 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stays: the UI supersedes in-flight grid requests constantly, and mapping those
   to 500 is the regression it was added for.
 
-
-### Fixed
+  `POST /api/v2/auth/token/renew` carried the same conflation and is fixed with
+  it. Renewal re-proves the principal against the user store, so it fails for
+  the same two unrelated reasons — and both mapped to `401 token cannot be
+  renewed; log in again`, with no cause recorded at all, so an outage was
+  invisible on that route. A store failure there is now 503 as well, and the
+  driver detail reaches the log. A token that was judged and rejected, and a
+  session past `max_lifetime`, are still 401. Renewal still fails closed either
+  way: any error refuses the re-mint.
 
 - **`leoflow dev` builds each venv on the interpreter the project declares, not
   always on the managed CPython 3.11 (#1092).** `python_version` selects the task

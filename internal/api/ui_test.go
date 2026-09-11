@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -314,5 +315,33 @@ func TestUIServesStaticAndIndexShell(t *testing.T) {
 	}
 	if cc := rec.Header().Get("Cache-Control"); cc == "" {
 		t.Errorf("/static response missing Cache-Control")
+	}
+}
+
+// TestShellGateDeniesOnABackendError pins the SECOND caller of
+// auth.Authenticate. #1087 changed what Authenticate returns for a store
+// failure — a raw backend error instead of a joined ErrInvalidToken — and
+// nothing outside internal/auth switches on that sentinel, so the shell gate
+// must keep deciding on `err == nil` alone. If it ever grew a "not
+// ErrInvalidToken, so let it through" branch, an unreachable user store would
+// serve the authenticated SPA shell to anyone holding any string.
+func TestShellGateDeniesOnABackendError(t *testing.T) {
+	srv := NewServer(Dependencies{
+		Logger:        discardLogger(),
+		Authenticator: &fakeAuthn{authErr: errors.New("dial tcp 10.0.0.1:5432: i/o timeout")},
+		RateLimiter:   auth.NewRateLimiter(100, time.Minute),
+		CORSOrigins:   []string{"*"},
+		UI:            ui.New(),
+	})
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/dags/etl/grid", http.NoBody)
+	req.AddCookie(&http.Cookie{Name: authTokenCookie, Value: "whatever"})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Errorf("shell GET with an unreachable store = %d, want 302 to login — a store we could not read must never authenticate", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "<div id=\"root\"") {
+		t.Error("the authenticated SPA shell was served while the user store was unreachable")
 	}
 }

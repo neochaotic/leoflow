@@ -193,6 +193,12 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 	// #993 was.
 	local := o.local
 	spec, err := dbt.Compile(manifest, dbt.Meta{
+		// Advisories reach stderr, not stdout: stdout carries the compiled
+		// artifact path that scripts read.
+		Warn: func(msg string) {
+			//nolint:errcheck // a warning that cannot be delivered must not fail the compile
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", msg)
+		},
 		DagID:       cfg.DagID,
 		DagVersion:  o.dagVersion,
 		Image:       image,

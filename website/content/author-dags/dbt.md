@@ -97,7 +97,14 @@ fixed "one model = one pod".
 |---|---|---|
 | **`node`** *(default)* | one task per dbt node — `dbt run/seed/test --select <node>` | many — full per-model isolation, retry, and grid granularity |
 | **`level`** | one task per topological wave; safe by construction | few |
-| **`folder`** | one task per model folder (`staging`, `marts`, …) | few |
+| **`folder`** | one task per **first** folder segment (`staging`, `marts`, …) | few |
+
+The `folder` key is the first segment, not the containing folder: `marts/finance`
+and `marts/sales` both become one `marts` task. A model with no folder at all
+falls back to its resource-type plural (`models`, `seeds`), so a project with a
+folder *named* `models` **and** a model at the root of `models/` gets both in a
+single task — the compile warns on stderr when that happens, naming the members.
+Use `granularity: node` if you need them apart.
 
 `node` is **split** (Leoflow's scheduler parallelizes across pods, one model per
 pod). `level`/`folder` are **fused** — a group runs as a single

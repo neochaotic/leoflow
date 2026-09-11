@@ -34,6 +34,10 @@ const (
 type Options struct {
 	// Granularity selects the partition strategy; the empty value means node.
 	Granularity Granularity
+	// Warn, when set, receives advisories that are not build failures — today
+	// only a folder group-key collision (#1114). This package is otherwise pure,
+	// so the caller decides where a warning goes; nil means say nothing.
+	Warn func(string)
 	// Connection, when set, is a managed Leoflow connection id; each task's dbt
 	// command is prefixed with the runtime step that writes profiles.yml from it
 	// (ADR 0043 #2), so no credential is baked into the image.
@@ -169,7 +173,7 @@ func Render(manifestJSON []byte, opts Options) ([]domain.TaskSpec, error) {
 	if opts.Granularity == "" || opts.Granularity == GranularityNode {
 		tasks = renderNodes(nodes)
 	} else {
-		grouped, gerr := renderGrouped(nodes, opts.Granularity)
+		grouped, gerr := renderGrouped(nodes, opts.Granularity, opts.Warn)
 		if gerr != nil {
 			return nil, gerr
 		}
@@ -258,7 +262,7 @@ func renderNodes(nodes map[string]execNode) []domain.TaskSpec {
 // one `dbt build --select <members>` task — build runs the group's seeds, models,
 // snapshots, and tests in dbt's own internal order, so a group may mix resource
 // types. It fails if the resulting quotient graph is cyclic (see findCycle).
-func renderGrouped(nodes map[string]execNode, gran Granularity) ([]domain.TaskSpec, error) {
+func renderGrouped(nodes map[string]execNode, gran Granularity, warn func(string)) ([]domain.TaskSpec, error) {
 	levels := topoLevels(nodes)
 	groupOf := make(map[string]string, len(nodes))
 	for id, n := range nodes {
@@ -268,9 +272,25 @@ func renderGrouped(nodes map[string]execNode, gran Granularity) ([]domain.TaskSp
 	members := map[string][]string{}
 	children := map[string]map[string]bool{} // parent group -> child groups
 	parents := map[string]map[string]bool{}  // child group -> parent groups
+	// origins tracks WHY a node landed in a group: the folder segment it came
+	// from, or "" for a node with no folder at all (which falls back to the
+	// resource-type plural). Two different origins reaching the same key is the
+	// collision — a folder literally named `models` plus a model at the root of
+	// models/ both key on `models`, and their two sets merge into one task.
+	origins := map[string]map[string]bool{}
 	for id, n := range nodes {
 		g := groupOf[id]
 		members[g] = append(members[g], n.name)
+		if gran == GranularityFolder {
+			origin := ""
+			if len(n.fqn) > 2 {
+				origin = n.fqn[1]
+			}
+			if origins[g] == nil {
+				origins[g] = map[string]bool{}
+			}
+			origins[g][origin] = true
+		}
 		for _, p := range n.parents {
 			pg := groupOf[p]
 			if pg == g {
@@ -286,6 +306,8 @@ func renderGrouped(nodes map[string]execNode, gran Granularity) ([]domain.TaskSp
 			"dbt grouping by %s introduces a cross-group cycle: %s; use granularity=node or reorganize the project",
 			gran, strings.Join(append(cyc, cyc[0]), " -> "))
 	}
+
+	warnFolderCollisions(warn, gran, members, origins)
 
 	tasks := make([]domain.TaskSpec, 0, len(members))
 	for g, mem := range members {
@@ -408,4 +430,32 @@ func sortedSetKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// warnFolderCollisions announces a folder group whose members arrived from more
+// than one origin (#1114).
+//
+// The merge is NOT refused. dbt still orders the models inside the combined
+// task, so the data is not wrong — what is lost is Leoflow-level parallelism and
+// per-model failure isolation. Refusing would break a project that runs today;
+// staying silent leaves an author looking at one task named after a folder with
+// no indication that a root-level model was folded into it. Saying so loudly is
+// the only option that is neither.
+func warnFolderCollisions(warn func(string), gran Granularity, members map[string][]string, origins map[string]map[string]bool) {
+	if warn == nil || gran != GranularityFolder {
+		return
+	}
+	keys := make([]string, 0, len(origins))
+	for g := range origins {
+		if len(origins[g]) > 1 {
+			keys = append(keys, g)
+		}
+	}
+	sort.Strings(keys)
+	for _, g := range keys {
+		mem := append([]string(nil), members[g]...)
+		sort.Strings(mem)
+		warn(fmt.Sprintf("dbt granularity=folder: group %q holds models from a folder named %q AND models with no folder, so they run as ONE task (%s) — dbt still orders them, but they lose per-model isolation and parallelism. Rename the folder, or use granularity=node.",
+			g, g, strings.Join(mem, ", ")))
+	}
 }

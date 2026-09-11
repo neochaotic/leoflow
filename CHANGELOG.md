@@ -49,6 +49,20 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`granularity: folder` says when two unrelated groups merged into one task
+  (#1114).** The group key is the first folder segment, with a fallback to the
+  resource-type plural for a model with no folder — so a project with a folder
+  literally named `models` **and** a model at the root of `models/` keyed both on
+  `models`, and the two sets became a single task with their dependencies
+  combined. Nothing said so: the author saw one task named after a folder, with
+  no sign that a root-level model had been folded into it.
+
+  The merge is not refused, and the reason is worth knowing: dbt still orders the
+  models inside the combined task, so the data is not wrong — what is lost is
+  per-model failure isolation and Leoflow-level parallelism. Refusing would break
+  a project that runs today. The compile now warns on stderr, naming the group,
+  every member, and the two ways out (rename the folder, or `granularity: node`).
+
 - **The migration Job honours `nodeSelector`, `tolerations` and `affinity`
   (#1056).** It was the one workload in the chart ignoring the pod-placement
   values every other workload respects, and it is the workload that runs

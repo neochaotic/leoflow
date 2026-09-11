@@ -228,3 +228,57 @@ func TestExpandDbtGroupsInFile(t *testing.T) {
 		t.Errorf("notify deps = %v, want the two group leaves", byID["notify"].DependsOn)
 	}
 }
+
+// TestCompileDbtCarriesDeclaredSecrets is the CLI-level half of #997, and it
+// exists because the unit test in internal/dbt does not cover the wiring:
+// removing the two lines that pass cfg.Connections/cfg.Variables into dbt.Meta
+// left every CLI test green. The failure being guarded is not a missing JSON
+// field — under ADR 0055 scoping the task pod receives NO secrets, so the DAG
+// fails inside the task, far from the leoflow.yaml that declared them.
+func TestCompileDbtCarriesDeclaredSecrets(t *testing.T) {
+	dir := t.TempDir()
+	yaml := `schema_version: "1.0"
+dag_id: sales
+connections: [warehouse]
+variables: [env]
+dbt:
+  project: .
+  manifest: manifest.json
+  granularity: folder
+`
+	if err := os.WriteFile(filepath.Join(dir, "leoflow.yaml"), []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := os.ReadFile(filepath.Join("..", "dbt", "testdata", "manifest_wide.json"))
+	if err != nil {
+		t.Fatalf("reading fixture manifest: %v", err)
+	}
+	if werr := os.WriteFile(filepath.Join(dir, "manifest.json"), manifest, 0o600); werr != nil {
+		t.Fatal(werr)
+	}
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+
+	o := compileOptions{output: filepath.Join(dir, "dag.json"), image: "reg/sales:v1", dagVersion: "v1"}
+	if rerr := runCompile(cmd, dir, o); rerr != nil {
+		t.Fatalf("runCompile (dbt path): %v\noutput:\n%s", rerr, out.String())
+	}
+	data, rerr := os.ReadFile(filepath.Join(dir, "dag.json"))
+	if rerr != nil {
+		t.Fatalf("dag.json not produced: %v", rerr)
+	}
+	var spec domain.DAGSpec
+	if uerr := json.Unmarshal(data, &spec); uerr != nil {
+		t.Fatalf("parsing dag.json: %v", uerr)
+	}
+	if len(spec.Connections) != 1 || spec.Connections[0] != "warehouse" {
+		t.Errorf("dag.json connections = %v, want [warehouse] — the task pod gets nothing without it", spec.Connections)
+	}
+	if len(spec.Variables) != 1 || spec.Variables[0] != "env" {
+		t.Errorf("dag.json variables = %v, want [env]", spec.Variables)
+	}
+}

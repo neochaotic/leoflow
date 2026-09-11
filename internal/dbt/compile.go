@@ -18,6 +18,14 @@ type Meta struct {
 	Tags        []string
 	Schedule    string
 	Granularity Granularity
+	// Connections and Variables are the secret names the leoflow.yaml declares
+	// (ADR 0045 / ADR 0055). They must reach the spec: what a task pod is allowed
+	// to see is derived from what the DAG declares, so dropping them here does not
+	// merely omit a field — it delivers no secrets at all, and the DAG fails
+	// inside the task rather than at compile (#997). The dag.py path emits both;
+	// this path built its spec from an explicit field list that omitted them.
+	Connections []string
+	Variables   []string
 	// Connection and Profile, when set, wrap each task's dbt command with the
 	// runtime step that writes profiles.yml from the managed connection (ADR 0043).
 	Connection string
@@ -69,6 +77,11 @@ func Compile(manifestJSON []byte, meta Meta) (domain.DAGSpec, error) {
 		Description:   meta.Description,
 		Tags:          meta.Tags,
 		Tasks:         tasks,
+		// Copied rather than aliased: the spec outlives the Meta it was built
+		// from, and sharing the backing array lets a later append by the caller
+		// mutate a spec that has already been written.
+		Connections: append([]string(nil), meta.Connections...),
+		Variables:   append([]string(nil), meta.Variables...),
 	}
 	if meta.Schedule != "" {
 		schedule := meta.Schedule

@@ -8,6 +8,49 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A database outage is reported as an outage, not as the caller's fault
+  (#1087, #1071).** Two surfaces answered a dependency failure with a statement
+  about the client, and both were wrong in the same way.
+
+  **Any authenticated request during a database outage returned
+  `401 invalid token`**. `Authenticate` joined
+  `ErrInvalidToken` onto every store failure, so a dead database and a forged
+  token were the same value, and the middleware — which inspected only
+  `err == nil` — answered 401. Measured against a real stopped Postgres: 401
+  after **76 seconds**, on a token minted seconds earlier. Signature
+  verification is local and takes about a millisecond, so the duration alone
+  says it was never about the token. It is now **503 "authentication temporarily
+  unavailable"**, the same answer the login path has given for the same cause
+  since #843, with the driver detail kept in the log and out of the body. A
+  token that was actually judged and rejected is still 401.
+
+  That mattered beyond the status code: a well-behaved client reads 401 as
+  "re-authenticate" and retries against `/auth/token`, which needs the same
+  database — turning a read outage into a retry storm against the dependency
+  that is already down. And a wall of 401s reads to whoever is on call as an
+  authentication incident, sending them to rotate credentials during a database
+  outage.
+
+  Separately, **an unreachable database was reported as `499 client closed
+  request`**. `handleRepoError` routed on `errors.Is(err, context.DeadlineExceeded)`,
+  and a `pgconn` connect timeout satisfies that while the caller is still
+  perfectly connected. So the tenant was told they had hung up, the request
+  logged at WARN because 499 is below 500, and **a 5xx-rate alert missed a
+  database outage entirely** — the one incident it exists to catch. The 499
+  branch now asks the request's own context, which is done for a caller who
+  really went away and healthy for one whose database died. The branch itself
+  stays: the UI supersedes in-flight grid requests constantly, and mapping those
+  to 500 is the regression it was added for.
+
+  `POST /api/v2/auth/token/renew` carried the same conflation and is fixed with
+  it. Renewal re-proves the principal against the user store, so it fails for
+  the same two unrelated reasons — and both mapped to `401 token cannot be
+  renewed; log in again`, with no cause recorded at all, so an outage was
+  invisible on that route. A store failure there is now 503 as well, and the
+  driver detail reaches the log. A token that was judged and rejected, and a
+  session past `max_lifetime`, are still 401. Renewal still fails closed either
+  way: any error refuses the re-mint.
+
 - **`leoflow dev` builds each venv on the interpreter the project declares, not
   always on the managed CPython 3.11 (#1092).** `python_version` selects the task
   base image, and since #1031 that image really can be 3.13 — but the dev venv

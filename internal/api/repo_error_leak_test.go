@@ -121,6 +121,7 @@ func TestHandleRepoErrorNeverLeaksDriverTextToTheClient(t *testing.T) {
 		name   string
 		err    error
 		pgErr  *pgconn.PgError
+		gone   bool // the caller hung up: its request context is done
 		status int
 	}{
 		{
@@ -163,7 +164,17 @@ func TestHandleRepoErrorNeverLeaksDriverTextToTheClient(t *testing.T) {
 			name:   "driver error joined to a client cancel stays a 499",
 			err:    errors.Join(context.Canceled, fk),
 			pgErr:  fk,
+			gone:   true,
 			status: statusClientClosedRequest,
+		},
+		{
+			// Same shape, caller still connected: a pgconn connect timeout carries
+			// context.DeadlineExceeded in its chain, and routing on that alone
+			// reported an outage as the tenant hanging up (#1071).
+			name:   "a connect timeout with a live caller is a 500, and still leaks nothing",
+			err:    fmt.Errorf("listing dags: %w", errors.Join(context.DeadlineExceeded, fk)),
+			pgErr:  fk,
+			status: http.StatusInternalServerError,
 		},
 	}
 
@@ -176,7 +187,13 @@ func TestHandleRepoErrorNeverLeaksDriverTextToTheClient(t *testing.T) {
 			r.GET("/x", func(c *gin.Context) { handleRepoError(c, tc.err) })
 
 			rec := httptest.NewRecorder()
-			r.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", http.NoBody))
+			ctx, cancel := context.WithCancel(context.Background())
+			if tc.gone {
+				cancel()
+			} else {
+				defer cancel()
+			}
+			r.ServeHTTP(rec, httptest.NewRequestWithContext(ctx, http.MethodGet, "/x", http.NoBody))
 
 			if rec.Code != tc.status {
 				t.Errorf("status = %d, want %d (%s)", rec.Code, tc.status, rec.Body.String())
@@ -200,35 +217,90 @@ func TestHandleRepoErrorNeverLeaksDriverTextToTheClient(t *testing.T) {
 	}
 }
 
-// TestHandleRepoErrorRedactsAConnectionStringOnTheCancelBranch covers the case
-// no PgError fixture can: a pgconn.ConnectError renders the database user and
-// name, and a connect TIMEOUT satisfies errors.Is(err, context.DeadlineExceeded)
-// — so before #961 it took the 499 branch and echoed the DSN identity there,
-// nowhere near the 500 the issue was written about. The error is produced by
-// dialing, not hand-built, because ConnectError's inner error is unexported.
-func TestHandleRepoErrorRedactsAConnectionStringOnTheCancelBranch(t *testing.T) {
+// TestHandleRepoErrorRedactsAConnectionString covers the case no PgError fixture
+// can: a pgconn.ConnectError renders the database user and name, and a connect
+// TIMEOUT also satisfies errors.Is(err, context.DeadlineExceeded) — so before
+// #961 it took the 499 branch and echoed the DSN identity there, nowhere near
+// the 500 the issue was written about. The error is produced by dialing, not
+// hand-built, because ConnectError's inner error is unexported.
+//
+// The dial is to a refused port rather than to a black-holed address so the
+// fixture is deterministic and costs no network wait. That makes it a real
+// driver error but NOT a deadline one, so the deadline chain — the whole of
+// #1071 — is composed onto it explicitly below rather than left to whether a
+// runner's dial happened to time out. The earlier version dialed TEST-NET-3 with
+// a 250ms budget and accepted EITHER status, so it asserted nothing about which
+// branch ran.
+func TestHandleRepoErrorRedactsAConnectionString(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	// TEST-NET-3 is routable nowhere, so the dial runs into the deadline.
-	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-	defer cancel()
-	_, connErr := pgconn.Connect(ctx,
-		"postgres://leoflow_app:s3cr3t@203.0.113.1:5432/leoflow_meta?sslmode=disable&connect_timeout=1")
+	// Port 1 on loopback refuses immediately: a real *pgconn.ConnectError, whose
+	// text is what this test exists to keep out of the body.
+	dialCtx, cancelDial := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelDial()
+	_, connErr := pgconn.Connect(dialCtx,
+		"postgres://leoflow_app:s3cr3t@127.0.0.1:1/leoflow_meta?sslmode=disable")
 	if connErr == nil {
 		t.Skip("the dial unexpectedly succeeded; no connect error to redact")
 	}
+	if !strings.Contains(connErr.Error(), "leoflow_app") {
+		t.Fatalf("the driver no longer renders the DSN identity, so this test would pass vacuously: %v", connErr)
+	}
 
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", http.NoBody)
-	handleRepoError(c, fmt.Errorf("listing dags: %w", connErr))
+	cases := []struct {
+		name   string
+		err    error
+		gone   bool // the caller hung up: its request context is done
+		status int
+	}{
+		{
+			// The shape #1071 was filed about, with the real driver error: an
+			// unreachable database, a caller still on the other end. The deadline in
+			// the chain must not make it the tenant's fault.
+			name:   "unreachable database, live caller",
+			err:    fmt.Errorf("listing dags: %w", errors.Join(context.DeadlineExceeded, connErr)),
+			status: http.StatusInternalServerError,
+		},
+		{
+			// The same driver text on the branch #961 was about: the caller really
+			// did hang up, so 499 is right — and the DSN must stay out of the body
+			// there too, which is the branch that used to echo it.
+			name:   "same driver error, caller gone",
+			err:    fmt.Errorf("listing dags: %w", errors.Join(context.Canceled, connErr)),
+			gone:   true,
+			status: statusClientClosedRequest,
+		},
+		{
+			// No cancellation anywhere in the chain: the plain 500.
+			name:   "connect refused, no cancellation in the chain",
+			err:    fmt.Errorf("listing dags: %w", connErr),
+			status: http.StatusInternalServerError,
+		},
+	}
 
-	// Whichever branch it lands on (499 when the deadline is what surfaced, 500
-	// otherwise), the identity of the database must not be in the body.
-	body := rec.Body.String()
-	for _, leak := range []string{"leoflow_app", "leoflow_meta", "203.0.113.1", "failed to connect", connErr.Error()} {
-		if strings.Contains(body, leak) {
-			t.Errorf("response body leaks the connection string (%q): %s", leak, body)
-		}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.gone {
+				cancel()
+			}
+			c.Request = httptest.NewRequestWithContext(ctx, http.MethodGet, "/x", http.NoBody)
+			handleRepoError(c, tc.err)
+
+			if rec.Code != tc.status {
+				t.Errorf("status = %d, want %d (%s)", rec.Code, tc.status, rec.Body.String())
+			}
+			// Whichever branch it lands on, the identity of the database must not
+			// be in the body.
+			body := rec.Body.String()
+			for _, leak := range []string{"leoflow_app", "leoflow_meta", "127.0.0.1", "failed to connect", connErr.Error()} {
+				if strings.Contains(body, leak) {
+					t.Errorf("response body leaks the connection string (%q): %s", leak, body)
+				}
+			}
+		})
 	}
 }
 

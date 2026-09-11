@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -174,12 +175,31 @@ func JWTAuth(authn auth.Authenticator) gin.HandlerFunc {
 		// on a full-page refresh the Airflow UI loses its in-memory token and may
 		// send a stale/empty bearer, but a valid _token cookie still authenticates
 		// — otherwise the invalid bearer 401s and the UI bounces to login.
+		// unavailable holds a backend failure seen while checking a candidate. A
+		// later candidate may still authenticate, so it only decides the answer
+		// once every candidate has been tried.
+		var unavailable error
 		for _, token := range tokens {
-			if user, err := authn.Authenticate(c.Request.Context(), token); err == nil {
+			user, err := authn.Authenticate(c.Request.Context(), token)
+			if err == nil {
 				c.Set(contextKeyUser, user)
 				c.Next()
 				return
 			}
+			if !errors.Is(err, auth.ErrInvalidToken) {
+				unavailable = err
+			}
+		}
+		if unavailable != nil {
+			// We could not DETERMINE whether the token is valid — the store was
+			// unreachable. Answering 401 says something false about the caller and
+			// is actively harmful: a well-behaved client reads 401 as "re-authenticate",
+			// so it hammers /auth/token against the same dead database, and a wall of
+			// 401s reads to whoever is on call as an auth incident rather than the
+			// outage it is. 503 is the same answer the login path already gives for
+			// the same cause (#843), and the cause stays in the log (#1087).
+			AbortProblemCause(c, http.StatusServiceUnavailable, "service unavailable", "authentication temporarily unavailable", unavailable)
+			return
 		}
 		AbortProblem(c, http.StatusUnauthorized, "unauthorized", "invalid token")
 	}

@@ -312,3 +312,34 @@ func TestRenewUserTokenAllowsNilStore(t *testing.T) {
 		t.Fatalf("a nil store must still renew; got ok=%v err=%v", ok, rerr)
 	}
 }
+
+// TestRenewUserTokenPropagatesBackendError is the renewal half of #1087.
+//
+// Authenticate and reloadForRenewal read the SAME store for the SAME reason, so
+// they must classify its failures the same way. reloadForRenewal kept joining
+// ErrInvalidToken onto every store error, and renewTokenHandler maps any error
+// to 401 "log in again" — so during a database outage the renew route still
+// answered with a statement about the caller's credential, and the cause never
+// reached the log at all (AbortProblem carries no cause). Fail-closed is
+// unchanged: the renewal is still refused, it is just no longer mislabeled.
+func TestRenewUserTokenPropagatesBackendError(t *testing.T) {
+	dbErr := errors.New("dial tcp 10.0.0.1:5432: i/o timeout")
+	a := NewJWTAuthenticator(&fakeStore{byIDErr: dbErr}, "secret", time.Hour)
+	t0 := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	a.now = func() time.Time { return t0 }
+	issued, err := a.mintUserToken(&User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}, time.Hour, t0)
+	if err != nil {
+		t.Fatalf("mintUserToken: %v", err)
+	}
+
+	renewed, ok, rerr := a.RenewUserToken(context.Background(), issued, time.Hour, 24*time.Hour)
+	if ok || renewed != "" {
+		t.Fatalf("a store error must still fail closed; got ok=%v renewed=%q", ok, renewed)
+	}
+	if !errors.Is(rerr, dbErr) {
+		t.Errorf("the cause must survive for the log; got %v", rerr)
+	}
+	if errors.Is(rerr, ErrInvalidToken) {
+		t.Error("a backend failure must not be labeled an invalid token — the handler maps that to 401 and sends the client to log in against the database that is down")
+	}
+}

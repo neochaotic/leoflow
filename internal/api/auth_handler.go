@@ -173,7 +173,20 @@ func renewTokenHandler(renewer TokenRenewer, ttlSeconds, maxLifetimeSeconds int)
 		}
 		renewed, ok, err := renewer.RenewUserToken(c.Request.Context(), token, ttl, maxLifetime)
 		if err != nil {
-			AbortProblem(c, http.StatusUnauthorized, "unauthorized", "token cannot be renewed; log in again")
+			// Renewal re-proves the principal against the user store, so it fails for
+			// two unrelated reasons: the token was judged and rejected, or the store
+			// could not be reached to judge it. Only the first is a statement about
+			// the caller. Answering 401 for the second sends the client to log in
+			// against the database that is already down and reads to whoever is on
+			// call as an auth incident — the same conflation JWTAuth carried (#1087).
+			// Either way the renewal is refused; the cause goes to the log, never to
+			// the body.
+			if !errors.Is(err, auth.ErrInvalidToken) {
+				AbortProblemCause(c, http.StatusServiceUnavailable, "service unavailable",
+					"authentication temporarily unavailable", err)
+				return
+			}
+			AbortProblemCause(c, http.StatusUnauthorized, "unauthorized", "token cannot be renewed; log in again", err)
 			return
 		}
 		if !ok {

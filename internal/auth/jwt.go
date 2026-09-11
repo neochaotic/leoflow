@@ -114,14 +114,24 @@ func (a *JWTAuthenticator) Authenticate(ctx context.Context, token string) (*Use
 	}
 	user, active, err := a.store.FindUserByID(ctx, c.Subject)
 	if err != nil {
-		// A subject with no user row is trusted from its signed claims ONLY for the
-		// in-process dev token (which has no DB row by design); any other missing
-		// subject fails closed, so a hard-deleted user cannot keep claimed roles
-		// until the token expires — deletion revokes at once, like is_active=false.
-		if errors.Is(err, ErrUserNotFound) && c.Subject == DevTokenSubject {
-			return claimed, nil
+		if errors.Is(err, ErrUserNotFound) {
+			// A subject with no user row is trusted from its signed claims ONLY for
+			// the in-process dev token (which has no DB row by design); any other
+			// missing subject fails closed, so a hard-deleted user cannot keep
+			// claimed roles until the token expires — deletion revokes at once, like
+			// is_active=false.
+			if c.Subject == DevTokenSubject {
+				return claimed, nil
+			}
+			return nil, errors.Join(ErrInvalidToken, err)
 		}
-		return nil, errors.Join(ErrInvalidToken, err)
+		// Any OTHER store failure means we could not DETERMINE whether this token
+		// is valid — not that it is invalid. Propagating it unchanged is the rule
+		// #843 set for IssueToken, and it applies here for the same reason: a
+		// database outage answered as "invalid token" tells every client to
+		// re-authenticate against the database that is already down, and tells
+		// whoever is on call that they have an auth incident (#1087).
+		return nil, err
 	}
 	if !active {
 		return nil, ErrInvalidToken
@@ -228,7 +238,8 @@ func (a *JWTAuthenticator) RenewUserToken(ctx context.Context, token string, ttl
 // obey the same revocation rule as request authentication, and it mirrors
 // Authenticate's branches one for one — nil store and the dev-token subject fall
 // back to the signed claims, an inactive or otherwise-missing user is refused,
-// and any other store error fails closed.
+// and any other store error fails closed (propagated unchanged, so the handler
+// can tell "rejected" apart from "could not be determined").
 func (a *JWTAuthenticator) reloadForRenewal(ctx context.Context, c *jwtClaims) (*User, error) {
 	claimed := &User{ID: c.Subject, TenantID: c.TenantID, Email: c.Email, Roles: c.Roles}
 	if a.store == nil {
@@ -236,10 +247,18 @@ func (a *JWTAuthenticator) reloadForRenewal(ctx context.Context, c *jwtClaims) (
 	}
 	user, active, err := a.store.FindUserByID(ctx, c.Subject)
 	if err != nil {
-		if errors.Is(err, ErrUserNotFound) && c.Subject == DevTokenSubject {
-			return claimed, nil
+		if errors.Is(err, ErrUserNotFound) {
+			if c.Subject == DevTokenSubject {
+				return claimed, nil
+			}
+			return nil, errors.Join(ErrInvalidToken, err)
 		}
-		return nil, errors.Join(ErrInvalidToken, err)
+		// Same split Authenticate makes, for the same reason: a store we could not
+		// reach did not tell us the token is invalid, only that we cannot say. The
+		// renewal is still refused — the caller denies on any error — but the
+		// handler can now answer 503 instead of sending the client to log in
+		// against the database that is already down.
+		return nil, err
 	}
 	if !active {
 		return nil, ErrInvalidToken

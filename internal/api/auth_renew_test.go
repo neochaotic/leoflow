@@ -1,10 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,5 +108,44 @@ func TestRenewTokenPastMaxLifetimeIsUnauthorized(t *testing.T) {
 	rec := postRenew(renewServer(r), "aged-token")
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("renew past max_lifetime = %d, want 401", rec.Code)
+	}
+}
+
+// TestRenewTokenDuringAnOutageIsNot401 is the renew route's half of #1087.
+//
+// The route re-proves the principal against the user store, so it fails for the
+// same two unrelated reasons every other authenticated route does: the token was
+// judged and rejected, or the store could not be reached to judge it. Collapsing
+// both to 401 "log in again" during a database outage points the client and
+// whoever is on call at the credential instead of the incident, and — because
+// the handler used AbortProblem rather than AbortProblemCause — dropped the
+// driver's error entirely, leaving the outage invisible on this route.
+func TestRenewTokenDuringAnOutageIsNot401(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	dbDown := errors.New("failed to connect to `user=leoflow database=leoflow`: dial tcp 10.0.0.1:5432: i/o timeout")
+
+	var logBuf bytes.Buffer
+	srv := NewServer(Dependencies{
+		Logger:               slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Authenticator:        &fakeAuthn{user: &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}},
+		RateLimiter:          auth.NewRateLimiter(5, time.Minute),
+		HealthChecks:         map[string]HealthChecker{},
+		CORSOrigins:          []string{"*"},
+		TokenTTLSecs:         3600,
+		TokenRenewer:         &fakeRenewer{err: dbDown},
+		TokenMaxLifetimeSecs: 86400,
+	})
+	rec := postRenew(srv, "still-valid-token")
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503 — the token was never judged, the store was unreachable", rec.Code)
+	}
+	for _, leak := range []string{"dial tcp", "10.0.0.1", "user=leoflow", "log in again"} {
+		if strings.Contains(rec.Body.String(), leak) {
+			t.Errorf("body leaks or misattributes %q: %s", leak, rec.Body.String())
+		}
+	}
+	if !strings.Contains(logBuf.String(), "dial tcp") {
+		t.Errorf("the log must carry the cause the body withheld; got %s", logBuf.String())
 	}
 }

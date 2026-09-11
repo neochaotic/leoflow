@@ -666,28 +666,45 @@ func TestTaskInstanceActionMapIndexSubresources(t *testing.T) {
 }
 
 // TestHandleRepoErrorClientCancel guards the ti_summaries 500 regression: a
-// canceled/timed-out context means the client aborted (the UI supersedes in-flight
-// grid requests), which must map to 499 (client closed), not a 500 server fault.
+// client that aborted (the UI supersedes in-flight grid requests) must map to 499
+// (client closed), not a 500 server fault.
+//
+// `gone` is what distinguishes the scenario from the mechanism, and the
+// distinction is the whole of #1071. These cases used to run with a healthy
+// request context and assert 499 purely from the error's chain — which is also
+// what a pgconn connect timeout looks like, so a database outage was reported to
+// the tenant as their own disconnect. A client that went away has a done
+// context; a dead database does not.
 func TestHandleRepoErrorClientCancel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cases := []struct {
 		name string
 		err  error
+		gone bool // the caller really did hang up: its request context is done
 		want int
 	}{
-		{"client canceled", context.Canceled, statusClientClosedRequest},
-		{"deadline exceeded", context.DeadlineExceeded, statusClientClosedRequest},
-		{"wrapped cancel", errors.Join(errors.New("task instances for runs"), context.Canceled), statusClientClosedRequest},
-		{"not found", ErrNotFound, http.StatusNotFound},
-		{"conflict (duplicate run)", domain.ErrConflict, http.StatusConflict},
-		{"wrapped conflict", fmt.Errorf("creating dag run: %w", domain.ErrConflict), http.StatusConflict},
-		{"real server error", errors.New("db exploded"), http.StatusInternalServerError},
+		{"client canceled", context.Canceled, true, statusClientClosedRequest},
+		{"deadline exceeded", context.DeadlineExceeded, true, statusClientClosedRequest},
+		{"wrapped cancel", errors.Join(errors.New("task instances for runs"), context.Canceled), true, statusClientClosedRequest},
+		// The same error values with the caller still connected: a database that
+		// cannot be reached, which is a server fault and must alert as one.
+		{"unreachable database (client still there)", context.DeadlineExceeded, false, http.StatusInternalServerError},
+		{"connect timeout wrapped by the driver", fmt.Errorf("failed to connect to `user=leoflow database=leoflow`: timeout: %w", context.DeadlineExceeded), false, http.StatusInternalServerError},
+		{"not found", ErrNotFound, false, http.StatusNotFound},
+		{"conflict (duplicate run)", domain.ErrConflict, false, http.StatusConflict},
+		{"wrapped conflict", fmt.Errorf("creating dag run: %w", domain.ErrConflict), false, http.StatusConflict},
+		{"real server error", errors.New("db exploded"), false, http.StatusInternalServerError},
 	}
 	for _, tc := range cases {
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", http.NoBody)
+		ctx, cancel := context.WithCancel(context.Background())
+		if tc.gone {
+			cancel()
+		}
+		c.Request = httptest.NewRequestWithContext(ctx, http.MethodGet, "/x", http.NoBody)
 		handleRepoError(c, tc.err)
+		cancel()
 		if w.Code != tc.want {
 			t.Errorf("%s: got %d, want %d", tc.name, w.Code, tc.want)
 		}

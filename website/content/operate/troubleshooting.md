@@ -74,6 +74,7 @@ leoflow-mcp --version
 |---|---|
 | `Invalid credentials` on the login page even with the right password | Disable autofill or type the password manually — some browsers append a trailing space. Usernames are trimmed, passwords are not (per security best practice). |
 | Login rate-limits you out after a few typos | Older builds counted *every* attempt against a 5/min cap; the fix splits successful and failed attempts so a typo does not block recovery. Update to the latest release. |
+| A DAG you deleted weeks ago still runs and fails | Lite's state lives in `~/.leoflow/dev` and outlives sessions, so a DAG registered during an old spike stays registered and keeps being scheduled. The ready banner now reports how many DAGs earlier sessions left (`state: N DAGs registered by earlier sessions`); `leoflow dev --fresh` starts from an empty local database. Deleting the project directory stops it being re-registered, but does not deregister what is already there. |
 | No **Lite** badge on `http://localhost:8088` | You are likely on the **Demo** (production-shaped reference, port `8080`) — Lite runs on `8088` with a silver `Leoflow Lite` badge. See [operating modes](/concepts/editions/). |
 | Copy-logs button silently fails over `http://<lan-ip>:8088` | The Clipboard API requires a secure context, so plain HTTP origins (LAN access from another machine) used to break copy. Recent builds inject a polyfill (`document.execCommand('copy')` fallback) — update. |
 | Task state badge does not refresh after "Mark as failed/success" | Known upstream Airflow bug — see [apache/airflow#67883](https://github.com/apache/airflow/issues/67883). The server-side mutation persists correctly; the SPA cache update is the gap. Hard-refresh the page (Cmd+Shift+R) to see the new state. |
@@ -83,6 +84,7 @@ leoflow-mcp --version
 
 ```bash
 leoflow lite reset-password --user admin@leoflow.local  # generate a fresh admin password (no sudo)
+leoflow dev --fresh                                     # start a session with nothing registered (DESTRUCTIVE)
 leoflow db reset --yes                                  # drop + recreate the Lite database (DESTRUCTIVE)
 leoflow uninstall                                       # remove ~/.leoflow (binaries, managed Python, config)
 leoflow uninstall --purge                               # also remove the workspace (your DAGs!)

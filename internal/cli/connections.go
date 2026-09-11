@@ -300,7 +300,7 @@ func deleteConnectionReq(ctx context.Context, serverURL, token, connID string) e
 // connError renders a non-2xx response as an error carrying the server's body,
 // so the encryption-unavailable (503) message and 404s reach the operator.
 func connError(status int, body []byte) error {
-	return fmt.Errorf("server returned %d: %s", status, string(body))
+	return apiStatusError(status, body)
 }
 
 // printConnectionSet prints a concise, secret-free confirmation of an upsert.

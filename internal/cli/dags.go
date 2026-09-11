@@ -49,7 +49,7 @@ func newDagsListCommand() *cobra.Command {
 				return fmt.Errorf("listing DAGs: %w", err)
 			}
 			if resp.StatusCode() != http.StatusOK {
-				return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body))
+				return apiStatusError(resp.StatusCode(), resp.Body)
 			}
 			return printDagList(cmd.OutOrStdout(), resp.JSON200)
 		},
@@ -116,7 +116,7 @@ func newDagsDeleteCommand() *cobra.Command {
 				return err
 			}
 			if status >= http.StatusMultipleChoices {
-				return fmt.Errorf("server returned %d: %s", status, body)
+				return apiStatusError(status, []byte(body))
 			}
 			out := cmd.OutOrStdout()
 			if deregister {

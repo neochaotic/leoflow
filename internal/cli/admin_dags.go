@@ -107,7 +107,7 @@ func patchDagPaused(ctx context.Context, c *apiclient.ClientWithResponses, id st
 		return err
 	}
 	if resp.StatusCode() != http.StatusOK {
-		return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body))
+		return apiStatusError(resp.StatusCode(), resp.Body)
 	}
 	return nil
 }

@@ -63,7 +63,7 @@ func collectUsers(ctx context.Context, c *apiclient.ClientWithResponses, limit, 
 		return nil, fmt.Errorf("listing users: %w", err)
 	}
 	if resp.StatusCode() != http.StatusOK || resp.JSON200 == nil {
-		return nil, fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body))
+		return nil, apiStatusError(resp.StatusCode(), resp.Body)
 	}
 	if resp.JSON200.Users == nil {
 		return []apiclient.UserListItem{}, nil

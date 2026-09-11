@@ -6,6 +6,8 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-09-11
+
 ### Added
 
 - **A `py3.13` task base image, and one list that decides which ones exist

@@ -86,7 +86,7 @@ func createUser(ctx context.Context, serverURL, token, email, password string, r
 		return apiclient.User{}, fmt.Errorf("posting to %s/api/v2/users: %w", serverURL, err)
 	}
 	if resp.StatusCode() != http.StatusCreated {
-		return apiclient.User{}, fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body))
+		return apiclient.User{}, apiStatusError(resp.StatusCode(), resp.Body)
 	}
 	if resp.JSON201 == nil {
 		return apiclient.User{}, fmt.Errorf("server returned no user")
@@ -153,7 +153,7 @@ func requestToken(ctx context.Context, serverURL, username, password string) (st
 		return "", fmt.Errorf("posting to %s/auth/token: %w", serverURL, err)
 	}
 	if resp.StatusCode() != http.StatusOK {
-		return "", fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body))
+		return "", apiStatusError(resp.StatusCode(), resp.Body)
 	}
 	if resp.JSON200 == nil || resp.JSON200.AccessToken == nil {
 		return "", fmt.Errorf("server returned no access_token")

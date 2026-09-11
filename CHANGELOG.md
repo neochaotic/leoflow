@@ -8,6 +8,30 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A 401 now says when your saved token belongs to a different server
+  (#1102).** `~/.leoflow/config.yaml` holds a `server_url` and a `token`, written
+  together; point a command at another control plane with `--server` and the
+  saved token went along, got rejected, and you were told only "server returned
+  401". Nothing distinguished an expired token from a token for somewhere else,
+  and the way out — logging in to the server you were actually calling — was the
+  one thing the message did not say.
+
+  The CLI already knew: the two keys are written in the same call, so the pairing
+  was on disk the whole time. A 401 now names both servers and prints the login
+  command for the one being called. It stays quiet when nothing is wrong — the
+  same server, a `--token` or `LEOFLOW_TOKEN` you supplied yourself, or no
+  configured server to compare against — because a hint that fires when there is
+  no mismatch sends you chasing something that is not happening.
+
+  This reaches every command that talks to a control plane, not just the one
+  where it was noticed: `push`, `deploy`, `dags`, `runs`, `connections`,
+  `variables` and the admin commands all formatted that error with their own copy
+  of the same line, and now share one. Holding more than one server's token at a
+  time is the structural answer and is still open.
+
+
+### Fixed
+
 - **A database outage is reported as an outage, not as the caller's fault
   (#1087, #1071).** Two surfaces answered a dependency failure with a statement
   about the client, and both were wrong in the same way.

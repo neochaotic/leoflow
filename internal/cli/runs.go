@@ -50,7 +50,7 @@ func newRunsTriggerCommand() *cobra.Command {
 				return err
 			}
 			if status >= http.StatusMultipleChoices {
-				return fmt.Errorf("server returned %d: %s", status, raw)
+				return apiStatusError(status, raw)
 			}
 			var r struct {
 				DagRunID string `json:"dag_run_id"`
@@ -137,7 +137,7 @@ func fetchRunState(ctx context.Context, base, token, dagID, runID string) (state
 		return "", "", err
 	}
 	if status >= http.StatusMultipleChoices {
-		return "", "", fmt.Errorf("server returned %d: %s", status, raw)
+		return "", "", apiStatusError(status, raw)
 	}
 	var list struct {
 		DagRuns []struct {
@@ -160,7 +160,7 @@ func decodeRun(ctx context.Context, url, token string) (state, id string, err er
 		return "", "", err
 	}
 	if status >= http.StatusMultipleChoices {
-		return "", "", fmt.Errorf("server returned %d: %s", status, raw)
+		return "", "", apiStatusError(status, raw)
 	}
 	var r struct {
 		DagRunID string `json:"dag_run_id"`
@@ -231,7 +231,7 @@ func latestTryNumber(ctx context.Context, base, token, dagID, runID, taskID stri
 		return 0, err
 	}
 	if status >= http.StatusMultipleChoices {
-		return 0, fmt.Errorf("server returned %d: %s", status, raw)
+		return 0, apiStatusError(status, raw)
 	}
 	var ti struct {
 		TryNumber *int `json:"try_number"`
@@ -276,7 +276,7 @@ func streamTaskLogs(ctx context.Context, w io.Writer, base, token, dagID, runID,
 		if readErr != nil {
 			return fmt.Errorf("server returned %d (and its error body could not be read: %w)", resp.StatusCode, readErr)
 		}
-		return fmt.Errorf("server returned %d: %s", resp.StatusCode, raw)
+		return apiStatusError(resp.StatusCode, raw)
 	}
 	if _, err = io.Copy(w, resp.Body); err != nil {
 		return fmt.Errorf("streaming logs: %w", err)

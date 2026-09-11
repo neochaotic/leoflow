@@ -52,7 +52,7 @@ func newPushCommand() *cobra.Command {
 				return err
 			}
 			if status >= http.StatusMultipleChoices {
-				return fmt.Errorf("server returned %d: %s", status, body)
+				return apiStatusError(status, []byte(body))
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Registered %q with %s (HTTP %d)\n", spec.DagID, serverURL, status)
 			return err

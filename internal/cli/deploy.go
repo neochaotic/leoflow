@@ -200,11 +200,13 @@ func deployImageRef(cfg *domain.LeoflowConfig, version, sha string) string {
 func resolveServerToken(cmd *cobra.Command, serverFlag, tokenFlag string) (serverURL, token string, err error) {
 	serverURL, token = serverFlag, tokenFlag
 	tokenFromSession := false
+	configuredServer := ""
 	if serverURL == "" || token == "" {
 		cfg, cerr := config.Load(configFilePath(cmd), cmd.Flags())
 		if cerr != nil {
 			return "", "", cerr
 		}
+		configuredServer = cfg.ServerURL
 		if serverURL == "" {
 			serverURL = cfg.ServerURL
 		}
@@ -219,6 +221,12 @@ func resolveServerToken(cmd *cobra.Command, serverFlag, tokenFlag string) (serve
 	if tokenFromSession && os.Getenv("LEOFLOW_TOKEN") == "" {
 		token = autoRefreshToken(cmdContext(cmd), configFilePath(cmd), serverURL, token)
 	}
+	// Record what was decided so a 401 can say whether the token belongs to the
+	// server being called (#1102). LEOFLOW_TOKEN is externally supplied, so it is
+	// not "from config" even though config.Load surfaces it as cfg.Token.
+	resolvedTarget.server = serverURL
+	resolvedTarget.configured = configuredServer
+	resolvedTarget.fromConfig = tokenFromSession && os.Getenv("LEOFLOW_TOKEN") == ""
 	return serverURL, token, nil
 }
 
@@ -307,7 +315,7 @@ func registerDeployedDAG(ctx context.Context, out io.Writer, serverURL, token, o
 		return "", uerr
 	}
 	if status >= http.StatusMultipleChoices {
-		return "", fmt.Errorf("server returned %d: %s", status, body)
+		return "", apiStatusError(status, []byte(body))
 	}
 	if _, werr := fmt.Fprintf(out,
 		"Deployed %s -> %s\n  image %s\n  registered version %s\n", spec.DagID, serverURL, digestRef, version); werr != nil {

@@ -140,40 +140,63 @@ else
   die "baseline /api/v2/dags = $code, expected 200"
 fi
 
-LOG_MARK="$(wc -l < "$HOME_DIR/server.log")"
-
 echo "==> STOPPING Postgres — the token stays valid, the store does not"
 docker stop -t 2 "$PG_CONTAINER" >/dev/null || die "could not stop the Postgres container"
 
 # The pool may hold a connection that has not noticed yet; poll until the
 # outage is observable, then assert. Without this the assertions could run
 # against a request the pool served from a live connection and pass vacuously.
+# Every attempt carries its own X-Request-Id, which the server honors and echoes
+# into the one structured line it logs for that request. The id of the attempt
+# that OBSERVED the outage is what anchors the log assertion further down to
+# THIS request — see the comment there for why an unanchored grep proves nothing.
 observed=""
-for _ in $(seq 1 40); do
-  code="$(curl -s -m 20 -o "$HOME_DIR/body.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "${BASE}/api/v2/dags")"
-  [ "$code" != "200" ] && { observed="$code"; break; }
+OBSERVED_REQ_ID=""
+for attempt in $(seq 1 40); do
+  req_id="lite-db-outage-dags-${attempt}"
+  code="$(curl -s -m 20 -o "$HOME_DIR/body.json" -w '%{http_code}' \
+    -H "X-Request-Id: ${req_id}" -H "Authorization: Bearer $TOKEN" "${BASE}/api/v2/dags")"
+  [ "$code" != "200" ] && { observed="$code"; OBSERVED_REQ_ID="$req_id"; break; }
   sleep 0.5
 done
 [ -n "$observed" ] || die "the database was stopped but /api/v2/dags kept answering 200 — every assertion below would be vacuous"
 
 echo "==> assertions"
-if [ "$observed" = "503" ]; then
-  pass "a protected route answers 503 during the outage (was 401: #1087)"
-else
+# The status alone does not say WHICH mechanism answered: a readiness gate, a
+# proxy or a future handler could also produce 503 on this route and the
+# assertion would pass without proving anything about the auth store. The
+# problem detail is what pins it to the store being unreachable.
+if [ "$observed" != "503" ]; then
   fail "a protected route answered $observed, want 503 (401 tells the client to re-authenticate against the dead database)"
   printf '       body: %s\n' "$(head -c 200 "$HOME_DIR/body.json")"
+elif ! grep -q 'authentication temporarily unavailable' "$HOME_DIR/body.json"; then
+  fail "the 503 did not come from the unreachable auth store: $(head -c 200 "$HOME_DIR/body.json")"
+else
+  pass "a protected route answers 503 during the outage (was 401: #1087)"
 fi
 
+RENEW_REQ_ID="lite-db-outage-renew"
 rcode="$(curl -s -m 20 -o "$HOME_DIR/renew.json" -w '%{http_code}' -X POST \
-  -H "Authorization: Bearer $TOKEN" "${BASE}/api/v2/auth/token/renew")"
-if [ "$rcode" = "503" ]; then
-  pass "token renew answers 503 during the outage (was 401, with no cause logged)"
-else
+  -H "X-Request-Id: ${RENEW_REQ_ID}" -H "Authorization: Bearer $TOKEN" "${BASE}/api/v2/auth/token/renew")"
+if [ "$rcode" != "503" ]; then
   fail "token renew answered $rcode, want 503"
   printf '       body: %s\n' "$(head -c 200 "$HOME_DIR/renew.json")"
+elif ! grep -q 'authentication temporarily unavailable' "$HOME_DIR/renew.json"; then
+  fail "renew's 503 did not come from the unreachable auth store: $(head -c 200 "$HOME_DIR/renew.json")"
+else
+  pass "token renew answers 503 during the outage (was 401, with no cause logged)"
 fi
 
 leaked=0
+# An empty body makes every pattern below miss, so the scan would report a clean
+# pass while having read nothing. curl leaves the file empty when it times out,
+# so check before scanning rather than trusting that it never happens.
+for body in "$HOME_DIR/body.json" "$HOME_DIR/renew.json"; do
+  if [ ! -s "$body" ]; then
+    fail "no response body was captured in ${body##*/}; the leak scan below would be vacuous"
+    leaked=1
+  fi
+done
 for pat in 'dial tcp' 'connection refused' 'SQLSTATE' 'pq:' 'pgx' 'user=leoflow' '5432'; do
   if grep -qiE "$pat" "$HOME_DIR/body.json" "$HOME_DIR/renew.json" 2>/dev/null; then
     fail "a response body leaks driver text: $pat"
@@ -183,8 +206,26 @@ done
 [ "$leaked" = "0" ] && pass "neither body carries driver text (#961)"
 
 # The cause must be in the LOG, otherwise this is not sanitization, it is losing
-# the diagnosis. Only lines written after the outage began are considered.
-if tail -n "+$((LOG_MARK+1))" "$HOME_DIR/server.log" | grep -qiE 'cause|connection refused|dial tcp'; then
+# the diagnosis.
+#
+# Anchored to the request ids above, and that anchoring is the whole assertion.
+# The scheduler loop ticks every second and its own failures carry the driver's
+# "dial tcp ... connection refused" verbatim, so a grep for driver text over the
+# lines written during the outage passes whether or not either handler recorded
+# anything — which is precisely the defect being locked. Only the line belonging
+# to the request that was answered proves the request's cause was kept.
+log_records_cause() {
+  # StructuredLogger writes its line after the response is flushed, so the body
+  # can be in hand before the line is on disk. Poll rather than read once.
+  for _ in $(seq 1 20); do
+    if grep -F "$1" "$HOME_DIR/server.log" | grep -q 'cause'; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  return 1
+}
+if log_records_cause "$OBSERVED_REQ_ID" && log_records_cause "$RENEW_REQ_ID"; then
   pass "the server log carries the cause the bodies withheld"
 else
   fail "the log carries no cause for the outage — the diagnosis was lost, not withheld"

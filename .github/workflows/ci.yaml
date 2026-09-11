@@ -245,11 +245,15 @@ jobs:
     timeout-minutes: 12
     services:
       postgres:
+        # POSTGRES_DB is leoflow_dev, not leoflow_test: the script migrates and
+        # connects to leoflow_dev, and letting the image create it is one less
+        # moving part than a psql step (the runner's client) whose only job was
+        # to CREATE DATABASE. Same shape the other Lite e2e jobs use.
         image: mirror.gcr.io/library/postgres:16
         env:
           POSTGRES_USER: leoflow
           POSTGRES_PASSWORD: leoflow
-          POSTGRES_DB: leoflow_test
+          POSTGRES_DB: leoflow_dev
         ports: [5432:5432]
         options: >-
           --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
@@ -265,10 +269,6 @@ jobs:
           cache: true
       - name: Install golang-migrate
         run: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
-      - name: Create the Lite database
-        env:
-          PGPASSWORD: leoflow
-        run: psql -h localhost -U leoflow -d leoflow_test -c 'CREATE DATABASE leoflow_dev' || true
       - name: Database outage behaviour
         run: bash test/e2e/lite-db-outage.sh
 

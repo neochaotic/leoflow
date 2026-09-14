@@ -489,7 +489,11 @@ func warnFolderCollisions(warn func(string), gran Granularity, members map[strin
 	for _, g := range keys {
 		mem := append([]string(nil), members[g]...)
 		sort.Strings(mem)
-		warn(fmt.Sprintf("dbt granularity=folder: group %q holds models from a folder named %q AND models with no folder, so they run as ONE task (%s) — dbt still orders them, but they lose per-model isolation and parallelism. Rename the folder, or use granularity=node.",
+		// "nodes", not "models": a seed or snapshot at the project root falls
+		// back to the same key (groupKey uses rtype+"s"), so a model in a folder
+		// named `seeds` plus a root seed lands here — and calling the second set
+		// models would send the author looking in the wrong place.
+		warn(fmt.Sprintf("dbt granularity=folder: group %q holds nodes from a folder named %q AND nodes with no folder, so they run as ONE task (%s) — dbt still orders them, but they lose per-node isolation and parallelism. Rename the folder, or use granularity=node.",
 			g, g, strings.Join(mem, ", ")))
 	}
 }

@@ -82,7 +82,9 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   models inside the combined task, so the data is not wrong — what is lost is
   per-model failure isolation and Leoflow-level parallelism. Refusing would break
   a project that runs today. The compile now warns on stderr, naming the group,
-  every member, and the two ways out (rename the folder, or `granularity: node`).
+  every member, and the two ways out (rename the folder, or `granularity: node`) —
+  on the dbt-only path and on an embedded `dbt_group` alike, the latter prefixed
+  with the group name since a `dag.py` DAG can embed several.
 
 - **The migration Job honours `nodeSelector`, `tolerations` and `affinity`
   (#1056).** It was the one workload in the chart ignoring the pod-placement

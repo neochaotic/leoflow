@@ -288,6 +288,15 @@ func expandDbtGroupsInFile(cmd *cobra.Command, dir, output string, cfg *domain.L
 			return nil, perr
 		}
 		return dbt.Render(manifest, dbt.Options{
+			// Wired here too, not only on the dbt-only path: an embedded group
+			// merges folders exactly the same way, and a warning that exists
+			// but is never delivered on half the call sites is the defect it
+			// was written to prevent. Named by group — a dag.py DAG can embed
+			// several, and "group `staging`" alone would not say which.
+			Warn: func(msg string) {
+				//nolint:errcheck // a warning that cannot be delivered must not fail the compile
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: dbt_group(%s): %s\n", group, msg)
+			},
 			Granularity: dbt.Granularity(gc.Granularity),
 			Connection:  conn,
 			Profile:     profile,

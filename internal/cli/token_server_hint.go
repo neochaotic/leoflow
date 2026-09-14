@@ -24,6 +24,13 @@ func apiStatusError(status int, body []byte) error {
 	return tokenServerHint(err, resolvedTarget.server, resolvedTarget.configured, resolvedTarget.fromConfig)
 }
 
+// loginCommandPath is the command the hint tells the user to run. It is a
+// constant rather than a literal in the format string so a test can resolve it
+// against the real command tree — the first version of this hint printed
+// "leoflow login", which does not exist (the command is under `auth`), and the
+// test asserted that same wrong literal, so the test locked the defect in.
+const loginCommandPath = "leoflow auth login"
+
 // tokenServerHint turns a bare 401 into something actionable when the token was
 // read from the config file and the command is talking to a DIFFERENT control
 // plane than the one that token was persisted for.
@@ -42,13 +49,6 @@ func apiStatusError(status int, body []byte) error {
 //
 // This decorates the error rather than being a new pattern: hintEmailUsername
 // already does the same for the login flow's 401.
-// loginCommandPath is the command the hint tells the user to run. It is a
-// constant rather than a literal in the format string so a test can resolve it
-// against the real command tree — the first version of this hint printed
-// "leoflow login", which does not exist (the command is under `auth`), and the
-// test asserted that same wrong literal, so the test locked the defect in.
-const loginCommandPath = "leoflow auth login"
-
 func tokenServerHint(err error, effectiveServer, configServer string, tokenFromConfig bool) error {
 	if err == nil || !tokenFromConfig || configServer == "" {
 		return err

@@ -19,13 +19,19 @@ dags/my_pipeline/
 
 Scaffold one with `leoflow init dags/my_pipeline`.
 
-## Workspace layout (multi-DAG, Lite only)
+## Workspace layout (multi-DAG)
 
-> **Lite-specific.** Multi-DAG workspace discovery and the hot-reload watcher
-> exist only in `leoflow lite` — the developer-mode loop. **Pro** does not have
-> a "workspace"; in Pro every DAG ships as its own image-and-`dag.json` pair,
-> built by CI and registered via `leoflow push dag.json`. See
-> [The development → deploy lifecycle](#the-development--deploy-lifecycle).
+> **Lite-specific.** The hot-reload watcher exists only in `leoflow lite` — the
+> developer-mode loop. At **runtime** Pro has no "workspace": every DAG ships as
+> its own image-and-`dag.json` pair, built by CI and registered via
+> `leoflow push dag.json`, and the control plane never sees a directory of
+> siblings. See [The development → deploy lifecycle](#the-development--deploy-lifecycle).
+>
+> The same *discovery* does run at **build** time in Pro, in one place:
+> [`leoflow build [workspace]`](/operate/cicd-deploy/) walks a directory of
+> projects and builds each with its own `registry:`. That is a convenience for
+> the person at the keyboard — it produces the same one-image-per-DAG artifacts
+> and changes nothing about how Pro runs them.
 
 `leoflow lite` watches a **workspace** that can hold many DAGs as sibling
 subdirectories. The default workspace is `~/leoflow/` (set by `leoflow setup`).

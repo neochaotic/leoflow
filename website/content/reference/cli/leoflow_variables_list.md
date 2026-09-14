@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow variables list"
 linkTitle: "variables list"
-weight: 55
+weight: 56
 ---
 
 List variables (encrypted values not shown).

@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow connections get"
 linkTitle: "connections get"
-weight: 24
+weight: 25
 ---
 
 Show a connection (password omitted, extra masked).

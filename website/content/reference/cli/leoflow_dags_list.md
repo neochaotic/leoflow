@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow dags list"
 linkTitle: "dags list"
-weight: 29
+weight: 30
 ---
 
 List registered DAGs.

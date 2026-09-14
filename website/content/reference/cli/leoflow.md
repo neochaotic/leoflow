@@ -23,6 +23,7 @@ Leoflow is a GitOps-first, container-native workflow orchestrator.
 
 * [leoflow admin](/reference/cli/leoflow_admin/)	 - Operate a running control plane (health, pause, drain, runs).
 * [leoflow auth](/reference/cli/leoflow_auth/)	 - Manage authentication tokens.
+* [leoflow build](/reference/cli/leoflow_build/)	 - Build the container image of every DAG project in a workspace.
 * [leoflow compile](/reference/cli/leoflow_compile/)	 - Compile a DAG project into dag.json via the Python parser.
 * [leoflow completion](/reference/cli/leoflow_completion/)	 - Generate the autocompletion script for the specified shell
 * [leoflow connections](/reference/cli/leoflow_connections/)	 - Manage control-plane connections.

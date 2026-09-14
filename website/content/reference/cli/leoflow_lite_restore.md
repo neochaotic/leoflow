@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow lite restore"
 linkTitle: "lite restore"
-weight: 41
+weight: 42
 ---
 
 Restore a Lite install from an archive produced by `leoflow lite backup`.

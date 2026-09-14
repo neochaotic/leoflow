@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow completion zsh"
 linkTitle: "completion zsh"
-weight: 21
+weight: 22
 ---
 
 Generate the autocompletion script for zsh

@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow dags delete"
 linkTitle: "dags delete"
-weight: 28
+weight: 29
 ---
 
 Clear a DAG's run history, or fully deregister it with --deregister.

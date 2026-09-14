@@ -5,10 +5,8 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow build"
 linkTitle: "build"
-weight: 14
+weight: 16
 ---
-
-## leoflow build
 
 Build the container image of every DAG project in a workspace.
 
@@ -26,10 +24,10 @@ leoflow build [workspace] [flags]
 
 ```
       --builder string       image build tool to shell out to (e.g. docker, podman, nerdctl) (default "docker")
-      --dag-version string   version recorded in each dag.json and used by the registry tag strategy
+      --dag-version string   version recorded in each dag.json and used by the registry tag strategy (default: git describe, else dev)
   -h, --help                 help for build
       --push                 push each built image to its registry
-      --sha sha              commit sha for the sha tag strategy
+      --sha string           commit sha for the git_sha tag strategy (default: git rev-parse --short HEAD)
 ```
 
 ### Options inherited from parent commands
@@ -42,5 +40,5 @@ leoflow build [workspace] [flags]
 
 ### SEE ALSO
 
-* [leoflow](leoflow.md)	 - Leoflow is a GitOps-first, container-native workflow orchestrator.
+* [leoflow](/reference/cli/leoflow/)	 - Leoflow is a GitOps-first, container-native workflow orchestrator.
 

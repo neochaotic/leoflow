@@ -32,8 +32,12 @@ func TestBuildTargets(t *testing.T) {
 		if len(got) != 1 {
 			t.Fatalf("targets = %+v", got)
 		}
-		if !strings.Contains(got[0].image, "reg.io/team") || !strings.Contains(got[0].image, "sales") {
-			t.Errorf("image = %q, want it derived from the project's registry", got[0].image)
+		// The WHOLE reference, not substrings of it: asserting only that the url
+		// and name appear is satisfied by `reg.io/team/sales:` — an empty tag,
+		// which docker refuses — and that is exactly the defect that reached the
+		// builder while this test stayed green.
+		if want := "reg.io/team/sales:v1"; got[0].image != want { // tag_strategy defaults to "version"
+			t.Errorf("image = %q, want %q", got[0].image, want)
 		}
 		if len(skipped) != 0 {
 			t.Errorf("nothing to skip: %v", skipped)
@@ -51,7 +55,7 @@ func TestBuildTargets(t *testing.T) {
 			t.Errorf("targets = %+v, want only a", got)
 		}
 		if len(skipped) != 1 || !strings.Contains(skipped[0], "b") {
-			t.Errorf("skipped = %v, want it to name b", skipped)
+			t.Fatalf("skipped = %v, want it to name b", skipped)
 		}
 		if !strings.Contains(skipped[0], "registry") {
 			t.Errorf("the skip must say what is missing; got %q", skipped[0])
@@ -61,7 +65,7 @@ func TestBuildTargets(t *testing.T) {
 	t.Run("a project with no config at all is reported", func(t *testing.T) {
 		_, skipped := buildTargets([]Project{{Path: "/ws/c", DagID: "c"}}, "v1", "abc1234")
 		if len(skipped) != 1 || !strings.Contains(skipped[0], "c") {
-			t.Errorf("skipped = %v, want it to name c", skipped)
+			t.Fatalf("skipped = %v, want it to name c", skipped)
 		}
 	})
 

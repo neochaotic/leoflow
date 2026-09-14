@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow lite reset-password"
 linkTitle: "lite reset-password"
-weight: 40
+weight: 41
 ---
 
 Reset the Leoflow Lite admin password.

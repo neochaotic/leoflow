@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow db migrate"
 linkTitle: "db migrate"
-weight: 31
+weight: 32
 ---
 
 Create (if needed) and migrate the Lite database to the latest schema.

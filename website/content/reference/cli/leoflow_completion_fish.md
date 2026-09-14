@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow completion fish"
 linkTitle: "completion fish"
-weight: 19
+weight: 20
 ---
 
 Generate the autocompletion script for fish

@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow db"
 linkTitle: "db"
-weight: 30
+weight: 31
 ---
 
 Manage the local Lite database (schema name leoflow_dev for upgrade safety).

@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow completion powershell"
 linkTitle: "completion powershell"
-weight: 20
+weight: 21
 ---
 
 Generate the autocompletion script for powershell

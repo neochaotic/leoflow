@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow variables get"
 linkTitle: "variables get"
-weight: 54
+weight: 55
 ---
 
 Show a variable (value masked when the key looks sensitive).

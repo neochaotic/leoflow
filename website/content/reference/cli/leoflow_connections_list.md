@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow connections list"
 linkTitle: "connections list"
-weight: 25
+weight: 26
 ---
 
 List connections (secrets never shown).

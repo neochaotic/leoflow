@@ -110,7 +110,7 @@ jobs:
           fail: true
 
       - name: Upload built site (artifact only — NOT a deploy)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: website-public
           path: website/public

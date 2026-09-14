@@ -139,6 +139,14 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   connected to the sentence about the login. Present and unlinked is the same as
   absent for someone stuck on a login screen.
 
+- **The wrong-server 401 hint names a command that exists.** The hint added
+  below printed `leoflow login --server <url>`. There is no `leoflow login` —
+  login lives under `auth` — so the one-line way out of the 401 could not be
+  pasted. The test asserted the same wrong literal, which is why nothing caught
+  it: comparing one author's string to the same author's string can only show
+  they typed it twice. The hint now resolves against the real command tree in a
+  test, so moving or renaming `auth login` fails there instead of in a terminal.
+
 - **A 401 now says when your saved token belongs to a different server
   (#1102).** `~/.leoflow/config.yaml` holds a `server_url` and a `token`, written
   together; point a command at another control plane with `--server` and the

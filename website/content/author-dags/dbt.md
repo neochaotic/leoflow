@@ -155,6 +155,32 @@ default only kicks in when there's nothing configured.
 
 ### Managed connection (recommended for Pro)
 
+{{% alert title="Top-level `connections:` and `variables:` reach dbt tasks too" color="info" %}}
+`dbt.connection` is the one the runtime turns into `profiles.yml`. Anything else
+your models need — a connection a pre-hook calls, a variable a macro reads — is
+declared at the top level of `leoflow.yaml`, exactly as for a `dag.py` project:
+
+```yaml
+connections: [warehouse_pg, reporting]
+variables: [env]
+```
+
+Those declarations are the scope a dbt task is granted, and they are merged with
+the `dbt.connection` above rather than replaced by it — every dbt task is granted
+the managed connection **and** everything the DAG declares. (Under the default
+`permissive` scoping the pod still receives the whole tenant vault; the declared
+set is what `enforce` restricts it to, and what an external backend is queried
+for.)
+
+Previously a **dbt-only** project dropped both on the way to `dag.json`. Under
+`auth.secret_scoping: enforce` that meant the pod got none of them and the DAG
+failed inside the task rather than at compile. Under the default `permissive` the
+pod still received the whole tenant vault, so the declarations were simply not
+honored — except for a secret that lives only in an
+[external backend](/operate/external-secrets/), which is fetched by declared name
+and so was never requested at all.
+{{% /alert %}}
+
 Set `connection:` to a Leoflow connection id. Leoflow delivers the connection to
 the pod (encrypted at rest, decrypted in-pod) and the runtime **generates
 `profiles.yml`** before dbt runs — **no credential is ever baked into the image**.

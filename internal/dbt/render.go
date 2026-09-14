@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -65,6 +66,14 @@ type Options struct {
 	// step that writes a default duckdb profiles.yml — a zero-config local warehouse,
 	// no server and no connection needed (L4). Ignored on the Pro/image path.
 	Local bool
+	// DagConnections are the connection ids declared at the top level of
+	// leoflow.yaml. They are stamped onto each task ALONGSIDE Connection, not
+	// instead of it: declaredConnections (internal/storage) returns the task's
+	// list whenever it is non-empty, so stamping only the managed connection
+	// shadows the DAG's own declarations and they never reach the pod — a
+	// pre-hook's connection silently missing under enforce scoping or an
+	// external secrets backend.
+	DagConnections []string
 }
 
 // dbtVerb maps each executable dbt resource type to the dbt subcommand that runs
@@ -227,7 +236,7 @@ func decorateCommands(tasks []domain.TaskSpec, opts Options) {
 		// with the external secrets backend: the profile step reads an env the agent
 		// never delivered (#10).
 		if opts.Connection != "" {
-			tasks[i].Connections = append(tasks[i].Connections, opts.Connection)
+			tasks[i].Connections = mergeConnections(tasks[i].Connections, opts.Connection, opts.DagConnections)
 		}
 	}
 }
@@ -498,4 +507,26 @@ func warnFolderCollisions(warn func(string), gran Granularity, members map[strin
 		warn(fmt.Sprintf("dbt granularity=folder: group %q holds nodes from a folder named %q AND nodes with no folder, so they run as ONE task (%s) — dbt still orders them, but they lose per-node isolation and parallelism. Rename the folder, or use granularity=node.",
 			g, g, strings.Join(mem, ", ")))
 	}
+}
+
+// mergeConnections stamps the managed dbt connection onto a task together with
+// the connections the DAG declared.
+//
+// Both, never just the managed one: once a task carries ANY connection list,
+// that list is what reaches the pod (declaredConnections, internal/storage,
+// consults the DAG-level list only when the task's is empty). Stamping the
+// managed connection alone therefore silently drops every connection the DAG
+// declared — a pre-hook's warehouse missing under enforce scoping or an external
+// secrets backend, failing inside the task.
+func mergeConnections(existing []string, managed string, declared []string) []string {
+	// A fresh slice: appending onto the caller's would share its backing array.
+	out := make([]string, 0, len(existing)+1+len(declared))
+	out = append(out, existing...)
+	out = append(out, managed)
+	for _, c := range declared {
+		if !slices.Contains(out, c) {
+			out = append(out, c)
+		}
+	}
+	return out
 }

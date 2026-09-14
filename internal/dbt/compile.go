@@ -21,6 +21,19 @@ type Meta struct {
 	Tags        []string
 	Schedule    string
 	Granularity Granularity
+	// Connections and Variables are the secret names the leoflow.yaml declares
+	// (ADR 0045 / ADR 0055). They must reach the spec: what a task pod is allowed
+	// to see is derived from what the DAG declares. Dropping them here does not
+	// merely omit a field — under `auth.secret_scoping: enforce` the pod is
+	// delivered nothing and the DAG fails inside the task rather than at compile
+	// (#997). Under the default permissive scoping the pod still receives the
+	// whole tenant vault, so the declarations are simply not honored; the
+	// exception there is a secret that lives only in an external backend, which
+	// is requested by declared name and so is never fetched at all. The dag.py
+	// path emits both; this path built its spec from an explicit field list that
+	// omitted them.
+	Connections []string
+	Variables   []string
 	// Connection and Profile, when set, wrap each task's dbt command with the
 	// runtime step that writes profiles.yml from the managed connection (ADR 0043).
 	Connection string
@@ -60,6 +73,9 @@ func Compile(manifestJSON []byte, meta Meta) (domain.DAGSpec, error) {
 		ProjectDir:  meta.ProjectDir,
 		ProfilesDir: meta.ProfilesDir,
 		Local:       meta.Local,
+		// So the DAG's declarations survive the managed connection being
+		// stamped on each task (see Options.DagConnections).
+		DagConnections: meta.Connections,
 	})
 	if err != nil {
 		return domain.DAGSpec{}, err
@@ -73,6 +89,11 @@ func Compile(manifestJSON []byte, meta Meta) (domain.DAGSpec, error) {
 		Description:   meta.Description,
 		Tags:          meta.Tags,
 		Tasks:         tasks,
+		// Copied rather than aliased: the spec outlives the Meta it was built
+		// from, and sharing the backing array lets a later append by the caller
+		// mutate a spec that has already been written.
+		Connections: append([]string(nil), meta.Connections...),
+		Variables:   append([]string(nil), meta.Variables...),
 	}
 	if meta.Schedule != "" {
 		schedule := meta.Schedule

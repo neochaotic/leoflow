@@ -23,10 +23,13 @@ type Meta struct {
 	Granularity Granularity
 	// Connections and Variables are the secret names the leoflow.yaml declares
 	// (ADR 0045 / ADR 0055). They must reach the spec: what a task pod is allowed
-	// to see is derived from what the DAG declares, so dropping them here does not
-	// merely omit a field — it delivers no secrets at all, and the DAG fails
-	// inside the task rather than at compile (#997). The dag.py path emits both;
-	// this path built its spec from an explicit field list that omitted them.
+	// to see is derived from what the DAG declares. Dropping them here does not
+	// merely omit a field — under `auth.secret_scoping: enforce`, or with an
+	// external secrets backend, the pod is delivered nothing and the DAG fails
+	// inside the task rather than at compile (#997). Under the default permissive
+	// scoping the pod still receives the whole tenant vault, so the declarations
+	// are simply not honored. The dag.py path emits both; this path built its
+	// spec from an explicit field list that omitted them.
 	Connections []string
 	Variables   []string
 	// Connection and Profile, when set, wrap each task's dbt command with the
@@ -68,6 +71,9 @@ func Compile(manifestJSON []byte, meta Meta) (domain.DAGSpec, error) {
 		ProjectDir:  meta.ProjectDir,
 		ProfilesDir: meta.ProfilesDir,
 		Local:       meta.Local,
+		// So the DAG's declarations survive the managed connection being
+		// stamped on each task (see Options.DagConnections).
+		DagConnections: meta.Connections,
 	})
 	if err != nil {
 		return domain.DAGSpec{}, err

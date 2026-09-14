@@ -165,10 +165,15 @@ connections: [warehouse_pg, reporting]
 variables: [env]
 ```
 
-Those declarations are what secret scoping delivers to the task pod: a task sees
-the connections and variables its DAG declares, and nothing else. Before v0.4.7 a
-**dbt-only** project dropped both on the way to `dag.json`, so the pod received
-nothing and the DAG failed inside the task rather than at compile.
+Those declarations are what secret scoping delivers to the task pod, and they are
+merged with the `dbt.connection` above rather than replaced by it — every dbt task
+is delivered the managed connection **and** everything the DAG declares.
+
+Previously a **dbt-only** project dropped both on the way to `dag.json`. Under
+`auth.secret_scoping: enforce`, or with an external secrets backend, that meant the
+pod got none of them and the DAG failed inside the task rather than at compile;
+under the default `permissive` the pod still received the whole tenant vault, so
+the declarations were simply not honored.
 {{% /alert %}}
 
 Set `connection:` to a Leoflow connection id. Leoflow delivers the connection to

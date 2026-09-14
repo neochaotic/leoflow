@@ -119,8 +119,16 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   both, so a `leoflow.yaml` declaring them produced a `dag.json` without them —
   while the `dag.py` path emitted both from the same file. Under ADR 0055 secret
   scoping that is not a missing JSON field: what a task pod may see is derived
-  from what the DAG declares, so the pod received **nothing**, and the DAG failed
-  inside the task rather than at compile.
+  from what the DAG declares. With `auth.secret_scoping: enforce`, or an external
+  secrets backend, the pod received **nothing** and the DAG failed inside the task
+  rather than at compile; under the default permissive scoping it still received
+  the whole tenant vault, so the declarations were simply not honored.
+
+- **A dbt task with a managed `dbt.connection` also gets the connections its DAG
+  declares (#997).** Rendering stamped the managed connection onto every task, and
+  a non-empty task-level list is what reaches the pod — the DAG-level list is never
+  consulted once it exists. So a dbt project using `dbt.connection` silently lost
+  every other connection it declared (a pre-hook's, say). The two are now merged.
 
 - **`leoflow lite --help` now says the admin password is shown once, and names
   the way back (#1105).** It described the UI as being "behind a login (the admin

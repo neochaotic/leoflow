@@ -208,8 +208,9 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 		Schedule:    cfg.Dbt.Schedule,
 		Granularity: dbt.Granularity(cfg.Dbt.Granularity),
 		// The declared secret set. Without these the dbt-only path produced a
-		// dag.json with no connections/variables, and ADR 0055 scoping then
-		// delivered nothing to the task pod (#997).
+		// dag.json with no connections/variables, so ADR 0055 scoping had nothing
+		// to scope: under enforce (or an external backend) the pod got none of
+		// them, under the default permissive it got the whole vault (#997).
 		Connections: cfg.Connections,
 		Variables:   cfg.Variables,
 		Connection:  conn,

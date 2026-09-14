@@ -1047,7 +1047,35 @@ components:
         dag_run_id: { type: string }
         only_failed: { type: boolean, default: false }
         only_running: { type: boolean, default: false }
-        reset_dag_runs: { type: boolean, default: true }
+        reset_dag_runs:
+          type: boolean
+          default: true
+          description: >-
+            Re-open the run so the scheduler looks at it again. Without it a
+            terminal run stays terminal and the cleared task instance is never
+            scheduled.
+        run_on_latest_version:
+          type: boolean
+          default: true
+          description: >-
+            Which version the re-run executes. true re-binds the run to the DAG's
+            current registered version, so a clear after a fix picks up the newest
+            image and config. false keeps the version the run was created with, so
+            the re-run executes the image that produced the original attempt.
+            NOTE: Apache Airflow's equivalent flag defaults to false. Leoflow
+            defaults to true because under `leoflow dev` every save registers a new
+            version, and pinning by default would make "fix the DAG, clear the
+            failed task, watch it pass" silently re-run the pre-fix code.
+        dry_run:
+          type: boolean
+          default: false
+          description: >-
+            Return the task instances that WOULD be cleared, without clearing
+            them. NOTE: Apache Airflow's equivalent defaults to true.
+        include_upstream: { type: boolean, default: false }
+        include_downstream: { type: boolean, default: false }
+        include_past: { type: boolean, default: false }
+        include_future: { type: boolean, default: false }
 
     XComEntry:
       type: object

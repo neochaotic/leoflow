@@ -130,11 +130,23 @@ func (e ListDagRunsParamsState) Valid() bool {
 
 // ClearTaskInstancesRequest defines model for ClearTaskInstancesRequest.
 type ClearTaskInstancesRequest struct {
-	DagRunId     *string   `json:"dag_run_id,omitempty"`
-	OnlyFailed   *bool     `json:"only_failed,omitempty"`
-	OnlyRunning  *bool     `json:"only_running,omitempty"`
-	ResetDagRuns *bool     `json:"reset_dag_runs,omitempty"`
-	TaskIds      *[]string `json:"task_ids,omitempty"`
+	DagRunId *string `json:"dag_run_id,omitempty"`
+
+	// DryRun Return the task instances that WOULD be cleared, without clearing them. NOTE: Apache Airflow's equivalent defaults to true.
+	DryRun            *bool `json:"dry_run,omitempty"`
+	IncludeDownstream *bool `json:"include_downstream,omitempty"`
+	IncludeFuture     *bool `json:"include_future,omitempty"`
+	IncludePast       *bool `json:"include_past,omitempty"`
+	IncludeUpstream   *bool `json:"include_upstream,omitempty"`
+	OnlyFailed        *bool `json:"only_failed,omitempty"`
+	OnlyRunning       *bool `json:"only_running,omitempty"`
+
+	// ResetDagRuns Re-open the run so the scheduler looks at it again. Without it a terminal run stays terminal and the cleared task instance is never scheduled.
+	ResetDagRuns *bool `json:"reset_dag_runs,omitempty"`
+
+	// RunOnLatestVersion Which version the re-run executes. true re-binds the run to the DAG's current registered version, so a clear after a fix picks up the newest image and config. false keeps the version the run was created with, so the re-run executes the image that produced the original attempt. NOTE: Apache Airflow's equivalent flag defaults to false. Leoflow defaults to true because under `leoflow dev` every save registers a new version, and pinning by default would make "fix the DAG, clear the failed task, watch it pass" silently re-run the pre-fix code.
+	RunOnLatestVersion *bool     `json:"run_on_latest_version,omitempty"`
+	TaskIds            *[]string `json:"task_ids,omitempty"`
 }
 
 // ComponentHealth defines model for ComponentHealth.

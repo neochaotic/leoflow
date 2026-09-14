@@ -86,7 +86,7 @@ func TestLimaBug1_ClearResetsQueuedAtIntegration(t *testing.T) {
 	// what the API handler invokes. resetDagRun=false to isolate the TI-level
 	// reset semantics (the run-level reset is a separate concern).
 	cleared, err := repo.ClearTaskInstances(ctx, "default", dagID, "r1",
-		[]string{"hello"}, true /*onlyFailed*/, false /*resetDagRun*/)
+		[]string{"hello"}, true /*onlyFailed*/, domain.ClearOptions{})
 	if err != nil {
 		t.Fatalf("ClearTaskInstances: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestLimaBug3_TaskTriesIncludesArchivedAttemptsIntegration(t *testing.T) {
 			t.Fatalf("ApplyTransition to failed (cycle %d): %v", i, err)
 		}
 		if _, err := repo.ClearTaskInstances(ctx, "default", dagID, "r1",
-			[]string{"hello"}, true /*onlyFailed*/, false); err != nil {
+			[]string{"hello"}, true /*onlyFailed*/, domain.ClearOptions{}); err != nil {
 			t.Fatalf("ClearTaskInstances (cycle %d): %v", i, err)
 		}
 	}
@@ -301,7 +301,7 @@ func TestOnFailureAlertDedupResetsOnClearIntegration(t *testing.T) {
 
 	// A Clear (resetDagRun=true) opens a new failure episode by NULLing alerted_at.
 	if _, err := repo.ClearTaskInstances(ctx, "default", dagID, "r1",
-		[]string{"hello"}, true /*onlyFailed*/, true /*resetDagRun*/); err != nil {
+		[]string{"hello"}, true /*onlyFailed*/, domain.ClearOptions{ResetDagRun: true, RunOnLatestVersion: true}); err != nil {
 		t.Fatalf("ClearTaskInstances: %v", err)
 	}
 

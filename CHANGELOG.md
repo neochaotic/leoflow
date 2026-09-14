@@ -8,6 +8,29 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`clear` can re-run a task on the image that produced it (`run_on_latest_version`).**
+  Clearing a task always re-bound its run to the DAG's current version, so
+  "clear last week's task" always executed today's code and there was no way to
+  ask for anything else. The flag now chooses: `true` (the default, unchanged
+  behaviour) re-binds to the current version so a clear after a fix picks up the
+  newest image; `false` keeps the version the run was created with.
+
+  This also splits two decisions that were one boolean — re-opening a run and
+  choosing its version are independent, and `reset_dag_runs` now means only the
+  first.
+
+  The name and semantics are Apache Airflow's. Its default is the opposite
+  (`false`); leoflow keeps `true` because under `leoflow dev` every save
+  registers a new version, so pinning by default would make "fix the DAG, clear
+  the failed task, watch it pass" silently re-run the pre-fix code. ADR 0020
+  carries the reasoning, and withdraws an earlier claim that the unconditional
+  re-bind "matches Airflow" — true of Airflow 2, not of Airflow 3.x.
+
+  `dry_run`, `include_upstream`, `include_downstream`, `include_past` and
+  `include_future` were implemented but missing from the published OpenAPI, so
+  the generated Go client could not express them. All five are documented now.
+
+
 - **`leoflow build` builds every project in a workspace (#1115).** `leoflow
   compile <dir> --image <ref> --build` has always built one; with several DAGs
   that meant running it once per directory with the right reference each time,

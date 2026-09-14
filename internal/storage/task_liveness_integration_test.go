@@ -143,7 +143,7 @@ func TestIsTaskInstanceLiveClearedOldRunReruns(t *testing.T) {
 	// Clear the failed task: archives try 1 and bumps the live row to try 2 in
 	// state none. The clear rebinds the run to the current version, exactly the
 	// UI's clear-and-rerun.
-	if _, err := repo.ClearTaskInstances(ctx, "default", dagID, "r1", []string{"load"}, true, true); err != nil {
+	if _, err := repo.ClearTaskInstances(ctx, "default", dagID, "r1", []string{"load"}, true, domain.ClearOptions{ResetDagRun: true, RunOnLatestVersion: true}); err != nil {
 		t.Fatalf("ClearTaskInstances: %v", err)
 	}
 	// none is not an active state — not live yet.

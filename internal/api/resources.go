@@ -48,7 +48,7 @@ type TaskInstanceRepository interface {
 	// first — the current row UNIONed with the archived history. The UI's
 	// /tries endpoint needs all attempts to render its navigable tabs.
 	ListTaskInstanceAttempts(ctx context.Context, tenant, dagID, runID, taskID string) ([]domain.TaskInstance, error)
-	ClearTaskInstances(ctx context.Context, tenant, dagID, runID string, taskIDs []string, onlyFailed, resetDagRun bool) (int, error)
+	ClearTaskInstances(ctx context.Context, tenant, dagID, runID string, taskIDs []string, onlyFailed bool, opts domain.ClearOptions) (int, error)
 	SetTaskInstanceState(ctx context.Context, tenant, dagID, runID, taskID, state string) error
 }
 
@@ -641,16 +641,17 @@ func (t *clearTaskIDs) UnmarshalJSON(b []byte) error {
 }
 
 type clearRequest struct {
-	TaskIDs           clearTaskIDs `json:"task_ids"`
-	DagRunID          string       `json:"dag_run_id"`
-	OnlyFailed        *bool        `json:"only_failed"`
-	OnlyRunning       *bool        `json:"only_running"`
-	ResetDagRuns      *bool        `json:"reset_dag_runs"`
-	DryRun            *bool        `json:"dry_run"`
-	IncludeUpstream   bool         `json:"include_upstream"`
-	IncludeDownstream bool         `json:"include_downstream"`
-	IncludePast       bool         `json:"include_past"`
-	IncludeFuture     bool         `json:"include_future"`
+	TaskIDs            clearTaskIDs `json:"task_ids"`
+	DagRunID           string       `json:"dag_run_id"`
+	OnlyFailed         *bool        `json:"only_failed"`
+	OnlyRunning        *bool        `json:"only_running"`
+	ResetDagRuns       *bool        `json:"reset_dag_runs"`
+	RunOnLatestVersion *bool        `json:"run_on_latest_version"`
+	DryRun             *bool        `json:"dry_run"`
+	IncludeUpstream    bool         `json:"include_upstream"`
+	IncludeDownstream  bool         `json:"include_downstream"`
+	IncludePast        bool         `json:"include_past"`
+	IncludeFuture      bool         `json:"include_future"`
 }
 
 func clearTaskInstancesHandler(repo TaskInstanceRepository, runs DagRunRepository, versions DagVersionLister, specs DagSpecReader, audit AuditWriter) gin.HandlerFunc {
@@ -675,12 +676,22 @@ func clearTaskInstancesHandler(repo TaskInstanceRepository, runs DagRunRepositor
 			c.JSON(http.StatusOK, taskInstanceCollectionDTO{TaskInstances: affected, TotalEntries: len(affected)})
 			return
 		}
-		reset := true
+		opts := domain.ClearOptions{ResetDagRun: true, RunOnLatestVersion: true}
 		if body.ResetDagRuns != nil {
-			reset = *body.ResetDagRuns
+			opts.ResetDagRun = *body.ResetDagRuns
+		}
+		// Defaults true, which is NOT Airflow's default (run_on_latest_version is
+		// an opt-in there, so its clear re-runs the run's pinned version). The
+		// divergence is deliberate: under `leoflow dev` every save registers a new
+		// version, so pinning by default would make "fix the DAG, clear the failed
+		// task, watch it pass" silently re-run the pre-fix code. Flipping it is a
+		// behavior change that needs its own decision, not a side effect of
+		// adding the knob.
+		if body.RunOnLatestVersion != nil {
+			opts.RunOnLatestVersion = *body.RunOnLatestVersion
 		}
 		for _, rid := range targets {
-			if _, err := repo.ClearTaskInstances(c.Request.Context(), tenantOf(c), c.Param("dag_id"), rid, taskIDs, onlyFailed, reset); err != nil {
+			if _, err := repo.ClearTaskInstances(c.Request.Context(), tenantOf(c), c.Param("dag_id"), rid, taskIDs, onlyFailed, opts); err != nil {
 				handleRepoError(c, err)
 				return
 			}

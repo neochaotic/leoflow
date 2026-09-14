@@ -700,7 +700,7 @@ func TestClearOnlyFailedIntegration(t *testing.T) {
 	}
 
 	// only_failed with empty task list clears just the failed task.
-	cleared, err := repo.ClearTaskInstances(ctx, "default", dagID, "r1", nil, true, false)
+	cleared, err := repo.ClearTaskInstances(ctx, "default", dagID, "r1", nil, true, domain.ClearOptions{})
 	if err != nil {
 		t.Fatalf("ClearTaskInstances(onlyFailed): %v", err)
 	}
@@ -1208,7 +1208,7 @@ func TestClearRebindsRunToCurrentVersion(t *testing.T) {
 	}
 
 	// Clear with reset re-binds the run to the current version (v2).
-	if _, err := repo.ClearTaskInstances(ctx, "default", dagID, "r1", []string{"extract"}, false, true); err != nil {
+	if _, err := repo.ClearTaskInstances(ctx, "default", dagID, "r1", []string{"extract"}, false, domain.ClearOptions{ResetDagRun: true, RunOnLatestVersion: true}); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
 

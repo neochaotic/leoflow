@@ -549,7 +549,7 @@ func (r *Repository) ListTaskInstances(ctx context.Context, tenant, dagID, runID
 // failed-ish state (failed, upstream_failed, up_for_retry) are reset; with an
 // empty taskIDs and onlyFailed, every failed task in the run is cleared. It
 // returns the number of task instances actually reset.
-func (r *Repository) ClearTaskInstances(ctx context.Context, tenant, dagID, runID string, taskIDs []string, onlyFailed, resetDagRun bool) (int, error) {
+func (r *Repository) ClearTaskInstances(ctx context.Context, tenant, dagID, runID string, taskIDs []string, onlyFailed bool, opts domain.ClearOptions) (int, error) {
 	dag, err := r.resolveDag(ctx, tenant, dagID)
 	if err != nil {
 		return 0, err
@@ -562,16 +562,23 @@ func (r *Repository) ClearTaskInstances(ctx context.Context, tenant, dagID, runI
 	if err != nil {
 		return cleared, err
 	}
-	if resetDagRun {
-		// Re-bind the run to the DAG's current version so a clear after a code/yaml
-		// fix re-runs against the newest image + config (ADR 0020). In dev the
-		// current version is the last hot-reload; in prod, the last deploy. When the
-		// version is unchanged this is equivalent to a plain state reset.
-		if err := r.q.ResetDagRunToVersion(ctx, queries.ResetDagRunToVersionParams{
-			ID:           run.ID,
-			DagVersionID: dag.CurrentVersionID,
-		}); err != nil {
-			return cleared, fmt.Errorf("re-binding dag run to current version: %w", err)
+	if opts.ResetDagRun {
+		if opts.RunOnLatestVersion {
+			// Re-bind the run to the DAG's current version so a clear after a
+			// code/yaml fix re-runs against the newest image + config (ADR 0020).
+			// In dev the current version is the last hot-reload; in prod, the last
+			// deploy. When the version is unchanged this is equivalent to a plain
+			// state reset.
+			if err := r.q.ResetDagRunToVersion(ctx, queries.ResetDagRunToVersionParams{
+				ID:           run.ID,
+				DagVersionID: dag.CurrentVersionID,
+			}); err != nil {
+				return cleared, fmt.Errorf("re-binding dag run to current version: %w", err)
+			}
+		} else if err := r.q.ReopenDagRunKeepingVersion(ctx, run.ID); err != nil {
+			// The run is re-opened but keeps its pinned version, so the re-run
+			// executes the image that produced the original attempt.
+			return cleared, fmt.Errorf("re-opening dag run: %w", err)
 		}
 	}
 	return cleared, nil

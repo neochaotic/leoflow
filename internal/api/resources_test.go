@@ -116,6 +116,8 @@ func (f *fakeRunRepo) CreateDagRun(_ context.Context, _, dagID string, run domai
 }
 
 type fakeTaskRepo struct {
+	lastClearOpts domain.ClearOptions
+	clearCalled   bool
 	tis           []domain.TaskInstance
 	gotOnlyFailed bool
 	setState      string
@@ -138,7 +140,9 @@ func (f *fakeTaskRepo) ListTaskInstanceAttempts(_ context.Context, _, _, _, task
 	}
 	return out, nil
 }
-func (f *fakeTaskRepo) ClearTaskInstances(_ context.Context, _, _, _ string, _ []string, onlyFailed, _ bool) (int, error) {
+func (f *fakeTaskRepo) ClearTaskInstances(_ context.Context, _, _, _ string, _ []string, onlyFailed bool, opts domain.ClearOptions) (int, error) {
+	f.lastClearOpts = opts
+	f.clearCalled = true
 	f.gotOnlyFailed = onlyFailed
 	return len(f.tis), nil
 }
@@ -824,5 +828,89 @@ func TestTaskInstanceResponseStaysAirflowCompatible(t *testing.T) {
 	}
 	if _, ok := got["failure_reason"]; !ok {
 		t.Error("failure_reason must be present on the response")
+	}
+}
+
+// clearSrv builds a server whose task repo records the ClearOptions it received,
+// so the tests below assert what the handler decided rather than what it printed.
+func clearSrv(t *testing.T) (*gin.Engine, *fakeTaskRepo) {
+	t.Helper()
+	tasks := &fakeTaskRepo{tis: []domain.TaskInstance{
+		{TaskID: "extract", RunID: "r1", State: domain.TaskStateFailed},
+	}}
+	srv := NewServer(Dependencies{
+		Logger: discardLogger(), Authenticator: &fakeAuthn{user: &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}},
+		RateLimiter: auth.NewRateLimiter(100, time.Minute), CORSOrigins: []string{"*"}, TokenTTLSecs: 3600,
+		Tasks: tasks, DagRuns: &fakeRunRepo{runs: []domain.DagRun{{DagID: "etl", RunID: "r1"}}},
+	})
+	return srv, tasks
+}
+
+// TestClearRunOnLatestVersion: which version a cleared run re-executes is now a
+// request-level decision, separate from whether the run is re-opened.
+//
+// Before this, the two were one boolean: re-opening a run always re-bound it to
+// the DAG's current version, so there was no way to re-run a task against the
+// image that produced it — "clear last week's task" always ran today's code.
+// Apache Airflow separates them the same way and calls the second
+// `run_on_latest_version`.
+func TestClearRunOnLatestVersion(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want domain.ClearOptions
+	}{{
+		// Not Airflow's default (its run_on_latest_version is opt-in), and
+		// deliberately so: under `leoflow dev` every save registers a new version,
+		// so pinning by default would make "fix the DAG, clear, watch it pass"
+		// silently re-run the pre-fix code.
+		name: "omitted keeps the documented re-bind",
+		body: `{"dag_run_id":"r1"}`,
+		want: domain.ClearOptions{ResetDagRun: true, RunOnLatestVersion: true},
+	}, {
+		name: "false pins the run to the version it was created with",
+		body: `{"dag_run_id":"r1","run_on_latest_version":false}`,
+		want: domain.ClearOptions{ResetDagRun: true, RunOnLatestVersion: false},
+	}, {
+		name: "true is explicit and unchanged",
+		body: `{"dag_run_id":"r1","run_on_latest_version":true}`,
+		want: domain.ClearOptions{ResetDagRun: true, RunOnLatestVersion: true},
+	}, {
+		// The two decisions are independent: not re-opening the run says nothing
+		// about which version a later re-open would use.
+		name: "it is independent of reset_dag_runs",
+		body: `{"dag_run_id":"r1","reset_dag_runs":false,"run_on_latest_version":false}`,
+		want: domain.ClearOptions{ResetDagRun: false, RunOnLatestVersion: false},
+	}}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv, tasks := clearSrv(t)
+			rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/clearTaskInstances", c.body)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("clear = %d (%s)", rec.Code, rec.Body.String())
+			}
+			if !tasks.clearCalled {
+				t.Fatal("the repository was never asked to clear; the assertion below would be vacuous")
+			}
+			if tasks.lastClearOpts != c.want {
+				t.Errorf("ClearOptions = %+v, want %+v", tasks.lastClearOpts, c.want)
+			}
+		})
+	}
+}
+
+// TestClearDryRunDecidesNothing: a preview must not reach the repository at all.
+// Recording the options makes it possible to assert that, rather than inferring
+// it from an unchanged state field.
+func TestClearDryRunDecidesNothing(t *testing.T) {
+	srv, tasks := clearSrv(t)
+	rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/clearTaskInstances",
+		`{"dag_run_id":"r1","dry_run":true,"run_on_latest_version":false}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("dry_run = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if tasks.clearCalled {
+		t.Error("dry_run reached the repository")
 	}
 }

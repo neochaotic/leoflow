@@ -1575,6 +1575,32 @@ func (q *Queries) RedispatchRescheduledTaskInstance(ctx context.Context, arg Red
 	return err
 }
 
+const reopenDagRunKeepingVersion = `-- name: ReopenDagRunKeepingVersion :exec
+UPDATE dag_runs
+SET state = 'queued', started_at = NULL, ended_at = NULL, alerted_at = NULL,
+    alert_attempts = 0, next_alert_attempt_at = NULL
+WHERE id = $1
+`
+
+// The same re-open as ResetDagRunToVersion, WITHOUT touching dag_version_id: the
+// run stays pinned to the version it was created with, so the re-run executes the
+// image that produced the original attempt.
+//
+// Two separate decisions used to be one. Re-opening a run (state, timestamps,
+// alert bookkeeping) is what `reset_dag_runs` means; WHICH version the re-run
+// executes is what Airflow calls `run_on_latest_version`. Folding the second into
+// the first left no way to re-run last week's task as it was last week, and left
+// `reset_dag_runs=false` meaning "do not re-open either", which strands the
+// cleared task instance in a terminal run the scheduler never looks at again.
+//
+// Alert bookkeeping is cleared here for the same reason it is there: the clear
+// starts a new failure episode, so a genuine re-failure re-pages, and a spent
+// retry budget is not carried into an episode that has not been attempted.
+func (q *Queries) ReopenDagRunKeepingVersion(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, reopenDagRunKeepingVersion, id)
+	return err
+}
+
 const reportTaskResult = `-- name: ReportTaskResult :execrows
 UPDATE task_instances
 SET state = $3::task_state,

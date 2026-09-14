@@ -95,7 +95,7 @@ func TestClearTaskInstancesResetsAnyState(t *testing.T) {
 	}
 
 	cleared, err := repo.ClearTaskInstances(ctx, "default", dagID, "r1",
-		[]string{"t"}, false /*onlyFailed*/, false /*resetDagRun*/)
+		[]string{"t"}, false /*onlyFailed*/, domain.ClearOptions{})
 	if err != nil {
 		t.Fatalf("ClearTaskInstances: %v", err)
 	}

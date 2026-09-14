@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -380,5 +381,75 @@ dbt:
 	}
 	if len(spec.Variables) != 1 || spec.Variables[0] != "env" {
 		t.Errorf("dag.json variables = %v, want [env]", spec.Variables)
+	}
+}
+
+// TestExpandDbtGroupsKeepsTheDagsConnections: the embedded dbt_group path
+// renders through the same code that stamps the managed connection onto every
+// task — and a non-empty task-level list is what reaches the pod. So a dag.py
+// DAG using dbt_group with a managed connection lost every connection it
+// declared, exactly as a dbt-only project did.
+//
+// Fixing the dbt-only call site and leaving this one is the defect this release
+// keeps finding: something wired on one of two paths, described as wired.
+func TestExpandDbtGroupsKeepsTheDagsConnections(t *testing.T) {
+	dir := t.TempDir()
+	// The parser emits the top-level connections: into dag.json; this is that file.
+	dagJSON := `{"schema_version":"1.0","dag_id":"sales","dag_version":"v1","image":"img",
+		"connections":["warehouse_pg","reporting"],
+		"tasks":[{"task_id":"analytics","type":"dbt_group"}]}`
+	out := filepath.Join(dir, "dag.json")
+	if err := os.WriteFile(out, []byte(dagJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if mkErr := os.MkdirAll(filepath.Join(dir, "analytics"), 0o750); mkErr != nil {
+		t.Fatal(mkErr)
+	}
+	manifest := `{"nodes":{"model.shop.a":{"resource_type":"model","name":"a","depends_on":{"nodes":[]},"config":{"materialized":"table"},"fqn":["shop","a"]}}}`
+	if werr := os.WriteFile(filepath.Join(dir, "analytics", "manifest.json"), []byte(manifest), 0o600); werr != nil {
+		t.Fatal(werr)
+	}
+	// A managed connection makes the profile name come from dbt_project.yml.
+	if werr := os.WriteFile(filepath.Join(dir, "analytics", "dbt_project.yml"), []byte("name: shop\nprofile: shop\n"), 0o600); werr != nil {
+		t.Fatal(werr)
+	}
+	cfg := &domain.LeoflowConfig{
+		DagID:       "sales",
+		Connections: []string{"warehouse_pg", "reporting"},
+		DbtGroups: map[string]*domain.DbtConfig{
+			"analytics": {Project: "analytics", Manifest: "manifest.json", Granularity: "node", Connection: "managed_wh"},
+		},
+	}
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+
+	if eerr := expandDbtGroupsInFile(cmd, dir, out, cfg, false); eerr != nil {
+		t.Fatalf("expandDbtGroupsInFile: %v", eerr)
+	}
+	data, rerr := os.ReadFile(out)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	var spec domain.DAGSpec
+	if uerr := json.Unmarshal(data, &spec); uerr != nil {
+		t.Fatal(uerr)
+	}
+	rendered := 0
+	for _, task := range spec.Tasks {
+		if task.Type == domain.TaskTypeDbtGroup {
+			t.Fatalf("the placeholder survived expansion: %+v", task)
+		}
+		rendered++
+		if !slices.Contains(task.Connections, "managed_wh") {
+			t.Errorf("task %s: managed connection missing from %v", task.TaskID, task.Connections)
+		}
+		for _, want := range []string{"warehouse_pg", "reporting"} {
+			if !slices.Contains(task.Connections, want) {
+				t.Errorf("task %s: the DAG declared %q and the task list shadows it: %v", task.TaskID, want, task.Connections)
+			}
+		}
+	}
+	if rendered == 0 {
+		t.Fatal("no dbt task was rendered; the assertions above were vacuous")
 	}
 }

@@ -24,12 +24,14 @@ type Meta struct {
 	// Connections and Variables are the secret names the leoflow.yaml declares
 	// (ADR 0045 / ADR 0055). They must reach the spec: what a task pod is allowed
 	// to see is derived from what the DAG declares. Dropping them here does not
-	// merely omit a field — under `auth.secret_scoping: enforce`, or with an
-	// external secrets backend, the pod is delivered nothing and the DAG fails
-	// inside the task rather than at compile (#997). Under the default permissive
-	// scoping the pod still receives the whole tenant vault, so the declarations
-	// are simply not honored. The dag.py path emits both; this path built its
-	// spec from an explicit field list that omitted them.
+	// merely omit a field — under `auth.secret_scoping: enforce` the pod is
+	// delivered nothing and the DAG fails inside the task rather than at compile
+	// (#997). Under the default permissive scoping the pod still receives the
+	// whole tenant vault, so the declarations are simply not honored; the
+	// exception there is a secret that lives only in an external backend, which
+	// is requested by declared name and so is never fetched at all. The dag.py
+	// path emits both; this path built its spec from an explicit field list that
+	// omitted them.
 	Connections []string
 	Variables   []string
 	// Connection and Profile, when set, wrap each task's dbt command with the

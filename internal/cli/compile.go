@@ -209,8 +209,9 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 		Granularity: dbt.Granularity(cfg.Dbt.Granularity),
 		// The declared secret set. Without these the dbt-only path produced a
 		// dag.json with no connections/variables, so ADR 0055 scoping had nothing
-		// to scope: under enforce (or an external backend) the pod got none of
-		// them, under the default permissive it got the whole vault (#997).
+		// to scope: under enforce the pod got none of them; under the default
+		// permissive it got the whole vault, minus anything that lives only in an
+		// external backend, which is fetched by declared name (#997).
 		Connections: cfg.Connections,
 		Variables:   cfg.Variables,
 		Connection:  conn,
@@ -303,12 +304,18 @@ func expandDbtGroupsInFile(cmd *cobra.Command, dir, output string, cfg *domain.L
 				//nolint:errcheck // a warning that cannot be delivered must not fail the compile
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: dbt_group(%s): %s\n", group, msg)
 			},
-			Granularity: dbt.Granularity(gc.Granularity),
-			Connection:  conn,
-			Profile:     profile,
-			Schema:      gc.Schema,
-			ProjectDir:  dbtProjectDir(dir, gc.Project, local),
-			ProfilesDir: dbtProfilesDir(dir, gc.Project, local),
+			// The DAG's declared connections, so the managed one does not
+			// shadow them here either. The parser emits the top-level
+			// `connections:` into dag.json, and spec is that file — an embedded
+			// group is the same rendering as a dbt-only project, so it loses
+			// them the same way.
+			DagConnections: spec.Connections,
+			Granularity:    dbt.Granularity(gc.Granularity),
+			Connection:     conn,
+			Profile:        profile,
+			Schema:         gc.Schema,
+			ProjectDir:     dbtProjectDir(dir, gc.Project, local),
+			ProfilesDir:    dbtProfilesDir(dir, gc.Project, local),
 			// Auto-default duckdb (L4) only when the project has no profiles.yml of its
 			// own — never override a warehouse the user configured.
 			Local: local && !dbtProjectHasProfiles(filepath.Join(dir, gc.Project)),

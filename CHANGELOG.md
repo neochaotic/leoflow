@@ -119,10 +119,11 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   both, so a `leoflow.yaml` declaring them produced a `dag.json` without them —
   while the `dag.py` path emitted both from the same file. Under ADR 0055 secret
   scoping that is not a missing JSON field: what a task pod may see is derived
-  from what the DAG declares. With `auth.secret_scoping: enforce`, or an external
-  secrets backend, the pod received **nothing** and the DAG failed inside the task
-  rather than at compile; under the default permissive scoping it still received
-  the whole tenant vault, so the declarations were simply not honored.
+  from what the DAG declares. Under `auth.secret_scoping: enforce` the pod received
+  **nothing** and the DAG failed inside the task rather than at compile. Under the
+  default permissive scoping it still received the whole tenant vault, so the
+  declarations were simply not honored — except for secrets that live only in an
+  external backend, which are requested by declared name and so were never fetched.
 
 - **A dbt task with a managed `dbt.connection` also gets the connections its DAG
   declares (#997).** Rendering stamped the managed connection onto every task, and

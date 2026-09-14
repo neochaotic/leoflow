@@ -68,21 +68,27 @@ func writeScript(t *testing.T, body string) string {
 	return p
 }
 
-// waitForFile polls for a file to appear (the subprocess executor launches the
-// agent asynchronously, so its side effects land shortly after Execute returns).
+// waitForFile polls for a file to appear AND carry content (the subprocess
+// executor launches the agent asynchronously, so its side effects land shortly
+// after Execute returns).
 func waitForFile(t *testing.T, path string) []byte {
 	t.Helper()
 	// Generous deadline: the executor spawns the agent asynchronously, and under
 	// parallel `go test ./...` with coverage instrumentation that side effect can
 	// land well after Execute returns. Poll up to 10s (returns as soon as the file
-	// appears) so the test is not flaky under load — a fixed 2s wait was.
+	// has content) so the test is not flaky under load — a fixed 2s wait was.
+	//
+	// Waiting for a non-empty read, not merely a successful one: a shell `>`
+	// redirection creates the file before the command writes a byte into it, so
+	// returning on the first successful ReadFile hands the caller "" and the test
+	// blames the product for a value the agent had not written yet.
 	for i := 0; i < 200; i++ {
-		if data, err := os.ReadFile(path); err == nil {
+		if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
 			return data
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("file %s never appeared", path)
+	t.Fatalf("file %s never appeared with content", path)
 	return nil
 }
 

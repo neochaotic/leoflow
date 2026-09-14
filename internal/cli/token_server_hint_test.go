@@ -20,7 +20,7 @@ func TestTokenServerHint(t *testing.T) {
 	t.Run("names both servers when the token came from config", func(t *testing.T) {
 		got := tokenServerHint(unauth, "http://prod.example:8080", "http://127.0.0.1:8088", true)
 		msg := got.Error()
-		for _, want := range []string{"http://prod.example:8080", "http://127.0.0.1:8088", "leoflow login"} {
+		for _, want := range []string{"http://prod.example:8080", "http://127.0.0.1:8088", loginCommandPath} {
 			if !strings.Contains(msg, want) {
 				t.Errorf("hint must contain %q; got %q", want, msg)
 			}
@@ -34,7 +34,7 @@ func TestTokenServerHint(t *testing.T) {
 		// Printing the OTHER server's login command would send the user to fix
 		// the wrong side — the whole point is a one-line way out.
 		msg := tokenServerHint(unauth, "http://prod.example:8080", "http://127.0.0.1:8088", true).Error()
-		i := strings.Index(msg, "leoflow login")
+		i := strings.Index(msg, loginCommandPath)
 		if i < 0 {
 			t.Fatalf("no login command in %q", msg)
 		}
@@ -161,4 +161,39 @@ func TestResolveServerTokenRecordsTheTarget(t *testing.T) {
 			t.Error("no hint is owed for a token the user supplied explicitly")
 		}
 	})
+}
+
+// TestLoginHintNamesACommandThatExists is the guard that was missing. The hint
+// shipped saying `leoflow login`, which is not a command — login lives under
+// `auth` — so the one-line way out of a wrong-server 401 could not be pasted.
+// The original test asserted the literal "leoflow login", so it did not catch
+// the defect; it locked it in, and would have gone red on the correct fix.
+//
+// Asserting a string against another string can only ever check that two
+// authors typed the same thing. This resolves the suggested command against the
+// REAL command tree, so moving or renaming `auth login` fails here instead of
+// in a user's terminal.
+func TestLoginHintNamesACommandThatExists(t *testing.T) {
+	path := strings.TrimPrefix(loginCommandPath, "leoflow ")
+	if path == loginCommandPath {
+		t.Fatalf("loginCommandPath %q must start with the binary name", loginCommandPath)
+	}
+	args := strings.Fields(path)
+	cmd, _, err := NewRootCommand().Find(args)
+	if err != nil {
+		t.Fatalf("the hint tells the user to run %q, which does not resolve: %v", loginCommandPath, err)
+	}
+	// Find returns the deepest command it matched, so a bad leaf silently
+	// resolves to its parent — assert we landed on the leaf itself.
+	if cmd.Name() != args[len(args)-1] {
+		t.Errorf("the hint tells the user to run %q, but that resolves to %q", loginCommandPath, cmd.CommandPath())
+	}
+	if !cmd.Runnable() {
+		t.Errorf("%q resolves to %q, which is not runnable", loginCommandPath, cmd.CommandPath())
+	}
+	// The hint passes --server; a suggestion carrying a flag the command does
+	// not accept is the same defect one level down.
+	if cmd.Flags().Lookup("server") == nil && cmd.InheritedFlags().Lookup("server") == nil {
+		t.Errorf("%q does not accept --server, which the hint passes", cmd.CommandPath())
+	}
 }

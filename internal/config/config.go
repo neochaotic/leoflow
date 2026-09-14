@@ -32,7 +32,7 @@ var flagToKey = map[string]string{
 type Config struct {
 	// ServerURL is the control plane base URL used by push and auth create-token.
 	ServerURL string `mapstructure:"server_url"`
-	// Token is the JWT bearer token persisted by `leoflow login` and used by
+	// Token is the JWT bearer token persisted by `leoflow auth login` and used by
 	// push and deploy when no --token flag or LEOFLOW_TOKEN env is set.
 	Token string `mapstructure:"token"`
 	// LogLevel is reserved for CLI log verbosity (not yet wired).

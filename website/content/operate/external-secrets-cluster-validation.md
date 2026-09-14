@@ -103,7 +103,8 @@ Compile, push, and trigger it (`leoflow compile … && leoflow push … && curl 
 
 ## 5. Tear down
 
-- Delete the canary DAG (`leoflow forget canary_secrets` / remove and reconcile).
+- Delete the canary DAG (`leoflow dags delete canary_secrets --deregister`), and
+  remove its source so the next deploy does not re-register it.
 - Delete the throwaway secret from the store.
 - Restore any permission you removed for assertion 3.
 - Uninstall the canary release / namespace.

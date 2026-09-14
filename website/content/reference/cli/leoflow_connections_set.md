@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow connections set"
 linkTitle: "connections set"
-weight: 26
+weight: 27
 ---
 
 Create or update a connection (upsert).

@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow connections delete"
 linkTitle: "connections delete"
-weight: 23
+weight: 24
 ---
 
 Delete a connection.

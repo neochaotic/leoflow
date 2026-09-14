@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow compile"
 linkTitle: "compile"
-weight: 16
+weight: 17
 ---
 
 Compile a DAG project into dag.json via the Python parser.

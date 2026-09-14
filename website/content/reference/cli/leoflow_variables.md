@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow variables"
 linkTitle: "variables"
-weight: 52
+weight: 53
 ---
 
 Manage control-plane variables.

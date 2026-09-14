@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow variables delete"
 linkTitle: "variables delete"
-weight: 53
+weight: 54
 ---
 
 Delete a variable.

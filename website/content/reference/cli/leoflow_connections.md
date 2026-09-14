@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow connections"
 linkTitle: "connections"
-weight: 22
+weight: 23
 ---
 
 Manage control-plane connections.

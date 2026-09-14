@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow completion"
 linkTitle: "completion"
-weight: 17
+weight: 18
 ---
 
 Generate the autocompletion script for the specified shell

@@ -5,7 +5,7 @@ aliases:
 # --- end AUTO redirect aliases ---
 title: "leoflow variables set"
 linkTitle: "variables set"
-weight: 56
+weight: 57
 ---
 
 Create or replace a variable (upsert).

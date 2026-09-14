@@ -277,7 +277,9 @@ func renderGrouped(nodes map[string]execNode, gran Granularity, warn func(string
 	// from, or "" for a node with no folder at all (which falls back to the
 	// resource-type plural). Two different origins reaching the same key is the
 	// collision — a folder literally named `models` plus a model at the root of
-	// models/ both key on `models`, and their two sets merge into one task.
+	// models/ both key on `models`, and their two sets merge into one task. The
+	// same holds for any resource type: a folder named `seeds` plus a seed at the
+	// project root collide on `seeds`.
 	origins := map[string]map[string]bool{}
 	for id, n := range nodes {
 		g := groupOf[id]
@@ -469,9 +471,9 @@ func checkDerivedTaskIDs(members map[string][]string, gran Granularity) error {
 // warnFolderCollisions announces a folder group whose members arrived from more
 // than one origin (#1114).
 //
-// The merge is NOT refused. dbt still orders the models inside the combined
+// The merge is NOT refused. dbt still orders the nodes inside the combined
 // task, so the data is not wrong — what is lost is Leoflow-level parallelism and
-// per-model failure isolation. Refusing would break a project that runs today;
+// per-node failure isolation. Refusing would break a project that runs today;
 // staying silent leaves an author looking at one task named after a folder with
 // no indication that a root-level model was folded into it. Saying so loudly is
 // the only option that is neither.

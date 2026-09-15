@@ -135,8 +135,9 @@ Two behaviours matter more than the loop itself:
   built. A half-built workspace — some images new, some stale — is invisible
   afterwards.
 
-With no `--dag-version` / `--sha` it resolves them exactly as `deploy` does
-(`git describe`, and the short commit hash).
+With no `--dag-version` / `--sha` it derives them the same way `deploy` does —
+`git describe`, and the short commit hash. (`deploy` has no `--sha` flag at all;
+it always derives the sha.)
 
 Using it **as** your CI, in place of per-DAG pipelines, is a deliberate trade:
 one job rebuilds everything on any change, so blast radius and build time both

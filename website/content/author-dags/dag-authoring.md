@@ -58,7 +58,8 @@ DAG named `sales_etl`.
 
 ### Discovery rules
 
-`leoflow lite` walks the workspace and treats every subdirectory containing a
+`leoflow lite` — and `leoflow build`, which shares the same discovery — walks
+the workspace and treats every subdirectory containing a
 `dag.py` (with or without a `leoflow.yaml`) as a project. The scan:
 
 - Goes **at most 5 levels deep** from the workspace root. A DAG at

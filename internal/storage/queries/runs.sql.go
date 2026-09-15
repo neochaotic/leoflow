@@ -523,6 +523,78 @@ func (q *Queries) GetDagRunByID(ctx context.Context, id pgtype.UUID) (DagRun, er
 	return i, err
 }
 
+const getDagRunWithVersion = `-- name: GetDagRunWithVersion :one
+SELECT r.id, r.tenant_id, r.dag_id, r.dag_version_id, r.run_id, r.logical_date, r.data_interval_start, r.data_interval_end, r.state, r.trigger, r.conf, r.triggered_by, r.queued_at, r.started_at, r.ended_at, r.note, r.alerted_at, r.alert_attempts, r.next_alert_attempt_at, v.version AS dag_version_label
+FROM dag_runs r
+LEFT JOIN dag_versions v ON v.id = r.dag_version_id
+WHERE r.dag_id = $1 AND r.run_id = $2
+`
+
+type GetDagRunWithVersionParams struct {
+	DagID pgtype.UUID `json:"dag_id"`
+	RunID string      `json:"run_id"`
+}
+
+type GetDagRunWithVersionRow struct {
+	ID                 pgtype.UUID        `json:"id"`
+	TenantID           pgtype.UUID        `json:"tenant_id"`
+	DagID              pgtype.UUID        `json:"dag_id"`
+	DagVersionID       pgtype.UUID        `json:"dag_version_id"`
+	RunID              string             `json:"run_id"`
+	LogicalDate        pgtype.Timestamptz `json:"logical_date"`
+	DataIntervalStart  pgtype.Timestamptz `json:"data_interval_start"`
+	DataIntervalEnd    pgtype.Timestamptz `json:"data_interval_end"`
+	State              DagRunState        `json:"state"`
+	Trigger            DagRunTrigger      `json:"trigger"`
+	Conf               []byte             `json:"conf"`
+	TriggeredBy        pgtype.UUID        `json:"triggered_by"`
+	QueuedAt           pgtype.Timestamptz `json:"queued_at"`
+	StartedAt          pgtype.Timestamptz `json:"started_at"`
+	EndedAt            pgtype.Timestamptz `json:"ended_at"`
+	Note               *string            `json:"note"`
+	AlertedAt          pgtype.Timestamptz `json:"alerted_at"`
+	AlertAttempts      int32              `json:"alert_attempts"`
+	NextAlertAttemptAt pgtype.Timestamptz `json:"next_alert_attempt_at"`
+	DagVersionLabel    *string            `json:"dag_version_label"`
+}
+
+// The run plus the LABEL of the version it is pinned to. The API needs the label
+// to populate bundle_version, which is what makes the UI's clear dialog render
+// its "Run with latest bundle version" control: the SPA shows that control only
+// when the run's bundle_version differs from the DAG's, and hides it when either
+// is null. A null there means the operator has no way to ask for the current
+// version, whatever the API supports.
+//
+// LEFT JOIN on purpose: a run whose version row is gone still lists, with a null
+// label, rather than vanishing from the UI.
+func (q *Queries) GetDagRunWithVersion(ctx context.Context, arg GetDagRunWithVersionParams) (GetDagRunWithVersionRow, error) {
+	row := q.db.QueryRow(ctx, getDagRunWithVersion, arg.DagID, arg.RunID)
+	var i GetDagRunWithVersionRow
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.DagID,
+		&i.DagVersionID,
+		&i.RunID,
+		&i.LogicalDate,
+		&i.DataIntervalStart,
+		&i.DataIntervalEnd,
+		&i.State,
+		&i.Trigger,
+		&i.Conf,
+		&i.TriggeredBy,
+		&i.QueuedAt,
+		&i.StartedAt,
+		&i.EndedAt,
+		&i.Note,
+		&i.AlertedAt,
+		&i.AlertAttempts,
+		&i.NextAlertAttemptAt,
+		&i.DagVersionLabel,
+	)
+	return i, err
+}
+
 const getDagVersionByID = `-- name: GetDagVersionByID :one
 SELECT id, dag_id, version, image_reference, spec, spec_hash, created_by, created_at FROM dag_versions WHERE id = $1
 `
@@ -839,6 +911,86 @@ func (q *Queries) ListDagRunsByDag(ctx context.Context, arg ListDagRunsByDagPara
 			&i.AlertedAt,
 			&i.AlertAttempts,
 			&i.NextAlertAttemptAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDagRunsByDagWithVersion = `-- name: ListDagRunsByDagWithVersion :many
+SELECT r.id, r.tenant_id, r.dag_id, r.dag_version_id, r.run_id, r.logical_date, r.data_interval_start, r.data_interval_end, r.state, r.trigger, r.conf, r.triggered_by, r.queued_at, r.started_at, r.ended_at, r.note, r.alerted_at, r.alert_attempts, r.next_alert_attempt_at, v.version AS dag_version_label
+FROM dag_runs r
+LEFT JOIN dag_versions v ON v.id = r.dag_version_id
+WHERE r.dag_id = $1
+ORDER BY r.logical_date DESC
+LIMIT $2 OFFSET $3
+`
+
+type ListDagRunsByDagWithVersionParams struct {
+	DagID  pgtype.UUID `json:"dag_id"`
+	Limit  int32       `json:"limit"`
+	Offset int32       `json:"offset"`
+}
+
+type ListDagRunsByDagWithVersionRow struct {
+	ID                 pgtype.UUID        `json:"id"`
+	TenantID           pgtype.UUID        `json:"tenant_id"`
+	DagID              pgtype.UUID        `json:"dag_id"`
+	DagVersionID       pgtype.UUID        `json:"dag_version_id"`
+	RunID              string             `json:"run_id"`
+	LogicalDate        pgtype.Timestamptz `json:"logical_date"`
+	DataIntervalStart  pgtype.Timestamptz `json:"data_interval_start"`
+	DataIntervalEnd    pgtype.Timestamptz `json:"data_interval_end"`
+	State              DagRunState        `json:"state"`
+	Trigger            DagRunTrigger      `json:"trigger"`
+	Conf               []byte             `json:"conf"`
+	TriggeredBy        pgtype.UUID        `json:"triggered_by"`
+	QueuedAt           pgtype.Timestamptz `json:"queued_at"`
+	StartedAt          pgtype.Timestamptz `json:"started_at"`
+	EndedAt            pgtype.Timestamptz `json:"ended_at"`
+	Note               *string            `json:"note"`
+	AlertedAt          pgtype.Timestamptz `json:"alerted_at"`
+	AlertAttempts      int32              `json:"alert_attempts"`
+	NextAlertAttemptAt pgtype.Timestamptz `json:"next_alert_attempt_at"`
+	DagVersionLabel    *string            `json:"dag_version_label"`
+}
+
+// See GetDagRunWithVersion. One join rather than a lookup per row.
+func (q *Queries) ListDagRunsByDagWithVersion(ctx context.Context, arg ListDagRunsByDagWithVersionParams) ([]ListDagRunsByDagWithVersionRow, error) {
+	rows, err := q.db.Query(ctx, listDagRunsByDagWithVersion, arg.DagID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDagRunsByDagWithVersionRow{}
+	for rows.Next() {
+		var i ListDagRunsByDagWithVersionRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.DagID,
+			&i.DagVersionID,
+			&i.RunID,
+			&i.LogicalDate,
+			&i.DataIntervalStart,
+			&i.DataIntervalEnd,
+			&i.State,
+			&i.Trigger,
+			&i.Conf,
+			&i.TriggeredBy,
+			&i.QueuedAt,
+			&i.StartedAt,
+			&i.EndedAt,
+			&i.Note,
+			&i.AlertedAt,
+			&i.AlertAttempts,
+			&i.NextAlertAttemptAt,
+			&i.DagVersionLabel,
 		); err != nil {
 			return nil, err
 		}
@@ -1817,7 +1969,8 @@ type ResetDagRunToVersionParams struct {
 	DagVersionID pgtype.UUID `json:"dag_version_id"`
 }
 
-// Clear re-binds the run to the DAG's current registered version (ADR 0020): a
+// Clear with run_on_latest_version re-binds the run to the DAG's current
+// registered version (ADR 0020; opt-in since the 2026-09-15 amendment): a
 // re-run after a code/yaml fix picks up the newest image and config — in dev that
 // is the last hot-reload, in prod the last deploy — while everything within a
 // version stays reproducible. Clearing the alert bookkeeping (#431) makes the clear

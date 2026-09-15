@@ -130,3 +130,52 @@ func TestClearRunOnLatestVersionTrueRebinds(t *testing.T) {
 		t.Errorf("run state = %q, want queued", got)
 	}
 }
+
+// TestRunCarriesItsPinnedVersionLabel: the version label must survive the join
+// into domain.DagRun, and must track the run's PINNED version rather than the
+// DAG's current one.
+//
+// The DTO tests prove the API serializes the field. Only this proves the field
+// is populated at all: with the label empty the SPA hides the clear dialog's
+// version control, and the operator cannot ask for the current version through
+// any interface.
+func TestRunCarriesItsPinnedVersionLabel(t *testing.T) {
+	dagID := fmt.Sprintf("run_label_%d", time.Now().UnixNano())
+	repo, _, ctx, runID, _, _ := seedClearedRun(t, dagID)
+
+	run, err := repo.GetDagRun(ctx, "default", dagID, runID)
+	if err != nil {
+		t.Fatalf("GetDagRun: %v", err)
+	}
+	if run.Version == "" {
+		t.Fatal("the run carries no version label; the UI's version control stays hidden")
+	}
+	// seedClearedRun registers v1, creates the run, then registers v2. The run is
+	// pinned to v1, so the label must be v1's — not the DAG's current v2.
+	if run.Version != "v1" {
+		t.Errorf("run.Version = %q, want the pinned v1 (v2 would mean the join followed the DAG, not the run)", run.Version)
+	}
+
+	dag, derr := repo.GetDag(ctx, "default", dagID)
+	if derr != nil {
+		t.Fatalf("GetDag: %v", derr)
+	}
+	if dag.CurrentVersion != "v2" {
+		t.Errorf("dag.CurrentVersion = %q, want v2", dag.CurrentVersion)
+	}
+	// The pair is the point: the SPA offers "run with latest" only when they differ.
+	if run.Version == dag.CurrentVersion {
+		t.Error("run and DAG report the same version; the clear dialog would never offer the toggle")
+	}
+
+	runs, _, lerr := repo.ListDagRuns(ctx, "default", dagID, 10, 0)
+	if lerr != nil {
+		t.Fatalf("ListDagRuns: %v", lerr)
+	}
+	if len(runs) == 0 {
+		t.Fatal("no runs listed; the assertion below would be vacuous")
+	}
+	if runs[0].Version != "v1" {
+		t.Errorf("listed run.Version = %q, want v1 — the list path joins too", runs[0].Version)
+	}
+}

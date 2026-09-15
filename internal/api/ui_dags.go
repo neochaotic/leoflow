@@ -101,7 +101,15 @@ func toDagWithRunsDTO(d domain.DAG, runs []domain.DagRun) dagWithRunsDTO {
 		latest = append(latest, toDagRunLightDTO(r))
 	}
 	maxRuns := d.MaxActiveRuns
+	var bundle *string
+	if d.CurrentVersion != "" {
+		// Paired with the run's bundle_version by the SPA's clear dialog, which
+		// offers "Run with latest bundle version" only when the two differ.
+		v := d.CurrentVersion
+		bundle = &v
+	}
 	return dagWithRunsDTO{
+		BundleVersion:               bundle,
 		DagID:                       d.DagID,
 		DagDisplayName:              d.DagID,
 		IsPaused:                    d.IsPaused,

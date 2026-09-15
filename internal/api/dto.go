@@ -125,7 +125,7 @@ func toDagRunDTO(r domain.DagRun) dagRunDTO {
 	// runs this way (precise per-cron windows for scheduled DAGs are a follow-up),
 	// so the field is never null.
 	logical := r.LogicalDate
-	return dagRunDTO{
+	dto := dagRunDTO{
 		DagID:             r.DagID,
 		DagRunID:          r.RunID,
 		DagDisplayName:    r.DagID,
@@ -143,6 +143,16 @@ func toDagRunDTO(r domain.DagRun) dagRunDTO {
 		DagVersions:       []any{},
 		Duration:          dur,
 	}
+	if r.Version != "" {
+		// The SPA's clear dialog renders its "Run with latest bundle version"
+		// control only when the run's bundle_version differs from the DAG's, and
+		// hides it when either is null. Leaving this null is what made that
+		// control invisible, so the operator had no way to ask for the current
+		// version no matter what the API accepted (ADR 0020, 2026-09-15).
+		v := r.Version
+		dto.BundleVersion = &v
+	}
+	return dto
 }
 
 // confOrEmptyObject renders a run's conf for the API, defaulting an unset conf

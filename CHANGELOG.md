@@ -26,6 +26,15 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `dag.py` or `leoflow.yaml`. Whether a re-run should reproduce the past or pick
   up a fix is a decision at the moment of clearing, not at authoring time.
 
+  **The UI can now ask for it.** `bundle_version` was declared on the DAG and
+  DAG-run payloads and never populated, and the embedded SPA renders the clear
+  dialog's "Run with latest bundle version" checkbox only when the run's
+  `bundle_version` differs from the DAG's and neither is null. So the checkbox
+  never appeared, and the field the SPA always sent was hardcoded to its default.
+  Both are populated now — the run reports the version it is pinned to, the DAG
+  reports its current one — so the control appears exactly when there is a newer
+  version to choose.
+
   This also splits two decisions that were one boolean — re-opening a run and
   choosing its version are independent, and `reset_dag_runs` now means only the
   first. ADR 0020 carries the reasoning, and withdraws an earlier claim that the

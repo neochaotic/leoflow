@@ -157,6 +157,66 @@ func (q *Queries) GetDagVersionByHash(ctx context.Context, arg GetDagVersionByHa
 	return i, err
 }
 
+const getDagWithVersion = `-- name: GetDagWithVersion :one
+SELECT d.id, d.tenant_id, d.dag_id, d.description, d.is_paused, d.is_active, d.owner, d.tags, d.schedule, d.schedule_timezone, d.start_date, d.end_date, d.max_active_runs, d.catchup, d.current_version_id, d.created_at, d.updated_at, v.version AS current_version_label
+FROM dags d
+LEFT JOIN dag_versions v ON v.id = d.current_version_id
+WHERE d.tenant_id = $1 AND d.dag_id = $2
+`
+
+type GetDagWithVersionParams struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	DagID    string      `json:"dag_id"`
+}
+
+type GetDagWithVersionRow struct {
+	ID                  pgtype.UUID        `json:"id"`
+	TenantID            pgtype.UUID        `json:"tenant_id"`
+	DagID               string             `json:"dag_id"`
+	Description         *string            `json:"description"`
+	IsPaused            bool               `json:"is_paused"`
+	IsActive            bool               `json:"is_active"`
+	Owner               *string            `json:"owner"`
+	Tags                []string           `json:"tags"`
+	Schedule            *string            `json:"schedule"`
+	ScheduleTimezone    *string            `json:"schedule_timezone"`
+	StartDate           pgtype.Timestamptz `json:"start_date"`
+	EndDate             pgtype.Timestamptz `json:"end_date"`
+	MaxActiveRuns       int32              `json:"max_active_runs"`
+	Catchup             bool               `json:"catchup"`
+	CurrentVersionID    pgtype.UUID        `json:"current_version_id"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	CurrentVersionLabel *string            `json:"current_version_label"`
+}
+
+// See ListDagsWithVersion.
+func (q *Queries) GetDagWithVersion(ctx context.Context, arg GetDagWithVersionParams) (GetDagWithVersionRow, error) {
+	row := q.db.QueryRow(ctx, getDagWithVersion, arg.TenantID, arg.DagID)
+	var i GetDagWithVersionRow
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.DagID,
+		&i.Description,
+		&i.IsPaused,
+		&i.IsActive,
+		&i.Owner,
+		&i.Tags,
+		&i.Schedule,
+		&i.ScheduleTimezone,
+		&i.StartDate,
+		&i.EndDate,
+		&i.MaxActiveRuns,
+		&i.Catchup,
+		&i.CurrentVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CurrentVersionLabel,
+	)
+	return i, err
+}
+
 const insertDagVersion = `-- name: InsertDagVersion :one
 INSERT INTO dag_versions (dag_id, version, image_reference, spec, spec_hash, created_by)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -349,6 +409,85 @@ func (q *Queries) ListDagsFiltered(ctx context.Context, arg ListDagsFilteredPara
 			&i.CurrentVersionID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDagsWithVersion = `-- name: ListDagsWithVersion :many
+SELECT d.id, d.tenant_id, d.dag_id, d.description, d.is_paused, d.is_active, d.owner, d.tags, d.schedule, d.schedule_timezone, d.start_date, d.end_date, d.max_active_runs, d.catchup, d.current_version_id, d.created_at, d.updated_at, v.version AS current_version_label
+FROM dags d
+LEFT JOIN dag_versions v ON v.id = d.current_version_id
+WHERE d.tenant_id = $1 AND d.is_active = true
+ORDER BY d.dag_id
+LIMIT $2 OFFSET $3
+`
+
+type ListDagsWithVersionParams struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	Limit    int32       `json:"limit"`
+	Offset   int32       `json:"offset"`
+}
+
+type ListDagsWithVersionRow struct {
+	ID                  pgtype.UUID        `json:"id"`
+	TenantID            pgtype.UUID        `json:"tenant_id"`
+	DagID               string             `json:"dag_id"`
+	Description         *string            `json:"description"`
+	IsPaused            bool               `json:"is_paused"`
+	IsActive            bool               `json:"is_active"`
+	Owner               *string            `json:"owner"`
+	Tags                []string           `json:"tags"`
+	Schedule            *string            `json:"schedule"`
+	ScheduleTimezone    *string            `json:"schedule_timezone"`
+	StartDate           pgtype.Timestamptz `json:"start_date"`
+	EndDate             pgtype.Timestamptz `json:"end_date"`
+	MaxActiveRuns       int32              `json:"max_active_runs"`
+	Catchup             bool               `json:"catchup"`
+	CurrentVersionID    pgtype.UUID        `json:"current_version_id"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	CurrentVersionLabel *string            `json:"current_version_label"`
+}
+
+// The DAG plus the LABEL of its current version. The UI's clear dialog compares
+// this against the RUN's bundle_version and offers "Run with latest bundle
+// version" only when they differ, so leaving it null either hides the control or
+// shows it unconditionally — neither of which tells the operator the truth.
+func (q *Queries) ListDagsWithVersion(ctx context.Context, arg ListDagsWithVersionParams) ([]ListDagsWithVersionRow, error) {
+	rows, err := q.db.Query(ctx, listDagsWithVersion, arg.TenantID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDagsWithVersionRow{}
+	for rows.Next() {
+		var i ListDagsWithVersionRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.DagID,
+			&i.Description,
+			&i.IsPaused,
+			&i.IsActive,
+			&i.Owner,
+			&i.Tags,
+			&i.Schedule,
+			&i.ScheduleTimezone,
+			&i.StartDate,
+			&i.EndDate,
+			&i.MaxActiveRuns,
+			&i.Catchup,
+			&i.CurrentVersionID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.CurrentVersionLabel,
 		); err != nil {
 			return nil, err
 		}

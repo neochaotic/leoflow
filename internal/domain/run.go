@@ -20,6 +20,11 @@ type DAG struct {
 	MaxActiveRuns  int
 	Catchup        bool
 	LastParsedTime *time.Time
+	// CurrentVersion is the LABEL of the DAG's current registered version, empty
+	// when it cannot be resolved. Paired with DagRun.Version by the UI's clear
+	// dialog, which offers "Run with latest bundle version" only when the two
+	// differ — see that field.
+	CurrentVersion string
 }
 
 // DagVersion is a registered version of a DAG. VersionNumber is the 1-based
@@ -49,6 +54,14 @@ type DagRun struct {
 	// and exposed to tasks as params. Empty means no configuration; storage
 	// persists the empty-object default so downstream readers never see NULL.
 	Conf json.RawMessage
+	// Version is the LABEL of the dag_version this run is pinned to (the
+	// `dag_version` from its dag.json), empty when it cannot be resolved.
+	//
+	// It exists for the UI: the SPA's clear dialog renders its "Run with latest
+	// bundle version" control only when the run's bundle_version differs from the
+	// DAG's, and hides it when either is null. With no label the operator cannot
+	// ask for the current version at all, whatever the API accepts.
+	Version string
 }
 
 // TaskInstance is an execution of a task within a DagRun.

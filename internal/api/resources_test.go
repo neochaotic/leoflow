@@ -912,3 +912,48 @@ func TestClearDryRunDecidesNothing(t *testing.T) {
 		t.Error("dry_run reached the repository")
 	}
 }
+
+// TestDagRunDTOCarriesBundleVersion: the run's pinned version must reach the
+// wire as bundle_version.
+//
+// This is not cosmetic. The embedded SPA renders the clear dialog's "Run with
+// latest bundle version" checkbox only when the run's bundle_version differs
+// from the DAG's AND the run's is neither null nor empty:
+//
+//	ee = F !== I && I !== null && I !== ``     (F = the DAG's, I = the run's)
+//
+// leoflow sent null, so the control never rendered. With the server now honoring
+// run_on_latest_version, a null here means the operator cannot ask for the
+// current version through any interface at all — there is no CLI clear either.
+func TestDagRunDTOCarriesBundleVersion(t *testing.T) {
+	t.Run("a pinned version is serialized", func(t *testing.T) {
+		dto := toDagRunDTO(domain.DagRun{DagID: "etl", RunID: "r1", Version: "v1.2.3"})
+		if dto.BundleVersion == nil {
+			t.Fatal("bundle_version is null; the SPA hides the version control when it is")
+		}
+		if *dto.BundleVersion != "v1.2.3" {
+			t.Errorf("bundle_version = %q, want the run's pinned version", *dto.BundleVersion)
+		}
+	})
+	t.Run("an unresolvable version stays null rather than empty", func(t *testing.T) {
+		// The SPA treats "" the same as null, so an empty string would be a
+		// pointless non-null. A run whose version row is gone is the real case.
+		dto := toDagRunDTO(domain.DagRun{DagID: "etl", RunID: "r1"})
+		if dto.BundleVersion != nil {
+			t.Errorf("bundle_version = %q, want null", *dto.BundleVersion)
+		}
+	})
+}
+
+// TestDagDTOCarriesCurrentVersion: the other half of the comparison. With only
+// the run's version populated the checkbox would render unconditionally, because
+// a null on the DAG side always differs from a non-null run version.
+func TestDagDTOCarriesCurrentVersion(t *testing.T) {
+	dto := toDagWithRunsDTO(domain.DAG{DagID: "etl", CurrentVersion: "v2.0.0"}, nil)
+	if dto.BundleVersion == nil {
+		t.Fatal("bundle_version is null on the DAG; the clear dialog then always offers the toggle")
+	}
+	if *dto.BundleVersion != "v2.0.0" {
+		t.Errorf("bundle_version = %q, want the DAG's current version", *dto.BundleVersion)
+	}
+}

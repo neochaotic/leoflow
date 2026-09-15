@@ -109,6 +109,41 @@ pushes the image to your registry → registers `dag.json`. The control plane ru
 the new version on the next trigger. One DAG per pipeline keeps blast radius
 small: a broken `another_pipeline` never blocks `my_pipeline`.
 
+{{% alert title="Building several DAGs at once: `leoflow build`" color="info" %}}
+The per-DAG pipeline above stays the recommendation, and the `paths:` filter is
+the point of it — one DAG per pipeline is what keeps a broken DAG from blocking
+its neighbours.
+
+`leoflow build [workspace]` is for the times you are **not** in that pipeline:
+after a base-image bump that every DAG must pick up, when you clone the repo onto
+a new machine, or when you want to see all the images a change produces before
+pushing anything. It walks the workspace and builds each project with the image
+that project's own `registry:` block derives — the same derivation `deploy` uses,
+so nothing about naming is new:
+
+```bash
+leoflow build my-dags/           # build every project under my-dags/
+leoflow build my-dags/ --push    # ...and push each to its registry
+```
+
+Two behaviours matter more than the loop itself:
+
+- A project that declares **no `registry:`** is reported by name, not skipped
+  quietly. A command that covers less than the workspace without saying so leaves
+  you believing images exist.
+- A failure **stops** the run, names the project, and lists what was already
+  built. A half-built workspace — some images new, some stale — is invisible
+  afterwards.
+
+With no `--dag-version` / `--sha` it derives them the same way `deploy` does —
+`git describe`, and the short commit hash. (`deploy` has no `--sha` flag at all;
+it always derives the sha.)
+
+Using it **as** your CI, in place of per-DAG pipelines, is a deliberate trade:
+one job rebuilds everything on any change, so blast radius and build time both
+grow with the repo. Choose it only if you want that.
+{{% /alert %}}
+
 {{% alert title="Tag images immutably" color="success" %}}
 The recipes tag by git SHA (`my_pipeline:$GIT_SHA`), never `:latest`. The
 image a `dag.json` points at is then frozen — re-running an old DAG version

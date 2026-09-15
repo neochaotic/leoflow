@@ -22,6 +22,25 @@ WHERE tenant_id = $1 AND is_active = true
 ORDER BY dag_id
 LIMIT $2 OFFSET $3;
 
+-- name: ListDagsWithVersion :many
+-- The DAG plus the LABEL of its current version. The UI's clear dialog compares
+-- this against the RUN's bundle_version and offers "Run with latest bundle
+-- version" only when they differ, so leaving it null either hides the control or
+-- shows it unconditionally — neither of which tells the operator the truth.
+SELECT d.*, v.version AS current_version_label
+FROM dags d
+LEFT JOIN dag_versions v ON v.id = d.current_version_id
+WHERE d.tenant_id = $1 AND d.is_active = true
+ORDER BY d.dag_id
+LIMIT $2 OFFSET $3;
+
+-- name: GetDagWithVersion :one
+-- See ListDagsWithVersion.
+SELECT d.*, v.version AS current_version_label
+FROM dags d
+LEFT JOIN dag_versions v ON v.id = d.current_version_id
+WHERE d.tenant_id = $1 AND d.dag_id = $2;
+
 -- name: CountDags :one
 SELECT count(*) FROM dags WHERE tenant_id = $1 AND is_active = true;
 

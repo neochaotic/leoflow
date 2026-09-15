@@ -6,6 +6,32 @@ RETURNING *;
 -- name: GetDagRun :one
 SELECT * FROM dag_runs WHERE dag_id = $1 AND run_id = $2;
 
+-- name: GetDagRunWithVersion :one
+-- The run plus the LABEL of the version it is pinned to. The API needs the label
+-- to populate bundle_version, which is what makes the UI's clear dialog render
+-- its "Run with latest bundle version" control: the SPA shows that control only
+-- when the run's bundle_version differs from the DAG's, and hides it when either
+-- is null. A null there means the operator has no way to ask for the current
+-- version, whatever the API supports.
+--
+-- LEFT JOIN is defensive, not load-bearing today: dag_runs.dag_version_id is NOT
+-- NULL with a plain FK, so the version row cannot disappear under a live run. It
+-- is written this way so that a future ON DELETE SET NULL degrades to a null
+-- label instead of dropping the run from the UI.
+SELECT r.*, v.version AS dag_version_label
+FROM dag_runs r
+LEFT JOIN dag_versions v ON v.id = r.dag_version_id
+WHERE r.dag_id = $1 AND r.run_id = $2;
+
+-- name: ListDagRunsByDagWithVersion :many
+-- See GetDagRunWithVersion. One join rather than a lookup per row.
+SELECT r.*, v.version AS dag_version_label
+FROM dag_runs r
+LEFT JOIN dag_versions v ON v.id = r.dag_version_id
+WHERE r.dag_id = $1
+ORDER BY r.logical_date DESC
+LIMIT $2 OFFSET $3;
+
 -- name: DeleteDagRun :execrows
 -- Removes one run; its task_instances and XCom rows cascade (ON DELETE CASCADE).
 DELETE FROM dag_runs WHERE dag_id = $1 AND run_id = $2;
@@ -74,8 +100,29 @@ SET state = $2, started_at = $3, ended_at = $4
 WHERE id = $1
 RETURNING *;
 
+-- name: ReopenDagRunKeepingVersion :exec
+-- The same re-open as ResetDagRunToVersion, WITHOUT touching dag_version_id: the
+-- run stays pinned to the version it was created with, so the re-run executes the
+-- image that produced the original attempt.
+--
+-- Two separate decisions used to be one. Re-opening a run (state, timestamps,
+-- alert bookkeeping) is what `reset_dag_runs` means; WHICH version the re-run
+-- executes is what Airflow calls `run_on_latest_version`. Folding the second into
+-- the first left no way to re-run last week's task as it was last week, and left
+-- `reset_dag_runs=false` meaning "do not re-open either", which strands the
+-- cleared task instance in a terminal run the scheduler never looks at again.
+--
+-- Alert bookkeeping is cleared here for the same reason it is there: the clear
+-- starts a new failure episode, so a genuine re-failure re-pages, and a spent
+-- retry budget is not carried into an episode that has not been attempted.
+UPDATE dag_runs
+SET state = 'queued', started_at = NULL, ended_at = NULL, alerted_at = NULL,
+    alert_attempts = 0, next_alert_attempt_at = NULL
+WHERE id = $1;
+
 -- name: ResetDagRunToVersion :exec
--- Clear re-binds the run to the DAG's current registered version (ADR 0020): a
+-- Clear with run_on_latest_version re-binds the run to the DAG's current
+-- registered version (ADR 0020; opt-in since the 2026-09-15 amendment): a
 -- re-run after a code/yaml fix picks up the newest image and config — in dev that
 -- is the last hot-reload, in prod the last deploy — while everything within a
 -- version stays reproducible. Clearing the alert bookkeeping (#431) makes the clear

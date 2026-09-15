@@ -130,11 +130,23 @@ func (e ListDagRunsParamsState) Valid() bool {
 
 // ClearTaskInstancesRequest defines model for ClearTaskInstancesRequest.
 type ClearTaskInstancesRequest struct {
-	DagRunId     *string   `json:"dag_run_id,omitempty"`
-	OnlyFailed   *bool     `json:"only_failed,omitempty"`
-	OnlyRunning  *bool     `json:"only_running,omitempty"`
-	ResetDagRuns *bool     `json:"reset_dag_runs,omitempty"`
-	TaskIds      *[]string `json:"task_ids,omitempty"`
+	DagRunId *string `json:"dag_run_id,omitempty"`
+
+	// DryRun Return the task instances that WOULD be cleared, without clearing them. NOTE: Apache Airflow's equivalent defaults to true.
+	DryRun            *bool `json:"dry_run,omitempty"`
+	IncludeDownstream *bool `json:"include_downstream,omitempty"`
+	IncludeFuture     *bool `json:"include_future,omitempty"`
+	IncludePast       *bool `json:"include_past,omitempty"`
+	IncludeUpstream   *bool `json:"include_upstream,omitempty"`
+	OnlyFailed        *bool `json:"only_failed,omitempty"`
+	OnlyRunning       *bool `json:"only_running,omitempty"`
+
+	// ResetDagRuns Re-open the run so the scheduler looks at it again. Without it a terminal run stays terminal and the cleared task instance is never scheduled.
+	ResetDagRuns *bool `json:"reset_dag_runs,omitempty"`
+
+	// RunOnLatestVersion Which version the re-run executes. false (the default, matching Apache Airflow) keeps the version the run was created with, so the re-run executes the image that produced the original attempt. true re-binds the run to the DAG's current registered version, so the re-run picks up the newest image and config — use it to re-run a failed task against a fix without creating a new run.
+	RunOnLatestVersion *bool     `json:"run_on_latest_version,omitempty"`
+	TaskIds            *[]string `json:"task_ids,omitempty"`
 }
 
 // ComponentHealth defines model for ComponentHealth.

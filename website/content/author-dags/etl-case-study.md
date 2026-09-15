@@ -159,9 +159,10 @@ The task instances make it visible — `load` is on **try 2**, `extract` and
 
 ![Run detail after clearing load: load try 2, extract/transform try 1, all success](/assets/screenshots/etl-rerun.png)
 
-`clear` also **re-binds the run to the DAG's current version** (the single
-mutability rule): a re-run after a code/yaml fix picks up the newest image — the
-last hot-reload in dev, the last deploy in prod.
+`clear` re-runs the task on **the version its run was created with**, so what you
+see is the attempt reproduced, not a different one. To pick up a code/yaml fix
+instead, trigger a new run — or pass `run_on_latest_version: true` on the clear.
+ADR 0020 has the reasoning.
 
 ## The external load uses a managed Connection
 

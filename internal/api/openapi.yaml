@@ -1047,7 +1047,33 @@ components:
         dag_run_id: { type: string }
         only_failed: { type: boolean, default: false }
         only_running: { type: boolean, default: false }
-        reset_dag_runs: { type: boolean, default: true }
+        reset_dag_runs:
+          type: boolean
+          default: true
+          description: >-
+            Re-open the run so the scheduler looks at it again. Without it a
+            terminal run stays terminal and the cleared task instance is never
+            scheduled.
+        run_on_latest_version:
+          type: boolean
+          default: false
+          description: >-
+            Which version the re-run executes. false (the default, matching Apache
+            Airflow) keeps the version the run was created with, so the re-run
+            executes the image that produced the original attempt. true re-binds
+            the run to the DAG's current registered version, so the re-run picks up
+            the newest image and config — use it to re-run a failed task against a
+            fix without creating a new run.
+        dry_run:
+          type: boolean
+          default: false
+          description: >-
+            Return the task instances that WOULD be cleared, without clearing
+            them. NOTE: Apache Airflow's equivalent defaults to true.
+        include_upstream: { type: boolean, default: false }
+        include_downstream: { type: boolean, default: false }
+        include_past: { type: boolean, default: false }
+        include_future: { type: boolean, default: false }
 
     XComEntry:
       type: object

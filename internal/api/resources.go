@@ -48,7 +48,7 @@ type TaskInstanceRepository interface {
 	// first — the current row UNIONed with the archived history. The UI's
 	// /tries endpoint needs all attempts to render its navigable tabs.
 	ListTaskInstanceAttempts(ctx context.Context, tenant, dagID, runID, taskID string) ([]domain.TaskInstance, error)
-	ClearTaskInstances(ctx context.Context, tenant, dagID, runID string, taskIDs []string, onlyFailed, resetDagRun bool) (int, error)
+	ClearTaskInstances(ctx context.Context, tenant, dagID, runID string, taskIDs []string, onlyFailed bool, opts domain.ClearOptions) (int, error)
 	SetTaskInstanceState(ctx context.Context, tenant, dagID, runID, taskID, state string) error
 }
 
@@ -641,16 +641,17 @@ func (t *clearTaskIDs) UnmarshalJSON(b []byte) error {
 }
 
 type clearRequest struct {
-	TaskIDs           clearTaskIDs `json:"task_ids"`
-	DagRunID          string       `json:"dag_run_id"`
-	OnlyFailed        *bool        `json:"only_failed"`
-	OnlyRunning       *bool        `json:"only_running"`
-	ResetDagRuns      *bool        `json:"reset_dag_runs"`
-	DryRun            *bool        `json:"dry_run"`
-	IncludeUpstream   bool         `json:"include_upstream"`
-	IncludeDownstream bool         `json:"include_downstream"`
-	IncludePast       bool         `json:"include_past"`
-	IncludeFuture     bool         `json:"include_future"`
+	TaskIDs            clearTaskIDs `json:"task_ids"`
+	DagRunID           string       `json:"dag_run_id"`
+	OnlyFailed         *bool        `json:"only_failed"`
+	OnlyRunning        *bool        `json:"only_running"`
+	ResetDagRuns       *bool        `json:"reset_dag_runs"`
+	RunOnLatestVersion *bool        `json:"run_on_latest_version"`
+	DryRun             *bool        `json:"dry_run"`
+	IncludeUpstream    bool         `json:"include_upstream"`
+	IncludeDownstream  bool         `json:"include_downstream"`
+	IncludePast        bool         `json:"include_past"`
+	IncludeFuture      bool         `json:"include_future"`
 }
 
 func clearTaskInstancesHandler(repo TaskInstanceRepository, runs DagRunRepository, versions DagVersionLister, specs DagSpecReader, audit AuditWriter) gin.HandlerFunc {
@@ -675,12 +676,20 @@ func clearTaskInstancesHandler(repo TaskInstanceRepository, runs DagRunRepositor
 			c.JSON(http.StatusOK, taskInstanceCollectionDTO{TaskInstances: affected, TotalEntries: len(affected)})
 			return
 		}
-		reset := true
+		// Defaults match Apache Airflow 3.x: a run keeps the version it was created
+		// with unless the caller asks for the current one. A clear then reproduces
+		// the attempt it is clearing, which is what makes clearing a week-old task
+		// mean anything; testing a fix is a NEW run, or an explicit
+		// run_on_latest_version=true.
+		opts := domain.ClearOptions{ResetDagRun: true, RunOnLatestVersion: false}
 		if body.ResetDagRuns != nil {
-			reset = *body.ResetDagRuns
+			opts.ResetDagRun = *body.ResetDagRuns
+		}
+		if body.RunOnLatestVersion != nil {
+			opts.RunOnLatestVersion = *body.RunOnLatestVersion
 		}
 		for _, rid := range targets {
-			if _, err := repo.ClearTaskInstances(c.Request.Context(), tenantOf(c), c.Param("dag_id"), rid, taskIDs, onlyFailed, reset); err != nil {
+			if _, err := repo.ClearTaskInstances(c.Request.Context(), tenantOf(c), c.Param("dag_id"), rid, taskIDs, onlyFailed, opts); err != nil {
 				handleRepoError(c, err)
 				return
 			}
@@ -884,9 +893,11 @@ func findTaskInstanceDTO(c *gin.Context, repo TaskInstanceRepository, runs DagRu
 func resolveRunContextFor(c *gin.Context, runs DagRunRepository, versions DagVersionLister, runID string) (*time.Time, *dagVersionDTO) {
 	dagID := c.Param("dag_id")
 	var logical *time.Time
+	var pinned string
 	if runs != nil && runID != "" {
 		if run, err := runs.GetDagRun(c.Request.Context(), tenantOf(c), dagID, runID); err == nil {
 			logical = &run.LogicalDate
+			pinned = run.Version
 		}
 	}
 	var version *dagVersionDTO
@@ -896,6 +907,13 @@ func resolveRunContextFor(c *gin.Context, runs DagRunRepository, versions DagVer
 				ID: vs[0].ID, VersionNumber: vs[0].VersionNumber, DagID: dagID,
 				BundleName: "leoflow", CreatedAt: vs[0].CreatedAt, DagDisplayName: dagID,
 			}
+			// The RUN's pinned label, not vs[0]'s. The single-task clear dialog
+			// gates its version control on
+			//   he !== ge && ge !== null && ge !== ''
+			// where he is the DAG's current label and ge is this one. Filling it
+			// from vs[0] makes the two equal and the control stays hidden — the
+			// same invisible result as leaving it null, reached a different way.
+			version.BundleVersion = strPtrOrNil(pinned)
 		}
 	}
 	return logical, version
@@ -1014,9 +1032,11 @@ func enrichTaskInstance(c *gin.Context, dto *taskInstanceDTO, runs DagRunReposit
 func resolveRunContext(c *gin.Context, runs DagRunRepository, versions DagVersionLister) (*time.Time, *dagVersionDTO) {
 	dagID, runID := c.Param("dag_id"), c.Param("dag_run_id")
 	var logical *time.Time
+	var pinned string
 	if runs != nil {
 		if run, err := runs.GetDagRun(c.Request.Context(), tenantOf(c), dagID, runID); err == nil {
 			logical = &run.LogicalDate
+			pinned = run.Version
 		}
 	}
 	var version *dagVersionDTO
@@ -1026,6 +1046,13 @@ func resolveRunContext(c *gin.Context, runs DagRunRepository, versions DagVersio
 				ID: vs[0].ID, VersionNumber: vs[0].VersionNumber, DagID: dagID,
 				BundleName: "leoflow", CreatedAt: vs[0].CreatedAt, DagDisplayName: dagID,
 			}
+			// The RUN's pinned label, not vs[0]'s. The single-task clear dialog
+			// gates its version control on
+			//   he !== ge && ge !== null && ge !== ''
+			// where he is the DAG's current label and ge is this one. Filling it
+			// from vs[0] makes the two equal and the control stays hidden — the
+			// same invisible result as leaving it null, reached a different way.
+			version.BundleVersion = strPtrOrNil(pinned)
 		}
 	}
 	return logical, version

@@ -124,7 +124,7 @@ func TestMarkRunAlertDeliveredIgnoresSupersededAttemptIntegration(t *testing.T) 
 		t.Fatalf("claim = (%d, %v), want (1, nil)", stale, err)
 	}
 	// An operator clears the run: a new episode, with a fresh attempt budget.
-	if _, err := repo.ClearTaskInstances(ctx, "default", dagID, "r1", nil, false, true); err != nil {
+	if _, err := repo.ClearTaskInstances(ctx, "default", dagID, "r1", nil, false, domain.ClearOptions{ResetDagRun: true, RunOnLatestVersion: true}); err != nil {
 		t.Fatalf("ClearTaskInstances: %v", err)
 	}
 	// The in-flight send from the old episode finally reports success.

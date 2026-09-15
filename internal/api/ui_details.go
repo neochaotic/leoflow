@@ -260,6 +260,11 @@ func dagDetailsHandler(repo DagRepository, versions DagVersionLister, specs DagS
 				}
 			}
 		}
+		if d.CurrentVersion != "" {
+			// Paired with the run's bundle_version by the SPA's clear dialog.
+			v := d.CurrentVersion
+			dto.BundleVersion = &v
+		}
 		c.JSON(http.StatusOK, dto)
 	}
 }

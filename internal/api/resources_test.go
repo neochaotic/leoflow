@@ -116,6 +116,8 @@ func (f *fakeRunRepo) CreateDagRun(_ context.Context, _, dagID string, run domai
 }
 
 type fakeTaskRepo struct {
+	lastClearOpts domain.ClearOptions
+	clearCalled   bool
 	tis           []domain.TaskInstance
 	gotOnlyFailed bool
 	setState      string
@@ -138,7 +140,9 @@ func (f *fakeTaskRepo) ListTaskInstanceAttempts(_ context.Context, _, _, _, task
 	}
 	return out, nil
 }
-func (f *fakeTaskRepo) ClearTaskInstances(_ context.Context, _, _, _ string, _ []string, onlyFailed, _ bool) (int, error) {
+func (f *fakeTaskRepo) ClearTaskInstances(_ context.Context, _, _, _ string, _ []string, onlyFailed bool, opts domain.ClearOptions) (int, error) {
+	f.lastClearOpts = opts
+	f.clearCalled = true
 	f.gotOnlyFailed = onlyFailed
 	return len(f.tis), nil
 }
@@ -824,5 +828,214 @@ func TestTaskInstanceResponseStaysAirflowCompatible(t *testing.T) {
 	}
 	if _, ok := got["failure_reason"]; !ok {
 		t.Error("failure_reason must be present on the response")
+	}
+}
+
+// clearSrv builds a server whose task repo records the ClearOptions it received,
+// so the tests below assert what the handler decided rather than what it printed.
+func clearSrv(t *testing.T) (*gin.Engine, *fakeTaskRepo) {
+	t.Helper()
+	tasks := &fakeTaskRepo{tis: []domain.TaskInstance{
+		{TaskID: "extract", RunID: "r1", State: domain.TaskStateFailed},
+	}}
+	srv := NewServer(Dependencies{
+		Logger: discardLogger(), Authenticator: &fakeAuthn{user: &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}},
+		RateLimiter: auth.NewRateLimiter(100, time.Minute), CORSOrigins: []string{"*"}, TokenTTLSecs: 3600,
+		Tasks: tasks, DagRuns: &fakeRunRepo{runs: []domain.DagRun{{DagID: "etl", RunID: "r1"}}},
+	})
+	return srv, tasks
+}
+
+// TestClearRunOnLatestVersion: which version a cleared run re-executes is now a
+// request-level decision, separate from whether the run is re-opened.
+//
+// Before this, the two were one boolean: re-opening a run always re-bound it to
+// the DAG's current version, so there was no way to re-run a task against the
+// image that produced it — "clear last week's task" always ran today's code.
+// Apache Airflow separates them the same way and calls the second
+// `run_on_latest_version`.
+func TestClearRunOnLatestVersion(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want domain.ClearOptions
+	}{{
+		// Airflow's default: a clear reproduces the attempt it is clearing. Testing
+		// a fix is a new run, or an explicit run_on_latest_version=true.
+		name: "omitted pins the run, as Airflow does",
+		body: `{"dag_run_id":"r1"}`,
+		want: domain.ClearOptions{ResetDagRun: true, RunOnLatestVersion: false},
+	}, {
+		name: "false pins the run to the version it was created with",
+		body: `{"dag_run_id":"r1","run_on_latest_version":false}`,
+		want: domain.ClearOptions{ResetDagRun: true, RunOnLatestVersion: false},
+	}, {
+		name: "true is explicit and unchanged",
+		body: `{"dag_run_id":"r1","run_on_latest_version":true}`,
+		want: domain.ClearOptions{ResetDagRun: true, RunOnLatestVersion: true},
+	}, {
+		// The two decisions are independent: not re-opening the run says nothing
+		// about which version a later re-open would use.
+		name: "it is independent of reset_dag_runs",
+		body: `{"dag_run_id":"r1","reset_dag_runs":false,"run_on_latest_version":false}`,
+		want: domain.ClearOptions{ResetDagRun: false, RunOnLatestVersion: false},
+	}}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv, tasks := clearSrv(t)
+			rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/clearTaskInstances", c.body)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("clear = %d (%s)", rec.Code, rec.Body.String())
+			}
+			if !tasks.clearCalled {
+				t.Fatal("the repository was never asked to clear; the assertion below would be vacuous")
+			}
+			if tasks.lastClearOpts != c.want {
+				t.Errorf("ClearOptions = %+v, want %+v", tasks.lastClearOpts, c.want)
+			}
+		})
+	}
+}
+
+// TestClearDryRunDecidesNothing: a preview must not reach the repository at all.
+// Recording the options makes it possible to assert that, rather than inferring
+// it from an unchanged state field.
+func TestClearDryRunDecidesNothing(t *testing.T) {
+	srv, tasks := clearSrv(t)
+	rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/clearTaskInstances",
+		`{"dag_run_id":"r1","dry_run":true,"run_on_latest_version":false}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("dry_run = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if tasks.clearCalled {
+		t.Error("dry_run reached the repository")
+	}
+}
+
+// TestDagRunDTOCarriesBundleVersion: the run's pinned version must reach the
+// wire as bundle_version.
+//
+// This is not cosmetic. The embedded SPA renders the clear dialog's "Run with
+// latest bundle version" checkbox only when the run's bundle_version differs
+// from the DAG's AND the run's is neither null nor empty:
+//
+//	ee = F !== I && I !== null && I !== ``     (F = the DAG's, I = the run's)
+//
+// leoflow sent null, so the control never rendered. With the server now honoring
+// run_on_latest_version, a null here means the operator cannot ask for the
+// current version through any interface at all — there is no CLI clear either.
+func TestDagRunDTOCarriesBundleVersion(t *testing.T) {
+	t.Run("a pinned version is serialized", func(t *testing.T) {
+		dto := toDagRunDTO(domain.DagRun{DagID: "etl", RunID: "r1", Version: "v1.2.3"})
+		if dto.BundleVersion == nil {
+			t.Fatal("bundle_version is null; the SPA hides the version control when it is")
+		}
+		if *dto.BundleVersion != "v1.2.3" {
+			t.Errorf("bundle_version = %q, want the run's pinned version", *dto.BundleVersion)
+		}
+	})
+	t.Run("an unresolvable version stays null rather than empty", func(t *testing.T) {
+		// The SPA treats "" the same as null, so an empty string would be a
+		// pointless non-null. A run whose version row is gone is the real case.
+		dto := toDagRunDTO(domain.DagRun{DagID: "etl", RunID: "r1"})
+		if dto.BundleVersion != nil {
+			t.Errorf("bundle_version = %q, want null", *dto.BundleVersion)
+		}
+	})
+}
+
+// TestDagDTOCarriesCurrentVersion: the other half of the comparison. With only
+// the run's version populated the checkbox would render unconditionally, because
+// a null on the DAG side always differs from a non-null run version.
+func TestDagDTOCarriesCurrentVersion(t *testing.T) {
+	dto := toDagWithRunsDTO(domain.DAG{DagID: "etl", CurrentVersion: "v2.0.0"}, nil)
+	if dto.BundleVersion == nil {
+		t.Fatal("bundle_version is null on the DAG; the clear dialog then always offers the toggle")
+	}
+	if *dto.BundleVersion != "v2.0.0" {
+		t.Errorf("bundle_version = %q, want the DAG's current version", *dto.BundleVersion)
+	}
+}
+
+// TestTaskInstanceDagVersionCarriesTheRunsPinnedLabel: the single-task clear
+// dialog — the ordinary "my task failed, clear it" path — gates its version
+// control on
+//
+//	he !== ge && ge !== null && ge !== ''
+//
+// where he is the DAG's current label and ge is the task instance's
+// dag_version.bundle_version. The literal that builds that nested object omitted
+// BundleVersion, so ge was null and the control never rendered.
+//
+// The label must come from the RUN's pinned version, not from the DAG's latest.
+// Filling it from the latest makes he === ge, so the control stays hidden — the
+// same invisible outcome as null, reached a different way, and the obvious fix.
+func TestTaskInstanceDagVersionCarriesTheRunsPinnedLabel(t *testing.T) {
+	runs := &fakeRunRepo{runs: []domain.DagRun{{DagID: "etl", RunID: "r1", Version: "v1-pinned"}}}
+	tasks := &fakeTaskRepo{tis: []domain.TaskInstance{
+		{TaskID: "extract", RunID: "r1", State: domain.TaskStateFailed},
+	}}
+	srv := NewServer(Dependencies{
+		Logger: discardLogger(), Authenticator: &fakeAuthn{user: &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}},
+		RateLimiter: auth.NewRateLimiter(100, time.Minute), CORSOrigins: []string{"*"}, TokenTTLSecs: 3600,
+		Tasks: tasks, DagRuns: runs,
+		DagVersions: &fakeVersionLister{versions: []domain.DagVersion{
+			// The DAG's latest is deliberately different from the run's pinned
+			// label: if the DTO followed this instead, the two would match and the
+			// dialog would hide the control.
+			{ID: "v-uuid", VersionNumber: 2, CreatedAt: time.Now().UTC(), Version: "v2-latest"},
+		}},
+	})
+	rec := authGet(srv, http.MethodGet, "/api/v2/dags/etl/dagRuns/r1/taskInstances", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("taskInstances = %d (%s)", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		TaskInstances []struct {
+			DagVersion *struct {
+				BundleVersion *string `json:"bundle_version"`
+			} `json:"dag_version"`
+		} `json:"task_instances"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.TaskInstances) == 0 {
+		t.Fatal("no task instances returned; the assertions below would be vacuous")
+	}
+	dv := got.TaskInstances[0].DagVersion
+	if dv == nil || dv.BundleVersion == nil {
+		t.Fatalf("dag_version.bundle_version is null; the single-task clear dialog hides its version control: %s", rec.Body.String())
+	}
+	if *dv.BundleVersion == "v2-latest" {
+		t.Fatal("dag_version.bundle_version followed the DAG's LATEST version; it must be the run's pinned one, or it equals the DAG's and the control stays hidden anyway")
+	}
+	if *dv.BundleVersion != "v1-pinned" {
+		t.Errorf("dag_version.bundle_version = %q, want the run's pinned v1-pinned", *dv.BundleVersion)
+	}
+
+	// The clear endpoint builds its own affected/dry-run payload through a SECOND
+	// resolver (resolveRunContextFor, which takes the run from the body rather
+	// than the path). It is a separate copy of the same two lines, and mutating
+	// only that copy left the suite green — an untested duplicate of code this
+	// test exists to prove matters.
+	rec = authGet(srv, http.MethodPost, "/api/v2/dags/etl/clearTaskInstances",
+		`{"dag_run_id":"r1","task_ids":["extract"],"dry_run":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear dry_run = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.TaskInstances) == 0 {
+		t.Fatal("the clear preview returned nothing; the assertion below would be vacuous")
+	}
+	dv = got.TaskInstances[0].DagVersion
+	if dv == nil || dv.BundleVersion == nil {
+		t.Fatalf("the clear payload's dag_version.bundle_version is null: %s", rec.Body.String())
+	}
+	if *dv.BundleVersion != "v1-pinned" {
+		t.Errorf("clear payload dag_version.bundle_version = %q, want v1-pinned", *dv.BundleVersion)
 	}
 }

@@ -104,7 +104,7 @@ func TestInfraMarkerClearedByAdminClearFailed(t *testing.T) {
 		t.Fatalf("precondition: reaper should stamp last_failure_kind='infra', got %q", k)
 	}
 	// Admin "clear failed" (onlyFailed=true) — the buggy path.
-	if _, err := repo.ClearTaskInstances(ctx, "default", dagID, runID, nil, true, false); err != nil {
+	if _, err := repo.ClearTaskInstances(ctx, "default", dagID, runID, nil, true, domain.ClearOptions{}); err != nil {
 		t.Fatalf("ClearTaskInstances: %v", err)
 	}
 	if k := lastFailureKind(t, pg, ctx, runUUID); k != "" {

@@ -104,6 +104,43 @@ func mapDagRun(r queries.DagRun, dagID string) domain.DagRun {
 	}
 }
 
+// mapDagWithVersion is mapDag plus the current-version label the joined query
+// carries. Kept separate rather than widening mapDag: the plain queries.Dag row
+// has no such column, and a shared mapper would have to invent one.
+func mapDagWithVersion(d queries.GetDagWithVersionRow) domain.DAG {
+	out := mapDag(queries.Dag{
+		DagID: d.DagID, Description: d.Description, Owner: d.Owner, Tags: d.Tags,
+		Schedule: d.Schedule, ScheduleTimezone: d.ScheduleTimezone, StartDate: d.StartDate,
+		IsPaused: d.IsPaused, IsActive: d.IsActive, MaxActiveRuns: d.MaxActiveRuns,
+		Catchup: d.Catchup, UpdatedAt: d.UpdatedAt,
+	})
+	if d.CurrentVersionLabel != nil {
+		out.CurrentVersion = *d.CurrentVersionLabel
+	}
+	return out
+}
+
+// mapDagRunWithVersion is mapDagRun plus the version label the joined query
+// carries, for the same reason as mapDagWithVersion.
+func mapDagRunWithVersion(r queries.GetDagRunWithVersionRow, dagID string) domain.DagRun {
+	out := domain.DagRun{
+		DagID:       dagID,
+		RunID:       r.RunID,
+		LogicalDate: timeVal(r.LogicalDate),
+		State:       domain.DagRunState(r.State),
+		RunType:     string(r.Trigger),
+		QueuedAt:    timeVal(r.QueuedAt),
+		StartedAt:   timePtr(r.StartedAt),
+		EndedAt:     timePtr(r.EndedAt),
+		Note:        strOrEmpty(r.Note),
+		Conf:        json.RawMessage(r.Conf),
+	}
+	if r.DagVersionLabel != nil {
+		out.Version = *r.DagVersionLabel
+	}
+	return out
+}
+
 func mapTaskInstance(ti queries.TaskInstance, dagID, runID string) domain.TaskInstance {
 	return domain.TaskInstance{
 		DagID:       dagID,

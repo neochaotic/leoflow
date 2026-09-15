@@ -1176,10 +1176,13 @@ func TestStagingVolumesIntegration(t *testing.T) {
 	}
 }
 
-// TestClearRebindsRunToCurrentVersion guards the single mutability rule (ADR 0020):
-// clear re-binds the run to the DAG's current version, so a re-run after a
-// code/yaml fix picks up the newest version (the last hot-reload in dev, the last
-// deploy in prod) instead of the version the run was pinned to.
+// TestClearRebindsRunToCurrentVersion guards the OPT-IN mutability rule
+// (ADR 0020, 2026-09-15 amendment): clear with run_on_latest_version re-binds the
+// run to the DAG's current version, so a re-run after a code/yaml fix picks up
+// the newest version (the last hot-reload in dev, the last deploy in prod)
+// instead of the version the run was pinned to. Without it — the default — the
+// run keeps its pinned version; that half is covered by
+// TestClearRunOnLatestVersionFalsePinsTheRun.
 func TestClearRebindsRunToCurrentVersion(t *testing.T) {
 	repo, store, ctx := openRepo(t)
 	dagID := fmt.Sprintf("rebind_%d", time.Now().UnixNano())
@@ -1207,7 +1210,8 @@ func TestClearRebindsRunToCurrentVersion(t *testing.T) {
 		t.Fatalf("register v2: created=%v err=%v", created, rerr)
 	}
 
-	// Clear with reset re-binds the run to the current version (v2).
+	// Clear with reset AND run_on_latest_version re-binds to the current version
+	// (v2). Reset alone no longer does — it only re-opens the run.
 	if _, err := repo.ClearTaskInstances(ctx, "default", dagID, "r1", []string{"extract"}, false, domain.ClearOptions{ResetDagRun: true, RunOnLatestVersion: true}); err != nil {
 		t.Fatalf("clear: %v", err)
 	}

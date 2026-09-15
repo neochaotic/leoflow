@@ -544,14 +544,14 @@ func (r *Repository) ListTaskInstances(ctx context.Context, tenant, dagID, runID
 	return out, len(out), nil
 }
 
-// ClearTaskInstances resets tasks to none for re-run, optionally resetting the
-// parent run to queued. When onlyFailed is true, only tasks currently in a
-// failed-ish state (failed, upstream_failed, up_for_retry) are reset; with an
-// empty taskIDs and onlyFailed, every failed task in the run is cleared. It
-// returns the number of task instances actually reset.
-// ClearTaskInstances resets task instances for a re-run. opts carries the two
-// independent run-level decisions — whether to re-open the run, and which version
-// the re-run executes (see domain.ClearOptions).
+// ClearTaskInstances resets tasks to none for re-run. When onlyFailed is true,
+// only tasks currently in a failed-ish state (failed, upstream_failed,
+// up_for_retry) are reset; with an empty taskIDs and onlyFailed, every failed
+// task in the run is cleared. It returns the number of task instances actually
+// reset.
+//
+// opts carries the two independent run-level decisions — whether to re-open the
+// run, and which version the re-run executes (see domain.ClearOptions).
 func (r *Repository) ClearTaskInstances(ctx context.Context, tenant, dagID, runID string, taskIDs []string, onlyFailed bool, opts domain.ClearOptions) (int, error) {
 	dag, err := r.resolveDag(ctx, tenant, dagID)
 	if err != nil {

@@ -107,3 +107,34 @@ func TestDagDetailsPopulatesLatestDagVersion(t *testing.T) {
 		t.Errorf("latest_dag_version not populated: %s", rec.Body.String())
 	}
 }
+
+// TestDagDetailsPopulatesBundleVersion: /details is the DAG half of the gate in
+// ALL THREE clear dialogs —
+//
+//	run clear:         F = details.bundle_version,  I = run.bundle_version
+//	task-group clear:  gated on details.bundle_version alone
+//	single-task clear: he = details.bundle_version, ge = ti.dag_version.bundle_version
+//
+// so a null here hides the "Run with latest bundle version" control everywhere,
+// and the operator cannot ask for the current version through any interface.
+//
+// It exists because the line that populates it was deletable with the whole
+// internal/api suite still green: the sibling test covers toDagWithRunsDTO (the
+// DAG LIST payload), which no clear dialog reads.
+func TestDagDetailsPopulatesBundleVersion(t *testing.T) {
+	srv := versionsServer([]domain.DAG{{DagID: "etl", CurrentVersion: "v9.9.9"}},
+		[]domain.DagVersion{{ID: "v-uuid", VersionNumber: 1, CreatedAt: time.Now().UTC()}})
+	rec := authGet(srv, http.MethodGet, "/api/v2/dags/etl/details", "")
+	var d struct {
+		BundleVersion *string `json:"bundle_version"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &d); err != nil {
+		t.Fatal(err)
+	}
+	if d.BundleVersion == nil {
+		t.Fatalf("details.bundle_version is null; every clear dialog hides its version control: %s", rec.Body.String())
+	}
+	if *d.BundleVersion != "v9.9.9" {
+		t.Errorf("details.bundle_version = %q, want the DAG's current version", *d.BundleVersion)
+	}
+}

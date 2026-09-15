@@ -957,3 +957,61 @@ func TestDagDTOCarriesCurrentVersion(t *testing.T) {
 		t.Errorf("bundle_version = %q, want the DAG's current version", *dto.BundleVersion)
 	}
 }
+
+// TestTaskInstanceDagVersionCarriesTheRunsPinnedLabel: the single-task clear
+// dialog — the ordinary "my task failed, clear it" path — gates its version
+// control on
+//
+//	he !== ge && ge !== null && ge !== ''
+//
+// where he is the DAG's current label and ge is the task instance's
+// dag_version.bundle_version. The literal that builds that nested object omitted
+// BundleVersion, so ge was null and the control never rendered.
+//
+// The label must come from the RUN's pinned version, not from the DAG's latest.
+// Filling it from the latest makes he === ge, so the control stays hidden — the
+// same invisible outcome as null, reached a different way, and the obvious fix.
+func TestTaskInstanceDagVersionCarriesTheRunsPinnedLabel(t *testing.T) {
+	runs := &fakeRunRepo{runs: []domain.DagRun{{DagID: "etl", RunID: "r1", Version: "v1-pinned"}}}
+	tasks := &fakeTaskRepo{tis: []domain.TaskInstance{
+		{TaskID: "extract", RunID: "r1", State: domain.TaskStateFailed},
+	}}
+	srv := NewServer(Dependencies{
+		Logger: discardLogger(), Authenticator: &fakeAuthn{user: &auth.User{ID: "u1", TenantID: "default", Roles: []string{"admin"}}},
+		RateLimiter: auth.NewRateLimiter(100, time.Minute), CORSOrigins: []string{"*"}, TokenTTLSecs: 3600,
+		Tasks: tasks, DagRuns: runs,
+		DagVersions: &fakeVersionLister{versions: []domain.DagVersion{
+			// The DAG's latest is deliberately different from the run's pinned
+			// label: if the DTO followed this instead, the two would match and the
+			// dialog would hide the control.
+			{ID: "v-uuid", VersionNumber: 2, CreatedAt: time.Now().UTC(), Version: "v2-latest"},
+		}},
+	})
+	rec := authGet(srv, http.MethodGet, "/api/v2/dags/etl/dagRuns/r1/taskInstances", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("taskInstances = %d (%s)", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		TaskInstances []struct {
+			DagVersion *struct {
+				BundleVersion *string `json:"bundle_version"`
+			} `json:"dag_version"`
+		} `json:"task_instances"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.TaskInstances) == 0 {
+		t.Fatal("no task instances returned; the assertions below would be vacuous")
+	}
+	dv := got.TaskInstances[0].DagVersion
+	if dv == nil || dv.BundleVersion == nil {
+		t.Fatalf("dag_version.bundle_version is null; the single-task clear dialog hides its version control: %s", rec.Body.String())
+	}
+	if *dv.BundleVersion == "v2-latest" {
+		t.Fatal("dag_version.bundle_version followed the DAG's LATEST version; it must be the run's pinned one, or it equals the DAG's and the control stays hidden anyway")
+	}
+	if *dv.BundleVersion != "v1-pinned" {
+		t.Errorf("dag_version.bundle_version = %q, want the run's pinned v1-pinned", *dv.BundleVersion)
+	}
+}

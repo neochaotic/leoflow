@@ -33,7 +33,8 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   never appeared, and the field the SPA always sent was hardcoded to its default.
   Both are populated now — the run reports the version it is pinned to, the DAG
   reports its current one — so the control appears exactly when there is a newer
-  version to choose.
+  version to choose, in all three of the SPA's clear dialogs (run, task group,
+  single task).
 
   This also splits two decisions that were one boolean — re-opening a run and
   choosing its version are independent, and `reset_dag_runs` now means only the

@@ -893,9 +893,11 @@ func findTaskInstanceDTO(c *gin.Context, repo TaskInstanceRepository, runs DagRu
 func resolveRunContextFor(c *gin.Context, runs DagRunRepository, versions DagVersionLister, runID string) (*time.Time, *dagVersionDTO) {
 	dagID := c.Param("dag_id")
 	var logical *time.Time
+	var pinned string
 	if runs != nil && runID != "" {
 		if run, err := runs.GetDagRun(c.Request.Context(), tenantOf(c), dagID, runID); err == nil {
 			logical = &run.LogicalDate
+			pinned = run.Version
 		}
 	}
 	var version *dagVersionDTO
@@ -905,6 +907,13 @@ func resolveRunContextFor(c *gin.Context, runs DagRunRepository, versions DagVer
 				ID: vs[0].ID, VersionNumber: vs[0].VersionNumber, DagID: dagID,
 				BundleName: "leoflow", CreatedAt: vs[0].CreatedAt, DagDisplayName: dagID,
 			}
+			// The RUN's pinned label, not vs[0]'s. The single-task clear dialog
+			// gates its version control on
+			//   he !== ge && ge !== null && ge !== ''
+			// where he is the DAG's current label and ge is this one. Filling it
+			// from vs[0] makes the two equal and the control stays hidden — the
+			// same invisible result as leaving it null, reached a different way.
+			version.BundleVersion = strPtrOrNil(pinned)
 		}
 	}
 	return logical, version
@@ -1023,9 +1032,11 @@ func enrichTaskInstance(c *gin.Context, dto *taskInstanceDTO, runs DagRunReposit
 func resolveRunContext(c *gin.Context, runs DagRunRepository, versions DagVersionLister) (*time.Time, *dagVersionDTO) {
 	dagID, runID := c.Param("dag_id"), c.Param("dag_run_id")
 	var logical *time.Time
+	var pinned string
 	if runs != nil {
 		if run, err := runs.GetDagRun(c.Request.Context(), tenantOf(c), dagID, runID); err == nil {
 			logical = &run.LogicalDate
+			pinned = run.Version
 		}
 	}
 	var version *dagVersionDTO
@@ -1035,6 +1046,13 @@ func resolveRunContext(c *gin.Context, runs DagRunRepository, versions DagVersio
 				ID: vs[0].ID, VersionNumber: vs[0].VersionNumber, DagID: dagID,
 				BundleName: "leoflow", CreatedAt: vs[0].CreatedAt, DagDisplayName: dagID,
 			}
+			// The RUN's pinned label, not vs[0]'s. The single-task clear dialog
+			// gates its version control on
+			//   he !== ge && ge !== null && ge !== ''
+			// where he is the DAG's current label and ge is this one. Filling it
+			// from vs[0] makes the two equal and the control stays hidden — the
+			// same invisible result as leaving it null, reached a different way.
+			version.BundleVersion = strPtrOrNil(pinned)
 		}
 	}
 	return logical, version

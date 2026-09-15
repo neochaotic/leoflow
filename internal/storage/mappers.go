@@ -104,11 +104,9 @@ func mapDagRun(r queries.DagRun, dagID string) domain.DagRun {
 	}
 }
 
-// mapDagRunWithVersion is mapDagRun plus the version label the joined query
-// carries. Kept separate rather than widening mapDagRun: the plain queries.DagRun
-// row has no such column, and a shared mapper would have to invent one.
 // mapDagWithVersion is mapDag plus the current-version label the joined query
-// carries.
+// carries. Kept separate rather than widening mapDag: the plain queries.Dag row
+// has no such column, and a shared mapper would have to invent one.
 func mapDagWithVersion(d queries.GetDagWithVersionRow) domain.DAG {
 	out := mapDag(queries.Dag{
 		DagID: d.DagID, Description: d.Description, Owner: d.Owner, Tags: d.Tags,
@@ -122,6 +120,8 @@ func mapDagWithVersion(d queries.GetDagWithVersionRow) domain.DAG {
 	return out
 }
 
+// mapDagRunWithVersion is mapDagRun plus the version label the joined query
+// carries, for the same reason as mapDagWithVersion.
 func mapDagRunWithVersion(r queries.GetDagRunWithVersionRow, dagID string) domain.DagRun {
 	out := domain.DagRun{
 		DagID:       dagID,

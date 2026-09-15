@@ -14,8 +14,10 @@ SELECT * FROM dag_runs WHERE dag_id = $1 AND run_id = $2;
 -- is null. A null there means the operator has no way to ask for the current
 -- version, whatever the API supports.
 --
--- LEFT JOIN on purpose: a run whose version row is gone still lists, with a null
--- label, rather than vanishing from the UI.
+-- LEFT JOIN is defensive, not load-bearing today: dag_runs.dag_version_id is NOT
+-- NULL with a plain FK, so the version row cannot disappear under a live run. It
+-- is written this way so that a future ON DELETE SET NULL degrades to a null
+-- label instead of dropping the run from the UI.
 SELECT r.*, v.version AS dag_version_label
 FROM dag_runs r
 LEFT JOIN dag_versions v ON v.id = r.dag_version_id

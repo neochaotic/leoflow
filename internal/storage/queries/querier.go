@@ -115,8 +115,10 @@ type Querier interface {
 	// is null. A null there means the operator has no way to ask for the current
 	// version, whatever the API supports.
 	//
-	// LEFT JOIN on purpose: a run whose version row is gone still lists, with a null
-	// label, rather than vanishing from the UI.
+	// LEFT JOIN is defensive, not load-bearing today: dag_runs.dag_version_id is NOT
+	// NULL with a plain FK, so the version row cannot disappear under a live run. It
+	// is written this way so that a future ON DELETE SET NULL degrades to a null
+	// label instead of dropping the run from the UI.
 	GetDagRunWithVersion(ctx context.Context, arg GetDagRunWithVersionParams) (GetDagRunWithVersionRow, error)
 	GetDagVersionByHash(ctx context.Context, arg GetDagVersionByHashParams) (DagVersion, error)
 	GetDagVersionByID(ctx context.Context, id pgtype.UUID) (DagVersion, error)

@@ -1014,4 +1014,28 @@ func TestTaskInstanceDagVersionCarriesTheRunsPinnedLabel(t *testing.T) {
 	if *dv.BundleVersion != "v1-pinned" {
 		t.Errorf("dag_version.bundle_version = %q, want the run's pinned v1-pinned", *dv.BundleVersion)
 	}
+
+	// The clear endpoint builds its own affected/dry-run payload through a SECOND
+	// resolver (resolveRunContextFor, which takes the run from the body rather
+	// than the path). It is a separate copy of the same two lines, and mutating
+	// only that copy left the suite green — an untested duplicate of code this
+	// test exists to prove matters.
+	rec = authGet(srv, http.MethodPost, "/api/v2/dags/etl/clearTaskInstances",
+		`{"dag_run_id":"r1","task_ids":["extract"],"dry_run":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear dry_run = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.TaskInstances) == 0 {
+		t.Fatal("the clear preview returned nothing; the assertion below would be vacuous")
+	}
+	dv = got.TaskInstances[0].DagVersion
+	if dv == nil || dv.BundleVersion == nil {
+		t.Fatalf("the clear payload's dag_version.bundle_version is null: %s", rec.Body.String())
+	}
+	if *dv.BundleVersion != "v1-pinned" {
+		t.Errorf("clear payload dag_version.bundle_version = %q, want v1-pinned", *dv.BundleVersion)
+	}
 }

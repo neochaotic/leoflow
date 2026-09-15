@@ -125,6 +125,9 @@ func TestDagDetailsPopulatesBundleVersion(t *testing.T) {
 	srv := versionsServer([]domain.DAG{{DagID: "etl", CurrentVersion: "v9.9.9"}},
 		[]domain.DagVersion{{ID: "v-uuid", VersionNumber: 1, CreatedAt: time.Now().UTC()}})
 	rec := authGet(srv, http.MethodGet, "/api/v2/dags/etl/details", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/details = %d (%s)", rec.Code, rec.Body.String())
+	}
 	var d struct {
 		BundleVersion *string `json:"bundle_version"`
 	}

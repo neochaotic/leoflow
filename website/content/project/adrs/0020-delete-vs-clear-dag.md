@@ -76,7 +76,7 @@ Clearing **task instances** (re-run, distinct from "clear history" above) is the
   per-run staging volume is re-attached by its deterministic name (ADR 0022), so a
   clear+re-run reuses upstream staged data.
 
-## Amendment (2026-09-14): the version choice becomes a request flag, and the Airflow claim above is withdrawn
+## Amendment (2026-09-15): the version choice becomes a request flag defaulting to Airflow's, and the Airflow claim above is withdrawn
 
 Approved by the project founder.
 
@@ -114,23 +114,31 @@ week, and no way to re-open a run without also moving it forward a version.
 
 Implemented as `ReopenDagRunKeepingVersion` alongside `ResetDagRunToVersion`.
 
-### The default, and why it differs from Airflow
+### The default follows Airflow: `false`
 
-**`run_on_latest_version` defaults to `true` in leoflow. Airflow's defaults to
-`false`.** This divergence is deliberate and is the one thing here that is a
-judgement call rather than a correction:
+**`run_on_latest_version` defaults to `false`**, as in Airflow. Decided by the
+project founder. A clear therefore **reproduces the attempt it is clearing**, on
+the image that produced it.
 
-Under `leoflow dev`, every save registers a new version. Pinning by default would
-make the primary development loop — *fix the DAG, clear the failed task, watch it
-pass* — silently re-run the **pre-fix** code. The failure would be quiet and
-would look like the fix not working.
+This is a **behaviour change** from the 2026-05-24 amendment, which re-bound
+unconditionally. What it changes in practice:
 
-Flipping the default is a behaviour change for every existing caller and should
-be decided on its own, not as a side effect of adding the knob. What this
-amendment buys is that pinning is now **possible**, which it was not.
+- *Clearing a task to re-run it as it was* — a week-old failure, a flake, an
+  infra-failed attempt — now does exactly that, which was impossible before.
+- *Clearing a task to test a fix* no longer picks the fix up on its own. Two ways
+  to do it, both explicit: **trigger a new run** (always the current version), or
+  pass `run_on_latest_version=true`. The first is what Airflow users already do;
+  the second is the old behaviour, still one field away.
+
+The 2026-05-24 amendment described "fix the DAG, clear the failed task, watch it
+pass" as what the re-bind buys. That loop still exists — it now asks for the
+newest version out loud instead of assuming it. Under `leoflow dev`, where every
+save registers a version, this is the difference worth knowing: after editing,
+clearing an old run re-runs the **old** code unless you say otherwise.
 
 ### Consequence for run↔version immutability
 
 The 2026-05-24 amendment called the re-bind "the single mutability exception" to
-ADR 0003. That stands, with the exception now **opt-out** rather than mandatory:
-a caller that wants strict immutability can have it.
+ADR 0003. The exception is now **opt-in**: by default a run keeps the version it
+was created with, and mutability happens only when a caller asks for it. That is
+a stronger position than the one this ADR originally took, and it is Airflow's.

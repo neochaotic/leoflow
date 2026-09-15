@@ -144,7 +144,7 @@ type ClearTaskInstancesRequest struct {
 	// ResetDagRuns Re-open the run so the scheduler looks at it again. Without it a terminal run stays terminal and the cleared task instance is never scheduled.
 	ResetDagRuns *bool `json:"reset_dag_runs,omitempty"`
 
-	// RunOnLatestVersion Which version the re-run executes. true re-binds the run to the DAG's current registered version, so a clear after a fix picks up the newest image and config. false keeps the version the run was created with, so the re-run executes the image that produced the original attempt. NOTE: Apache Airflow's equivalent flag defaults to false. Leoflow defaults to true because under `leoflow dev` every save registers a new version, and pinning by default would make "fix the DAG, clear the failed task, watch it pass" silently re-run the pre-fix code.
+	// RunOnLatestVersion Which version the re-run executes. false (the default, matching Apache Airflow) keeps the version the run was created with, so the re-run executes the image that produced the original attempt. true re-binds the run to the DAG's current registered version, so the re-run picks up the newest image and config — use it to re-run a failed task against a fix without creating a new run.
 	RunOnLatestVersion *bool     `json:"run_on_latest_version,omitempty"`
 	TaskIds            *[]string `json:"task_ids,omitempty"`
 }

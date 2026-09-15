@@ -860,13 +860,11 @@ func TestClearRunOnLatestVersion(t *testing.T) {
 		body string
 		want domain.ClearOptions
 	}{{
-		// Not Airflow's default (its run_on_latest_version is opt-in), and
-		// deliberately so: under `leoflow dev` every save registers a new version,
-		// so pinning by default would make "fix the DAG, clear, watch it pass"
-		// silently re-run the pre-fix code.
-		name: "omitted keeps the documented re-bind",
+		// Airflow's default: a clear reproduces the attempt it is clearing. Testing
+		// a fix is a new run, or an explicit run_on_latest_version=true.
+		name: "omitted pins the run, as Airflow does",
 		body: `{"dag_run_id":"r1"}`,
-		want: domain.ClearOptions{ResetDagRun: true, RunOnLatestVersion: true},
+		want: domain.ClearOptions{ResetDagRun: true, RunOnLatestVersion: false},
 	}, {
 		name: "false pins the run to the version it was created with",
 		body: `{"dag_run_id":"r1","run_on_latest_version":false}`,

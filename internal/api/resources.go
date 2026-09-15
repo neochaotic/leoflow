@@ -676,17 +676,15 @@ func clearTaskInstancesHandler(repo TaskInstanceRepository, runs DagRunRepositor
 			c.JSON(http.StatusOK, taskInstanceCollectionDTO{TaskInstances: affected, TotalEntries: len(affected)})
 			return
 		}
-		opts := domain.ClearOptions{ResetDagRun: true, RunOnLatestVersion: true}
+		// Defaults match Apache Airflow 3.x: a run keeps the version it was created
+		// with unless the caller asks for the current one. A clear then reproduces
+		// the attempt it is clearing, which is what makes clearing a week-old task
+		// mean anything; testing a fix is a NEW run, or an explicit
+		// run_on_latest_version=true.
+		opts := domain.ClearOptions{ResetDagRun: true, RunOnLatestVersion: false}
 		if body.ResetDagRuns != nil {
 			opts.ResetDagRun = *body.ResetDagRuns
 		}
-		// Defaults true, which is NOT Airflow's default (run_on_latest_version is
-		// an opt-in there, so its clear re-runs the run's pinned version). The
-		// divergence is deliberate: under `leoflow dev` every save registers a new
-		// version, so pinning by default would make "fix the DAG, clear the failed
-		// task, watch it pass" silently re-run the pre-fix code. Flipping it is a
-		// behavior change that needs its own decision, not a side effect of
-		// adding the knob.
 		if body.RunOnLatestVersion != nil {
 			opts.RunOnLatestVersion = *body.RunOnLatestVersion
 		}

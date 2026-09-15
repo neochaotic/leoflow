@@ -8,23 +8,28 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **`clear` can re-run a task on the image that produced it (`run_on_latest_version`).**
-  Clearing a task always re-bound its run to the DAG's current version, so
-  "clear last week's task" always executed today's code and there was no way to
-  ask for anything else. The flag now chooses: `true` (the default, unchanged
-  behaviour) re-binds to the current version so a clear after a fix picks up the
-  newest image; `false` keeps the version the run was created with.
+- **BREAKING: `clear` now re-runs a task on the image that produced it, not the
+  newest one (`run_on_latest_version`).** Clearing always re-bound the run to the
+  DAG's current version, so "clear last week's task" executed today's code and
+  there was no way to ask for anything else.
+
+  The flag now chooses, and defaults as Apache Airflow does: `false` keeps the
+  version the run was created with; `true` re-binds to the current version.
+
+  **What to change:** clearing a task to test a fix no longer picks the fix up on
+  its own. Trigger a **new run** (always the current version), or pass
+  `run_on_latest_version: true`. Clearing to re-run a task *as it was* — a
+  week-old failure, a flake, an infra-failed attempt — now does that, which was
+  impossible before.
+
+  It is a flag on the clear request, not a DAG setting: nothing changes in
+  `dag.py` or `leoflow.yaml`. Whether a re-run should reproduce the past or pick
+  up a fix is a decision at the moment of clearing, not at authoring time.
 
   This also splits two decisions that were one boolean — re-opening a run and
   choosing its version are independent, and `reset_dag_runs` now means only the
-  first.
-
-  The name and semantics are Apache Airflow's. Its default is the opposite
-  (`false`); leoflow keeps `true` because under `leoflow dev` every save
-  registers a new version, so pinning by default would make "fix the DAG, clear
-  the failed task, watch it pass" silently re-run the pre-fix code. ADR 0020
-  carries the reasoning, and withdraws an earlier claim that the unconditional
-  re-bind "matches Airflow" — true of Airflow 2, not of Airflow 3.x.
+  first. ADR 0020 carries the reasoning, and withdraws an earlier claim that the
+  unconditional re-bind "matches Airflow" — true of Airflow 2, not of 3.x.
 
   `dry_run`, `include_upstream`, `include_downstream`, `include_past` and
   `include_future` were implemented but missing from the published OpenAPI, so

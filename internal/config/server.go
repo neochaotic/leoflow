@@ -482,8 +482,9 @@ type OIDCSection struct {
 	// "groups"). Its values drive RoleMappings.
 	GroupsClaim string `mapstructure:"groups_claim"`
 	// RoleMappings maps an IdP group value to an existing Leoflow role name.
-	// Default-DENY: a group with no mapping grants no role. Configure via the
-	// config file / Helm values (maps do not bind from a single env var).
+	// Default-DENY: a group with no mapping grants no role. Configure via a YAML
+	// config file only. The chart ships none today, so this map has no route
+	// through Helm (#1143).
 	//
 	// Decoded OUT-OF-BAND (mapstructure:"-"), not by viper: viper's "." key
 	// delimiter splits a dotted MAP KEY (a dotted IdP group like "app.admins")

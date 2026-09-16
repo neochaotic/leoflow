@@ -141,9 +141,12 @@ The **Edition** column reads `both` (Lite and Pro), `Pro` (Pro / Kubernetes
 topologies only), or `dev-only`. `leoflow lite` sets the dev-appropriate values
 automatically (isolated DB, port 8088, admin login on, no Redis).
 
-Map- and list-valued keys (CORS origins, OIDC role/tenant maps, allowed email
-domains, …) are set from a config file or Helm values, not from a single env
-var — viper does not split one env var into a map or list.
+**Map**-valued keys (the OIDC role/tenant maps) are set from a config file or
+Helm values only: viper cannot split one env var into a map. **List**-valued
+keys (CORS origins, trusted proxies, allowed email domains) *do* bind from a
+single env var, comma-separated, because viper's decode hook splits on commas.
+That is how the Helm chart sets them, since it ships no server config file. In a
+config file they are ordinary YAML lists.
 
 ### Server (`server.*`)
 
@@ -155,7 +158,7 @@ var — viper does not split one env var into a map or list.
 | `LEOFLOW_SERVER_METRICS_ADDR` | `0.0.0.0:9090` | both | Prometheus metrics. |
 | `LEOFLOW_SERVER_GRPC_TLS_CERT` | _(empty)_ | Pro | PEM cert enabling TLS on the agent gRPC listener (#58). Set with `_KEY`; empty means plaintext (dev). The Pro Helm chart requires both (see [Pro TLS](/operate/pro-tls/)). |
 | `LEOFLOW_SERVER_GRPC_TLS_KEY` | _(empty)_ | Pro | PEM private key paired with `LEOFLOW_SERVER_GRPC_TLS_CERT`. Both must be set together to encrypt the agent channel. |
-| `LEOFLOW_SERVER_CORS_ALLOWED_ORIGINS` | `http://localhost:8080` | both | List of browser origins allowed to call the API (`server.cors.allowed_origins`). Set via config file / Helm values (a list). |
+| `LEOFLOW_SERVER_CORS_ALLOWED_ORIGINS` | `http://localhost:8080` | both | Browser origins allowed to call the API cross-origin (`server.cors.allowed_origins`, a list). The UI is served same-origin with the API, so most deployments need no entry and should leave the server default alone. Comma-separated via the env var; in the chart set `config.cors.allowedOrigins` (a YAML list) and it is rendered comma-joined for you. The chart rejects `"*"` at render time (#1144). |
 | `LEOFLOW_SERVER_TRUSTED_PROXIES` | *(empty — trust none)* | both | Proxy IPs/CIDRs whose `X-Forwarded-For` is honored for the client IP (`server.trusted_proxies`, a list). See note below. |
 
 ### Database (`database.*`)

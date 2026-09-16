@@ -135,6 +135,16 @@ spec:
             # (rbac.yaml, also .Values.taskNamespace) or every dispatch 403s (#480).
             - name: LEOFLOW_EXECUTOR_TASK_NAMESPACE
               value: {{ .ctx.Values.taskNamespace | quote }}
+            {{- if .ctx.Values.config.cors.allowedOrigins }}
+            # CORS origins the API accepts (server.cors.allowed_origins, #1144).
+            # Comma-joined for the same reason as trusted_proxies below: the chart
+            # ships no server config file, and viper's decode hook splits the single
+            # env var back into a list. Omitted when empty, which leaves the server
+            # default in place. This key existed in values.yaml with no consumer at
+            # all until #1144, so anything set here before that was silently ignored.
+            - name: LEOFLOW_SERVER_CORS_ALLOWED_ORIGINS
+              value: {{ join "," .ctx.Values.config.cors.allowedOrigins | quote }}
+            {{- end }}
             {{- if .ctx.Values.config.trustedProxies }}
             # Proxy IPs/CIDRs whose X-Forwarded-For the server honors (#725).
             # Rendered comma-joined because the chart ships no server config file

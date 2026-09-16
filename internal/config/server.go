@@ -482,8 +482,9 @@ type OIDCSection struct {
 	// "groups"). Its values drive RoleMappings.
 	GroupsClaim string `mapstructure:"groups_claim"`
 	// RoleMappings maps an IdP group value to an existing Leoflow role name.
-	// Default-DENY: a group with no mapping grants no role. Configure via the
-	// config file / Helm values (maps do not bind from a single env var).
+	// Default-DENY: a group with no mapping grants no role. Configure via a YAML
+	// config file only. The chart ships none today, so this map has no route
+	// through Helm (#1143).
 	//
 	// Decoded OUT-OF-BAND (mapstructure:"-"), not by viper: viper's "." key
 	// delimiter splits a dotted MAP KEY (a dotted IdP group like "app.admins")
@@ -625,10 +626,13 @@ var serverDefaults = map[string]any{
 	// viper's decode hook.
 	"auth.max_attempt_credential_lifetime": "24h",
 	// OIDC leaves. Every leaf is registered so viper's AutomaticEnv binds the
-	// scalar LEOFLOW_AUTH_OIDC_* env vars (notably the client secret). The slice
-	// leaves are config-file / Helm-values driven — viper does not split a single
-	// env var into a list — but they must appear here so Unmarshal resolves them
-	// from the file.
+	// LEOFLOW_AUTH_OIDC_* env vars, including the slices: viper's default decoder
+	// installs mapstructure's StringToSliceHookFunc(","), so a single
+	// comma-separated env var becomes a list. TestLoadServerBindsTrustedProxies
+	// locks that mechanism, and scopes, allowed_email_domains and
+	// break_glass_emails all use it. This comment used to claim the opposite, and
+	// a field report quoted it back at us as the explanation for a problem it did
+	// not explain (#1144).
 	//
 	// The two maps (role_mappings, tenant_claims) are deliberately NOT registered
 	// here and are tagged mapstructure:"-": their KEYS can contain dots (a Google

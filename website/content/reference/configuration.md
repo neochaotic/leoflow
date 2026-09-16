@@ -241,6 +241,14 @@ above the tables).
 | `LEOFLOW_AUTH_OIDC_JIT_PROVISIONING` | `false` | Pro | Create a user row on first OIDC login when none matches. Off by default (pre-provisioned user required); when on, the new row is granted the roles from `role_mappings`. |
 | `LEOFLOW_AUTH_OIDC_CLOCK_SKEW_SECONDS` | `60` | Pro | Tolerance (seconds) on the ID token's `exp`/`iat`/`nbf` checks to absorb clock differences between the IdP and this server. |
 
+{{% alert title="Configure `role_mappings` or `default_role`" color="warning" %}}
+Roles are IdP-authoritative: each login resolves a role set and the user's
+grants are reconciled to **exactly** that set, so with neither key set every
+login resolves to zero roles and a pre-provisioned admin's first single sign-on
+**clears the grants they were provisioned with**. The server logs a WARN naming
+both keys at boot.
+{{% /alert %}}
+
 ### Scheduler (`scheduler.*`)
 
 | Variable | Default | Edition | Purpose |

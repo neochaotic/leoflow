@@ -382,6 +382,13 @@ func validateStartup(cfg *config.ServerConfig) error {
 // warning about behavior it does not implement — and a WARN operators learn to
 // ignore is worse than none.
 func warnStartup(cfg *config.ServerConfig, logger *slog.Logger) {
+	// Role resolution is API-side, so this one is gated on the API rather than the
+	// scheduler: an api-only replica is the process that reconciles roles.
+	if cfg.Server.ServesAPI() {
+		for _, w := range oidcRoleSourceWarnings(cfg.Auth) {
+			logger.Warn(w.Msg, "config_key", w.Key, "value", w.Value, "missing_config_key", w.MissingKey)
+		}
+	}
 	if !cfg.Server.ServesScheduler() {
 		return
 	}
@@ -444,6 +451,42 @@ func platformDefaultWarnings(c config.PlatformDefaultsSection) []configWarning {
 		Key:        set,
 		Value:      value,
 		MissingKey: missing,
+	}}
+}
+
+// oidcRoleSourceWarnings reports an OIDC deployment that has no source of roles
+// at all: neither auth.oidc.role_mappings nor auth.oidc.default_role.
+//
+// Role resolution is IdP-authoritative (ADR 0057 D5): every login computes its
+// roles from role_mappings, applies default_role when that yields none, and hands
+// the result to ReconcileUserRoles, which sets the user's DB grants to EXACTLY
+// that set. With neither configured the set is always empty, and an empty
+// reconcile is a full clear, so a pre-provisioned admin's first SSO login strips
+// the grants they were provisioned with. The login still succeeds and the session
+// is minted, which is why this cannot fail closed: nothing is wrong per request,
+// the deployment is simply configured to grant nobody anything.
+//
+// It only became reachable when the tenant pin was made a boot requirement
+// (#1143): before that, a deployment configured this loosely was usually also
+// missing the pin, and the login was rejected before reconciliation ran. Removing
+// that accidental shield is what makes the WARN necessary.
+func oidcRoleSourceWarnings(c config.AuthSection) []configWarning {
+	const mappingsKey, defaultKey = "auth.oidc.role_mappings", "auth.oidc.default_role"
+	if c.Provider != config.AuthProviderOIDC {
+		return nil
+	}
+	if len(c.OIDC.RoleMappings) > 0 || c.OIDC.DefaultRole != "" {
+		return nil
+	}
+	return []configWarning{{
+		Msg: "auth.provider: oidc with neither " + mappingsKey + " nor " + defaultKey +
+			" grants no roles to anyone: every login resolves to an empty role set, and roles are reconciled to EXACTLY that set on each login, " +
+			"so a pre-provisioned user's existing grants are CLEARED on their first single sign-on. " +
+			"Map at least one IdP group to a role under " + mappingsKey + " (config file only: it is a map), or set " + defaultKey +
+			" to a read-only role such as viewer",
+		Key:        defaultKey,
+		Value:      "",
+		MissingKey: mappingsKey,
 	}}
 }
 

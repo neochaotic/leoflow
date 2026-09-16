@@ -176,6 +176,17 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   works while SSO does not: it now fails boot until the pin is set or the
   provider goes back to `jwt`, both of which the error names.
 
+- **An OIDC deployment with no source of roles says so at boot (#1143).** Roles
+  are IdP-authoritative: each login computes its roles from
+  `auth.oidc.role_mappings`, falls back to `auth.oidc.default_role`, and
+  reconciles the user's grants to EXACTLY that set. With neither configured the
+  set is always empty and an empty reconcile is a full clear, so a
+  pre-provisioned admin's first single sign-on strips the grants they were
+  provisioned with. The login succeeds, so nothing can fail closed on it; the
+  WARN at boot (on every process serving the API, including an api-only replica)
+  is the only signal before it happens. It was unreachable while the tenant pin
+  was unsatisfiable, because the login was rejected before reconciliation ran.
+
   This is not a typo an operator talked themselves into: the chart exposes no
   `auth.oidc.*` values, mounts no server config file and has no `extraVolumes`,
   so a deployment that reaches OIDC through `extraEnv` cannot satisfy the pin by

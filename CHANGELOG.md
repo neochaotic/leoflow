@@ -100,6 +100,31 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **BREAKING: an unflagged `clearTaskInstances` now previews, and is scoped to
+  failures (#1137).** Apache Airflow 3.2.1 declares `dry_run: bool = True` and
+  `only_failed: bool = True` on `ClearTaskInstancesBody`. leoflow defaulted both
+  the other way, so this request:
+
+  ```
+  POST /api/v2/dags/{id}/clearTaskInstances -d '{"dag_run_id":"r"}'
+  ```
+
+  previewed on Airflow and **executed** here, over every task instance named by
+  the request, including ones that had succeeded. Anything written against the
+  Airflow API, which is leoflow's declared compatibility target, sends exactly
+  that request. The divergence was known and recorded in the OpenAPI description
+  ("NOTE: Apache Airflow's equivalent defaults to true") rather than reconciled.
+
+  A missing `dry_run` now previews and a missing `only_failed` now restricts the
+  clear to failed task instances. Both explicit values still win, so
+  `"dry_run": false` executes and `"only_failed": false` widens exactly as before.
+
+  **What to change:** an API client that relied on an unflagged call executing
+  must send `"dry_run": false`, and one that relied on clearing successful task
+  instances must send `"only_failed": false`. The embedded UI is unaffected: all
+  three of its clear dialogs already send both fields explicitly. The OpenAPI
+  spec and the generated `pkg/client` carry the new defaults.
+
 - **`config.cors.allowedOrigins` is read by the chart at all (#1144).** The key
   shipped in `values.yaml`, documented as the API's CORS policy with a default of
   `["*"]`, and no template ever referenced it. Anything set there was silently

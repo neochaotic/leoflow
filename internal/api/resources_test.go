@@ -726,8 +726,11 @@ func TestClearOnlyFailedForwarded(t *testing.T) {
 		Tasks:         repo,
 	})
 
+	// dry_run is explicit here because an omitted one previews (#1137), and a
+	// preview never reaches the repository, so every assertion below would be
+	// vacuous without it.
 	rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/clearTaskInstances",
-		`{"dag_run_id":"r1","only_failed":true}`)
+		`{"dag_run_id":"r1","only_failed":true,"dry_run":false}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("clear only_failed = %d (%s)", rec.Code, rec.Body.String())
 	}
@@ -735,14 +738,18 @@ func TestClearOnlyFailedForwarded(t *testing.T) {
 		t.Error("only_failed=true not forwarded to repository")
 	}
 
-	repo.gotOnlyFailed = true // ensure the next call actually flips it back
+	// This half used to assert the opposite, locking leoflow's divergence from
+	// Airflow in place: an omitted only_failed cleared every named task instance,
+	// successful ones included. Airflow 3.2.1 declares only_failed=True, and the
+	// assertion is inverted rather than deleted so the default stays pinned.
+	repo.gotOnlyFailed = false // ensure the next call actually flips it
 	rec = authGet(srv, http.MethodPost, "/api/v2/dags/etl/clearTaskInstances",
-		`{"task_ids":["extract"],"dag_run_id":"r1"}`)
+		`{"task_ids":["extract"],"dag_run_id":"r1","dry_run":false}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("clear default = %d", rec.Code)
 	}
-	if repo.gotOnlyFailed {
-		t.Error("only_failed should default to false when omitted")
+	if !repo.gotOnlyFailed {
+		t.Error("only_failed should default to true when omitted, as Airflow does")
 	}
 }
 
@@ -863,24 +870,28 @@ func TestClearRunOnLatestVersion(t *testing.T) {
 		// Airflow's default: a clear reproduces the attempt it is clearing. Testing
 		// a fix is a new run, or an explicit run_on_latest_version=true.
 		name: "omitted pins the run, as Airflow does",
-		body: `{"dag_run_id":"r1"}`,
+		body: `{"dag_run_id":"r1","dry_run":false}`,
 		want: domain.ClearOptions{ResetDagRun: true, RunOnLatestVersion: false},
 	}, {
 		name: "false pins the run to the version it was created with",
-		body: `{"dag_run_id":"r1","run_on_latest_version":false}`,
+		body: `{"dag_run_id":"r1","run_on_latest_version":false,"dry_run":false}`,
 		want: domain.ClearOptions{ResetDagRun: true, RunOnLatestVersion: false},
 	}, {
 		name: "true is explicit and unchanged",
-		body: `{"dag_run_id":"r1","run_on_latest_version":true}`,
+		body: `{"dag_run_id":"r1","run_on_latest_version":true,"dry_run":false}`,
 		want: domain.ClearOptions{ResetDagRun: true, RunOnLatestVersion: true},
 	}, {
 		// The two decisions are independent: not re-opening the run says nothing
 		// about which version a later re-open would use.
 		name: "it is independent of reset_dag_runs",
-		body: `{"dag_run_id":"r1","reset_dag_runs":false,"run_on_latest_version":false}`,
+		body: `{"dag_run_id":"r1","reset_dag_runs":false,"run_on_latest_version":false,"dry_run":false}`,
 		want: domain.ClearOptions{ResetDagRun: false, RunOnLatestVersion: false},
 	}}
 
+	// Every body carries dry_run=false: these cases assert what reaches the
+	// repository as ClearOptions, and since #1137 an omitted dry_run previews and
+	// reaches nothing. The premise check below catches that, which is how this
+	// showed up.
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			srv, tasks := clearSrv(t)

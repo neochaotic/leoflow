@@ -761,7 +761,13 @@ components:
           type: array
           items: { type: string }
         dag_run_id: { type: string }
-        only_failed: { type: boolean, default: false }
+        only_failed:
+          type: boolean
+          default: true
+          description: >-
+            Restrict the clear to task instances in a failed state, matching
+            Apache Airflow. false widens it to every task instance named by the
+            request, including ones that succeeded.
         only_running: { type: boolean, default: false }
         reset_dag_runs: { type: boolean, default: true }
 

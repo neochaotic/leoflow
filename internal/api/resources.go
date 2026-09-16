@@ -661,7 +661,13 @@ func clearTaskInstancesHandler(repo TaskInstanceRepository, runs DagRunRepositor
 			AbortProblem(c, http.StatusBadRequest, "bad request", err.Error())
 			return
 		}
-		onlyFailed := body.OnlyFailed != nil && *body.OnlyFailed
+		// Airflow 3.2.1 declares only_failed=True and dry_run=True on
+		// ClearTaskInstancesBody. leoflow defaulted both the other way, so the same
+		// unflagged request that previews on Airflow executed here, over every named
+		// task instance including the ones that had succeeded (#1137). Compatibility
+		// with that API is the declared target, and the safe direction happens to be
+		// the same direction, so a nil field now means what Airflow means.
+		onlyFailed := body.OnlyFailed == nil || *body.OnlyFailed
 		// Expand the task set by the DAG topology when up/downstream is requested,
 		// then fan the same set across the target runs (current + past/future).
 		taskIDs := expandClearTasks(c, specs, body)
@@ -672,7 +678,7 @@ func clearTaskInstancesHandler(repo TaskInstanceRepository, runs DagRunRepositor
 		}
 		// The UI previews with dry_run=true before confirming; it expects the set of
 		// affected task instances back (TaskInstanceCollectionResponse), not a count.
-		if body.DryRun != nil && *body.DryRun {
+		if body.DryRun == nil || *body.DryRun {
 			c.JSON(http.StatusOK, taskInstanceCollectionDTO{TaskInstances: affected, TotalEntries: len(affected)})
 			return
 		}

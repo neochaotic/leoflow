@@ -27,13 +27,13 @@ import (
 // boot can reach it.
 //
 // It could not. buildPodInformer passed the PROCESS-lifetime context, and
-// cache.WaitForCacheSync returns only on sync or on that context's cancel — which
+// cache.WaitForCacheSync returns only on sync or on that context's cancel, which
 // happens at shutdown. So a cache that cannot sync held the boot goroutine before
 // startAPISide returned, and the HTTP and metrics listeners never bound. On a real
 // cluster that is a ServiceAccount without list/watch on pods: the control plane
 // serves gRPC, never binds /readyz, fails its liveness probe on the same port, and
 // is killed and restarted about every 70s with each cycle recorded as
-// `Completed exit=0` — a dependency failure that reports itself as success.
+// `Completed exit=0`: a dependency failure that reports itself as success.
 //
 // Forbidden is the faithful shape: the reflector retries it forever, so the cache
 // never syncs while every call still returns promptly.
@@ -45,7 +45,7 @@ func TestPodInformer_BootSurvivesACacheThatCannotSync(t *testing.T) {
 	})
 
 	// Shorten the production budget so the suite does not pay it. The assertion is
-	// that a deadline EXISTS and is honored — without one the call never returns,
+	// that a deadline EXISTS and is honored. Without one the call never returns,
 	// whatever this is set to.
 	restore := podInformerSyncTimeout
 	podInformerSyncTimeout = 150 * time.Millisecond
@@ -90,7 +90,7 @@ func TestPodInformer_BootSurvivesACacheThatCannotSync(t *testing.T) {
 // The whole safety argument for continuing boot with a cold cache is that the
 // cache is only cold for now: the deadline bounds the WAIT, not the informer.
 // Start hands the reflector the process context, so it stays in its retry
-// backoff, and HasSynced is read live by every consumer — so an operator who
+// backoff, and HasSynced is read live by every consumer, so an operator who
 // fixes the RBAC gets a warm read-path without restarting the control plane, and
 // the reaper settling gate (which holds on informerSynced) closes on its own.
 //

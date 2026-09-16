@@ -1213,7 +1213,7 @@ func runGatedTicker(ctx context.Context, name string, ticks <-chan time.Time, le
 }
 
 // podInformerSyncTimeout bounds the informer cache warm-up on the boot path. The
-// warm cache is an optimization — every consumer falls back to a live read — so
+// warm cache is an optimization (every consumer falls back to a live read), so
 // waiting longer than this buys nothing a running control plane cannot get on its
 // own, while waiting unbounded costs the HTTP and metrics listeners entirely
 // (#1083). A var so a test can shorten it; nothing changes it at runtime.
@@ -1236,7 +1236,7 @@ func buildPodInformer(ctx context.Context, cfg *config.ServerConfig, cs kubernet
 	// Bound the warm-up. This wait is on the boot path, ahead of startAPISide and
 	// therefore ahead of the HTTP and metrics listeners, and cache.WaitForCacheSync
 	// returns only on sync or on its context being canceled. Handed the process
-	// context — canceled at shutdown — a cache that cannot sync held boot forever:
+	// context, canceled at shutdown, a cache that cannot sync held boot forever:
 	// gRPC served, /readyz never bound, the liveness probe on that same port killed
 	// the container about every 70s, and each cycle was recorded as
 	// `Completed exit=0` because SIGTERM is handled cleanly. A dependency failure

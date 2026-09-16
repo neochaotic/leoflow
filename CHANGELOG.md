@@ -148,6 +148,51 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   booting to use it. Boot now waits a bounded 10s and continues, and the timeout
   line names the namespace, the budget, the likely cause and what it means for
   the reapers.
+- **An OIDC deployment that cannot complete a login now fails boot by name
+  (#1143).** `Verify` resolves a tenant on every login and fails closed when
+  `auth.oidc.tenant_claim` is unset or the claim value is not in
+  `auth.oidc.tenant_claims`. That is correct, but the rejection reached the user
+  as a generic 403 and its cause reached only the audit log, which in an
+  SSO-only deployment nobody can log in to read. The boot check already existed
+  to prevent exactly this ("fails boot with an actionable message rather than
+  starting a login flow that cannot complete") and checked issuer, client_id and
+  redirect_url, leaving out the two settings that decide whether a login can
+  succeed at all.
+
+  Both are now required when `auth.provider: oidc`. Every missing OIDC key is
+  reported in ONE error, because each boot failure on Kubernetes costs a values
+  edit, an upgrade and a rollout to learn the next one. When the tenant pin is
+  what is missing, the error also says where the map can come from: viper cannot
+  bind a map from an environment variable, so `auth.oidc.tenant_claims` loads
+  only from the YAML config file named by `LEOFLOW_CONFIG`, and an error that
+  named the key alone would send an env-only deployment to set a variable that
+  does nothing. It also names the way back (`auth.provider: jwt`) for an operator
+  who needs password login while SSO is being configured.
+
+  Upgrade impact: a deployment already on `auth.provider: oidc` without the pin
+  is rejecting 100% of single sign-on today, so no working login path breaks. The
+  one shape that changes is an install that leans on
+  `auth.oidc.break_glass_emails` alone, where password login for those addresses
+  works while SSO does not: it now fails boot until the pin is set or the
+  provider goes back to `jwt`, both of which the error names.
+
+- **An OIDC deployment with no source of roles says so at boot (#1143).** Roles
+  are IdP-authoritative: each login computes its roles from
+  `auth.oidc.role_mappings`, falls back to `auth.oidc.default_role`, and
+  reconciles the user's grants to EXACTLY that set. With neither configured the
+  set is always empty and an empty reconcile is a full clear, so a
+  pre-provisioned admin's first single sign-on strips the grants they were
+  provisioned with. The login succeeds, so nothing can fail closed on it; the
+  WARN at boot (on every process serving the API, including an api-only replica)
+  is the only signal before it happens. It was unreachable while the tenant pin
+  was unsatisfiable, because the login was rejected before reconciliation ran.
+
+  This is not a typo an operator talked themselves into: the chart exposes no
+  `auth.oidc.*` values, mounts no server config file and has no `extraVolumes`,
+  so a deployment that reaches OIDC through `extraEnv` cannot satisfy the pin by
+  any route the chart offers. Modelling `auth.oidc` in the chart (with a rendered
+  config ConfigMap for the two maps, and a render-time refusal when the pin is
+  empty) is the rest of #1143.
 
 - **A dbt folder that cannot be a task id is refused by name (#1114).** With
   `granularity: folder` the folder name becomes the task id verbatim, so a

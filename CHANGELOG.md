@@ -100,6 +100,22 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`config.cors.allowedOrigins` is read by the chart at all (#1144).** The key
+  shipped in `values.yaml`, documented as the API's CORS policy with a default of
+  `["*"]`, and no template ever referenced it. Anything set there was silently
+  ignored, and the server ran its own default of `["http://localhost:8080"]`, so
+  the chart documented a security-relevant default that was wrong in both
+  directions.
+
+  It now renders `LEOFLOW_SERVER_CORS_ALLOWED_ORIGINS`, comma-joined, the same
+  way `config.trustedProxies` does.
+
+  **The default is now `[]`, not `["*"]`.** Restoring the documented default
+  would have widened CORS to every origin on the next `helm upgrade` for every
+  existing deployment, silently. Empty renders nothing and leaves behaviour
+  exactly as it is today. If you had set this key expecting it to work, it now
+  does, so check the value you have.
+
 - **A control plane that cannot watch pods now boots, says why, and serves
   `/readyz` (#1083).** The pod informer's cache warm-up sat on the boot path
   holding the process context, and `WaitForCacheSync` returns only on sync or on

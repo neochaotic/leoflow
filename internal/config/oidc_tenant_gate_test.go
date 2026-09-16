@@ -83,3 +83,54 @@ func TestValidateOIDCAcceptsAUsableTenantPin(t *testing.T) {
 		t.Fatalf("Validate() = %v, want nil for a config that can complete a login", err)
 	}
 }
+
+// TestValidateOIDCNamesEveryMissingKeyAtOnce is the operator-experience half of
+// the gate. Every one of these keys is checked at boot, and a boot failure on a
+// Helm deployment costs a values edit, an upgrade and a rollout to discover the
+// next one. Reporting one key per boot turns first-time SSO setup into a chain
+// of CrashLoopBackOffs; the operator should see the whole remaining list at once.
+func TestValidateOIDCNamesEveryMissingKeyAtOnce(t *testing.T) {
+	c := oidcBase()
+	c.Auth.OIDC.ClientID = ""
+	c.Auth.OIDC.TenantClaim = ""
+	c.Auth.OIDC.TenantClaims = nil
+
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("Validate() = nil with client_id and both tenant keys unset, want error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "auth.oidc.client_id") {
+		t.Errorf("Validate() = %v, want it to name auth.oidc.client_id", err)
+	}
+	// "auth.oidc.tenant_claim" is a prefix of "auth.oidc.tenant_claims", so a
+	// Contains check cannot tell one key from two. Both are missing here, so both
+	// must be named: the count is what proves the second one is not hidden behind
+	// an early return.
+	if n := strings.Count(msg, "auth.oidc.tenant_claim"); n < 2 {
+		t.Errorf("Validate() = %v, want it to name both tenant keys (found %d)", err, n)
+	}
+}
+
+// TestValidateOIDCTenantPinErrorSaysWhereTheMapComesFrom is what keeps the gate
+// from being a dead end.
+//
+// tenant_claims is tagged mapstructure:"-" and is absent from serverDefaults, so
+// viper never binds it: decodeDottedOIDCMaps reads it out of the YAML config file
+// named by LEOFLOW_CONFIG, and that is its ONLY load path. An operator running
+// from env vars alone (the Helm chart ships no server config file) can therefore
+// satisfy every other OIDC key and still never satisfy this one by the route they
+// are using. An error that only names the key sends them to set an env var that
+// does nothing, so it has to name the route too.
+func TestValidateOIDCTenantPinErrorSaysWhereTheMapComesFrom(t *testing.T) {
+	c := oidcBase()
+	c.Auth.OIDC.TenantClaims = nil
+
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("Validate() = nil with tenant_claims unset, want error")
+	}
+	if !strings.Contains(err.Error(), "LEOFLOW_CONFIG") {
+		t.Errorf("Validate() = %v, want it to name LEOFLOW_CONFIG: the map has no env-var route", err)
+	}
+}

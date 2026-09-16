@@ -159,14 +159,29 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   redirect_url, leaving out the two settings that decide whether a login can
   succeed at all.
 
-  Both are now required when `auth.provider: oidc`, and the error names the key
-  and says what happens without it.
+  Both are now required when `auth.provider: oidc`. Every missing OIDC key is
+  reported in ONE error, because each boot failure on Kubernetes costs a values
+  edit, an upgrade and a rollout to learn the next one. When the tenant pin is
+  what is missing, the error also says where the map can come from: viper cannot
+  bind a map from an environment variable, so `auth.oidc.tenant_claims` loads
+  only from the YAML config file named by `LEOFLOW_CONFIG`, and an error that
+  named the key alone would send an env-only deployment to set a variable that
+  does nothing. It also names the way back (`auth.provider: jwt`) for an operator
+  who needs password login while SSO is being configured.
 
-  This state is the default under Helm rather than a typo: `tenant_claims` is a
-  map, viper cannot bind a map from an environment variable, and the chart ships
-  no config file to carry one, so an OIDC deployment installed from the chart
-  today rejects every login. Making the chart able to express it is tracked
-  separately in #1143.
+  Upgrade impact: a deployment already on `auth.provider: oidc` without the pin
+  is rejecting 100% of single sign-on today, so no working login path breaks. The
+  one shape that changes is an install that leans on
+  `auth.oidc.break_glass_emails` alone, where password login for those addresses
+  works while SSO does not: it now fails boot until the pin is set or the
+  provider goes back to `jwt`, both of which the error names.
+
+  This is not a typo an operator talked themselves into: the chart exposes no
+  `auth.oidc.*` values, mounts no server config file and has no `extraVolumes`,
+  so a deployment that reaches OIDC through `extraEnv` cannot satisfy the pin by
+  any route the chart offers. Modelling `auth.oidc` in the chart (with a rendered
+  config ConfigMap for the two maps, and a render-time refusal when the pin is
+  empty) is the rest of #1143.
 
 - **A dbt folder that cannot be a task id is refused by name (#1114).** With
   `granularity: folder` the folder name becomes the task id verbatim, so a

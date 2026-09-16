@@ -209,9 +209,15 @@ config key (e.g. `auth.oidc.role_mappings`) is config-file-only.
 ### OIDC / SSO (`auth.oidc.*`)
 
 Read only when `LEOFLOW_AUTH_PROVIDER=oidc`, which is Pro-gated (`ui.edition:
-pro`) and fails boot closed unless `issuer`, `client_id`, and `redirect_url` are
-all set. Verification is keyless — the ID token is validated against the
-issuer's public JWKS — so no secret is stored for the verify path.
+pro`) and fails boot closed unless `issuer`, `client_id`, `redirect_url` **and
+the tenant pin (`tenant_claim` + `tenant_claims`)** are all set. The pin is in
+that set because every login resolves a tenant from it and an absent or unmapped
+claim value is a 403 that never falls back to `default`, so a deployment without
+it boots green and rejects 100% of logins ([#1143](https://github.com/neochaotic/leoflow/issues/1143)).
+`tenant_claims` is a map, so it loads only from the YAML config file named by
+`LEOFLOW_CONFIG`; no env var can carry it. Verification is keyless (the ID
+token is validated against the issuer's public JWKS), so no secret is stored for
+the verify path.
 
 No `auth.oidc.*` key has a modeled Helm value today. Every env-bindable key in
 this section (everything except the two maps) is set through the chart's
@@ -228,8 +234,8 @@ above the tables).
 | `LEOFLOW_AUTH_OIDC_GROUPS_CLAIM` | `groups` | Pro | The ID-token claim carrying the user's IdP groups; its values drive `role_mappings`. |
 | `auth.oidc.role_mappings` | _(empty map)_ | Pro | Maps an IdP group value → an existing Leoflow role name. **Default-DENY**: an unmapped group grants no role. YAML config file only. The chart ships none today, so this has no route through Helm ([#1143](https://github.com/neochaotic/leoflow/issues/1143)). |
 | `LEOFLOW_AUTH_OIDC_DEFAULT_ROLE` | _(empty)_ | Pro | When an authenticated user resolves to zero mapped roles and this is set, grants this single role (advised: a read-only role such as `viewer`). Empty keeps strict default-deny. Must name an existing DB role for the resolved tenant. |
-| `LEOFLOW_AUTH_OIDC_TENANT_CLAIM` | _(empty)_ | Pro | Which IdP claim identifies the tenant: `tid` (Entra) or `hd` (Google Workspace). |
-| `auth.oidc.tenant_claims` | _(empty map)_ | Pro | Maps a `tenant_claim` value → a Leoflow tenant name. A value not present is rejected (403); the login never falls back to `default`. YAML config file only. The chart ships none today, so this has no route through Helm ([#1143](https://github.com/neochaotic/leoflow/issues/1143)). |
+| `LEOFLOW_AUTH_OIDC_TENANT_CLAIM` | _(empty)_ | Pro | **Required with `provider: oidc`** (boot fails otherwise). Which IdP claim identifies the tenant: `tid` (Entra) or `hd` (Google Workspace). |
+| `auth.oidc.tenant_claims` | _(empty map)_ | Pro | **Required with `provider: oidc`, with at least one entry** (boot fails otherwise). Maps a `tenant_claim` value → a Leoflow tenant name. A value not present is rejected (403); the login never falls back to `default`. Config file only (a map does not bind from an env var), read from the path in `LEOFLOW_CONFIG`. |
 | `LEOFLOW_AUTH_OIDC_ALLOWED_EMAIL_DOMAINS` | _(empty)_ | Pro | Login-level allowlist layered on TOP of the `tid`/`hd` tenant pin (not the pin itself). Empty imposes no domain restriction. Non-empty admits a login only when the verified email's domain is in the list. A list, set as a comma-separated env var. |
 | `LEOFLOW_AUTH_OIDC_BREAK_GLASS_EMAILS` | _(empty)_ | Pro | Allowlist of local password logins permitted while provider is `oidc`; every other password login is rejected (SSO-only). A list, set as a comma-separated env var. |
 | `LEOFLOW_AUTH_OIDC_JIT_PROVISIONING` | `false` | Pro | Create a user row on first OIDC login when none matches. Off by default (pre-provisioned user required); when on, the new row is granted the roles from `role_mappings`. |

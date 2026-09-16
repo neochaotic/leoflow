@@ -993,11 +993,23 @@ func (c *ServerConfig) validateProvider() error {
 }
 
 // validateOIDC enforces the fail-closed prerequisites for auth.provider: oidc
-// (D7): the Pro edition, and the three fields the login flow cannot run without
-// (issuer, client_id, redirect_url). The issuer must be https so discovery and
-// JWKS are fetched over TLS (keyless verify, ADR 0035). A misconfigured OIDC
-// deployment fails boot with an actionable message rather than starting a login
-// flow that cannot complete.
+// (D7): the Pro edition, and the fields the login flow cannot run without
+// (issuer, client_id, redirect_url, and the tenant pin). The issuer must be
+// https so discovery and JWKS are fetched over TLS (keyless verify, ADR 0035).
+// A misconfigured OIDC deployment fails boot with an actionable message rather
+// than starting a login flow that cannot complete.
+//
+// The tenant pin belongs in this set because it decides whether ANY login can
+// succeed: Verify resolves a tenant on every login and fails closed when
+// tenant_claim is unset or the claim value is not in tenant_claims
+// (internal/oidc/verify.go). That rejection is correct, but it reaches the user
+// as a generic 403 and its cause reaches only the audit log, which in an
+// SSO-only deployment nobody can log in to read (#1143).
+//
+// Every missing key is reported in one error on purpose. Each boot failure on a
+// Kubernetes deployment costs a values edit, an upgrade and a rollout to learn
+// the next one, so reporting them one at a time turns first-time SSO setup into
+// a chain of CrashLoopBackOffs.
 func (c *ServerConfig) validateOIDC() error {
 	if c.UI.Edition != "pro" {
 		return errors.New("auth.provider: oidc requires the Pro edition (set ui.edition: pro)")
@@ -1012,35 +1024,35 @@ func (c *ServerConfig) validateOIDC() error {
 	if c.Auth.OIDC.RedirectURL == "" {
 		missing = append(missing, "auth.oidc.redirect_url")
 	}
+	if c.Auth.OIDC.TenantClaim == "" {
+		missing = append(missing, "auth.oidc.tenant_claim")
+	}
+	if len(c.Auth.OIDC.TenantClaims) == 0 {
+		missing = append(missing, "auth.oidc.tenant_claims")
+	}
 	if len(missing) > 0 {
-		return fmt.Errorf("auth.provider: oidc requires %s to be set", strings.Join(missing, ", "))
+		return fmt.Errorf("auth.provider: oidc requires %s to be set%s", strings.Join(missing, ", "), tenantPinHint(c))
 	}
 	if !strings.HasPrefix(c.Auth.OIDC.Issuer, "https://") {
 		return fmt.Errorf("auth.oidc.issuer must be an https:// URL (got %q)", c.Auth.OIDC.Issuer)
 	}
-	// The tenant pin decides whether any login can succeed, so it belongs in the
-	// same boot check as the fields above. Verify resolves a tenant on every
-	// login and fails closed when the claim is unset or its value is unmapped
-	// (internal/oidc/verify.go), which is correct, but the rejection reaches the
-	// user as a generic 403 and its cause reaches only the audit log. In an
-	// SSO-only deployment nobody can log in to read that log, so an operator who
-	// omits either setting has no reachable signal at all (#1143).
-	//
-	// This is the default state under Helm rather than a typo: tenant_claims is
-	// a map, viper cannot bind a map from an env var, and the chart ships no
-	// config file to carry one. Failing boot by name is what turns that into
-	// something an operator can act on.
-	if c.Auth.OIDC.TenantClaim == "" {
-		return errors.New("auth.provider: oidc requires auth.oidc.tenant_claim " +
-			"(the claim pinning a login to a tenant, commonly tid or hd); " +
-			"without it every login is rejected with tenant_not_allowed")
-	}
-	if len(c.Auth.OIDC.TenantClaims) == 0 {
-		return fmt.Errorf("auth.provider: oidc requires auth.oidc.tenant_claims to map at least one "+
-			"value of %q to a Leoflow tenant; an unmapped value is rejected, so an empty map "+
-			"rejects every login", c.Auth.OIDC.TenantClaim)
-	}
 	return validateRedirectURL(c.Auth.OIDC.RedirectURL)
+}
+
+// tenantPinHint explains the tenant pin when one of its two keys is missing, and
+// returns "" otherwise. It is the whole remedy in one line, because this error is
+// printed before the logger exists and is the only thing a crash-looping
+// container leaves behind: what breaks without the pin, what to set, the single
+// route that can carry the map (env vars cannot), and how to restore password
+// login while the SSO configuration is being worked out.
+func tenantPinHint(c *ServerConfig) string {
+	if c.Auth.OIDC.TenantClaim != "" && len(c.Auth.OIDC.TenantClaims) > 0 {
+		return ""
+	}
+	return ". The tenant pin decides whether any login can succeed: a claim value that is absent or not mapped is rejected with 403 (audited as tenant_not_allowed) and never falls back to the default tenant, so without it every SSO login fails. " +
+		"The pin is two settings: auth.oidc.tenant_claim names the claim carrying the tenant (tid on Entra, hd on Google Workspace), and auth.oidc.tenant_claims maps each value of it you accept to a Leoflow tenant. " +
+		"auth.oidc.tenant_claims is a map, so it loads ONLY from the YAML config file named by LEOFLOW_CONFIG; no LEOFLOW_AUTH_OIDC_* environment variable can carry it. " +
+		"To keep serving password logins while SSO is configured, set auth.provider: jwt"
 }
 
 // validateRedirectURL requires the OIDC callback URL to use https so the

@@ -392,6 +392,20 @@ spec:
             {{- end }}
           {{- $probePort := "http" }}
           {{- if eq .role "scheduler" }}{{ $probePort = "metrics" }}{{ end }}
+          {{- if .ctx.Values.probes.startup.enabled }}
+          # Gate the other two probes on boot completing. Liveness and readiness
+          # both target the API listener, which binds at the END of boot, so
+          # without this the kubelet answers a slow or stuck boot by restarting
+          # the container: the loop #1083 produced, where every cycle exits 0 and
+          # names nothing. A startupProbe makes that state "not ready" instead,
+          # and keeps the restart for a boot that overruns the whole budget.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: {{ $probePort }}
+            periodSeconds: {{ .ctx.Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .ctx.Values.probes.startup.failureThreshold }}
+          {{- end }}
           readinessProbe:
             httpGet:
               path: /readyz

@@ -136,6 +136,19 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   instances must send `"only_failed": false`. The embedded UI is unaffected: all
   three of its clear dialogs already send both fields explicitly. The OpenAPI
   spec and the generated `pkg/client` carry the new defaults.
+- **A slow boot is no longer a restart loop: the control plane gets a
+  `startupProbe`.** Liveness and readiness both target the API listener, which
+  binds at the END of boot, so the kubelet's answer to a boot that was slow or
+  stuck was to kill and restart the container. That is what turned #1083 into a
+  70-second loop whose every cycle was recorded as `Completed exit=0`, and it
+  would do the same for any future boot-path dependency.
+
+  Kubernetes suppresses both liveness and readiness until a startup probe
+  succeeds, so that state now reads as "not ready yet". The budget is
+  `periodSeconds * failureThreshold` = 120s, deliberately larger than the
+  liveness budget it replaces (10 + 3*20 = 70s); a boot that overruns it still
+  restarts, which is the honest semantic. Tunable under `probes.startup`, and
+  `probes.startup.enabled: false` returns to liveness policing the boot.
 
 - **`config.cors.allowedOrigins` is read by the chart at all (#1144).** The key
   shipped in `values.yaml`, documented as the API's CORS policy with a default of

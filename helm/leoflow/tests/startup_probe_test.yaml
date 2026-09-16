@@ -1,0 +1,63 @@
+suite: startup probe (a slow boot must not be a restart loop)
+templates:
+  # secret.yaml is in scope so the deployment's checksum/secret include resolves;
+  # helm-unittest only loads the templates named here.
+  - deployment.yaml
+  - secret.yaml
+release:
+  name: leoflow
+set:
+  database.url: postgres://h/d
+  redis.url: redis://h/0
+  auth.jwtSecret: jwt
+tests:
+  # #1083 was a boot-path dependency that withheld the HTTP listener. Liveness
+  # and readiness both point at that listener, so the kubelet's answer to a slow
+  # boot was to restart the container, which is the wrong one: each cycle was
+  # recorded as `Completed exit=0` and the cause was never surfaced. A
+  # startupProbe suppresses liveness and readiness until boot finishes, so a slow
+  # boot becomes "not ready" instead of "killed and restarted", and only a boot
+  # that exceeds the whole budget restarts.
+  - it: renders a startupProbe on the same endpoint liveness uses
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.path
+          value: /healthz
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.port
+          value: http
+
+  - it: the startup budget is larger than the liveness budget it replaces
+    template: deployment.yaml
+    # The whole point. With liveness at 10 + 3*20 = 70s, a startup budget at or
+    # below that would leave the restart loop exactly where it was.
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.periodSeconds
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.failureThreshold
+          value: 24
+
+  - it: the scheduler role probes the port it actually serves
+    set:
+      split.enabled: true
+      # The chart refuses split unless every replica can read the same task logs,
+      # so the split case has to satisfy that guard before it can assert anything
+      # about probes. Same shape ha_posture_test.yaml uses.
+      logs.persistence.accessMode: ReadWriteMany
+    template: deployment.yaml
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.port
+          value: metrics
+
+  - it: can be turned off for an operator who wants the old behaviour
+    template: deployment.yaml
+    set:
+      probes.startup.enabled: false
+    asserts:
+      - isNull:
+          path: spec.template.spec.containers[0].startupProbe

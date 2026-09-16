@@ -100,6 +100,28 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A control plane that cannot watch pods now boots, says why, and serves
+  `/readyz` (#1083).** The pod informer's cache warm-up sat on the boot path
+  holding the process context, and `WaitForCacheSync` returns only on sync or on
+  that context being canceled, which happens at shutdown. So a cache that could
+  not sync held boot ahead of the HTTP and metrics listeners.
+
+  On a cluster that is worse than a hang. gRPC serves, `8080` and `9090` never
+  bind, and liveness points at `8080`, so the kubelet kills the container about
+  every 70 seconds, it restarts, blocks again, and each cycle is recorded as
+  `Completed exit=0`, because SIGTERM is handled cleanly. A dependency failure
+  that reports itself as a success, while `/readyz` answers connection refused
+  instead of naming the problem. The usual trigger is a ServiceAccount without
+  `list`/`watch` on pods in the task namespace, or an unreachable API server.
+
+  The warm cache was always an optimization: `CachedPodActive` gates on
+  `HasSynced` and every consumer falls back to a live read, and `HasSynced` stays
+  live so a cache that warms later (after an RBAC fix) is picked up. That
+  fallback was correct and unreachable, because the process could not finish
+  booting to use it. Boot now waits a bounded 10s and continues, and the timeout
+  line names the namespace, the budget, the likely cause and what it means for
+  the reapers.
+
 - **A dbt folder that cannot be a task id is refused by name (#1114).** With
   `granularity: folder` the folder name becomes the task id verbatim, so a
   folder like `my folder!` produced an unusable id. It was already caught — but

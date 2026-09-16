@@ -194,6 +194,30 @@ variable is an operator's own business.
 {{- end -}}
 
 {{- /*
+config.cors.allowedOrigins shipped with a documented default of `["*"]` while no
+template read it (#1144), so that exact value is what an install started from
+`helm show values` carries verbatim in its own values file while the server has
+actually been running its own default (http://localhost:8080). Now that the key
+renders, accepting the wildcard would take such a deployment to "every origin
+allowed" on the next `helm upgrade`, with nothing in its values changing to show
+for it. Refuse at render time: that is the one channel a GitOps sync surfaces,
+since Argo CD never renders NOTES.txt. The UI is served same-origin with the
+API, so the wildcard buys nothing an explicit origin list does not.
+*/ -}}
+{{- $corsOrigins := .Values.config.cors.allowedOrigins | default list -}}
+{{- /*
+Normalise first: `--set config.cors.allowedOrigins=*` yields a bare string, and
+sprig's `join` returns a scalar unchanged, so that shape reaches the env var as a
+working wildcard while `has` on a non-slice would never see it.
+*/ -}}
+{{- if not (kindIs "slice" $corsOrigins) -}}
+{{- $corsOrigins = list $corsOrigins -}}
+{{- end -}}
+{{- if has "*" $corsOrigins -}}
+{{- fail "config.cors.allowedOrigins must not contain \"*\": that lets a page on any origin read this API's responses cross-origin, and no template read this key before #1144, so rendering the wildcard would silently widen an install that has been running the server default (http://localhost:8080). List the exact origins the UI is served from. Leoflow serves its UI same-origin with the API, so most deployments need no entry at all and should leave the list empty. If you want the wildcard deliberately, set LEOFLOW_SERVER_CORS_ALLOWED_ORIGINS through extraEnv." -}}
+{{- end -}}
+
+{{- /*
 Render one "all" Deployment (default, byte-identical to the pre-0049 monolith) or,
 when split.enabled, separate api and scheduler Deployments — ADR 0049. The
 scheduler is always a single leader (ADR 0009), so its replica count is pinned to 1

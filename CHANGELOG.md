@@ -116,6 +116,17 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   exactly as it is today. If you had set this key expecting it to work, it now
   does, so check the value you have.
 
+  **`"*"` is now rejected at render time.** An install that started from
+  `helm show values` carries the old documented `["*"]` verbatim in its own
+  values file while the server has actually been running `http://localhost:8080`,
+  so simply honouring the key would still widen that deployment to every origin
+  on upgrade with nothing in its values changing to show for it. The chart fails
+  the render instead, which is the one channel a GitOps sync surfaces. Set
+  `LEOFLOW_SERVER_CORS_ALLOWED_ORIGINS` through `extraEnv` if you want the
+  wildcard deliberately. The reference documentation claimed list-valued keys
+  could not be set from a single env var, which was the belief that produced this
+  bug; it now states the comma-separated form that viper actually supports.
+
 - **A control plane that cannot watch pods now boots, says why, and serves
   `/readyz` (#1083).** The pod informer's cache warm-up sat on the boot path
   holding the process context, and `WaitForCacheSync` returns only on sync or on

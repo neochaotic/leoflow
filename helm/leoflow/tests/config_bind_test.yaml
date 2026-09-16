@@ -130,3 +130,40 @@ tests:
             value: https://app.example.com,https://admin.example.com
           any: true
 
+  # `["*"]` was the documented default of this key while no template read it, so
+  # it is the one value an existing install is most likely to be carrying: anyone
+  # who started from `helm show values` has it verbatim in their own values file
+  # while actually running the server default (http://localhost:8080). Rendering
+  # it would take that deployment to "every origin allowed" on the next upgrade
+  # with nothing in their values changing to show for it. Refuse at render time
+  # instead, which is the only channel a GitOps sync surfaces (NOTES.txt is not
+  # rendered by Argo CD), and point at extraEnv for the deliberate case.
+  - it: config.cors.allowedOrigins containing "*" fails the render
+    template: deployment.yaml
+    set:
+      config.cors.allowedOrigins:
+        - "*"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'config\.cors\.allowedOrigins must not contain "\*"'
+
+  - it: the wildcard guard also catches "*" mixed into a list of real origins
+    template: deployment.yaml
+    set:
+      config.cors.allowedOrigins:
+        - https://app.example.com
+        - "*"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'config\.cors\.allowedOrigins must not contain "\*"'
+
+  # `--set config.cors.allowedOrigins=*` yields a bare string, not a list. sprig's
+  # `join` accepts a scalar and returns it unchanged, so this shape reaches the
+  # env var as a working wildcard: the guard has to normalise before it looks.
+  - it: the wildcard guard is not bypassed by a scalar value
+    template: deployment.yaml
+    set:
+      config.cors.allowedOrigins: "*"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'config\.cors\.allowedOrigins must not contain "\*"'

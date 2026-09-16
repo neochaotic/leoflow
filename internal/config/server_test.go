@@ -242,6 +242,13 @@ func validOIDCConfig() *ServerConfig {
 	c.Auth.OIDC.Issuer = "https://idp.example.com"
 	c.Auth.OIDC.ClientID = "client-123"
 	c.Auth.OIDC.RedirectURL = "https://app.example.com/api/v2/auth/oidc/callback"
+	// The tenant pin is part of a working configuration, not an extra. Verify
+	// resolves a tenant on every login and fails closed when the claim is unset
+	// or unmapped, so a config without these two rejects 100% of logins (#1143).
+	// This helper used to omit them, which meant "valid" here described a
+	// deployment nobody could log in to.
+	c.Auth.OIDC.TenantClaim = "tid"
+	c.Auth.OIDC.TenantClaims = map[string]string{"t-123": "default"}
 	return c
 }
 

@@ -148,6 +148,25 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   booting to use it. Boot now waits a bounded 10s and continues, and the timeout
   line names the namespace, the budget, the likely cause and what it means for
   the reapers.
+- **An OIDC deployment that cannot complete a login now fails boot by name
+  (#1143).** `Verify` resolves a tenant on every login and fails closed when
+  `auth.oidc.tenant_claim` is unset or the claim value is not in
+  `auth.oidc.tenant_claims`. That is correct, but the rejection reached the user
+  as a generic 403 and its cause reached only the audit log, which in an
+  SSO-only deployment nobody can log in to read. The boot check already existed
+  to prevent exactly this ("fails boot with an actionable message rather than
+  starting a login flow that cannot complete") and checked issuer, client_id and
+  redirect_url, leaving out the two settings that decide whether a login can
+  succeed at all.
+
+  Both are now required when `auth.provider: oidc`, and the error names the key
+  and says what happens without it.
+
+  This state is the default under Helm rather than a typo: `tenant_claims` is a
+  map, viper cannot bind a map from an environment variable, and the chart ships
+  no config file to carry one, so an OIDC deployment installed from the chart
+  today rejects every login. Making the chart able to express it is tracked
+  separately in #1143.
 
 - **A dbt folder that cannot be a task id is refused by name (#1114).** With
   `granularity: folder` the folder name becomes the task id verbatim, so a

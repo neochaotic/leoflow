@@ -1018,6 +1018,28 @@ func (c *ServerConfig) validateOIDC() error {
 	if !strings.HasPrefix(c.Auth.OIDC.Issuer, "https://") {
 		return fmt.Errorf("auth.oidc.issuer must be an https:// URL (got %q)", c.Auth.OIDC.Issuer)
 	}
+	// The tenant pin decides whether any login can succeed, so it belongs in the
+	// same boot check as the fields above. Verify resolves a tenant on every
+	// login and fails closed when the claim is unset or its value is unmapped
+	// (internal/oidc/verify.go), which is correct, but the rejection reaches the
+	// user as a generic 403 and its cause reaches only the audit log. In an
+	// SSO-only deployment nobody can log in to read that log, so an operator who
+	// omits either setting has no reachable signal at all (#1143).
+	//
+	// This is the default state under Helm rather than a typo: tenant_claims is
+	// a map, viper cannot bind a map from an env var, and the chart ships no
+	// config file to carry one. Failing boot by name is what turns that into
+	// something an operator can act on.
+	if c.Auth.OIDC.TenantClaim == "" {
+		return errors.New("auth.provider: oidc requires auth.oidc.tenant_claim " +
+			"(the claim pinning a login to a tenant, commonly tid or hd); " +
+			"without it every login is rejected with tenant_not_allowed")
+	}
+	if len(c.Auth.OIDC.TenantClaims) == 0 {
+		return fmt.Errorf("auth.provider: oidc requires auth.oidc.tenant_claims to map at least one "+
+			"value of %q to a Leoflow tenant; an unmapped value is rejected, so an empty map "+
+			"rejects every login", c.Auth.OIDC.TenantClaim)
+	}
 	return validateRedirectURL(c.Auth.OIDC.RedirectURL)
 }
 

@@ -1212,6 +1212,13 @@ func runGatedTicker(ctx context.Context, name string, ticks <-chan time.Time, le
 	}
 }
 
+// podInformerSyncTimeout bounds the informer cache warm-up on the boot path. The
+// warm cache is an optimization — every consumer falls back to a live read — so
+// waiting longer than this buys nothing a running control plane cannot get on its
+// own, while waiting unbounded costs the HTTP and metrics listeners entirely
+// (#1083). A var so a test can shorten it; nothing changes it at runtime.
+var podInformerSyncTimeout = 10 * time.Second
+
 // buildPodInformer constructs and starts the shared pod informer for the
 // scheduler read-path (PR-10), returning nil when this process must NOT watch
 // pods: the api-only role (ADR 0049 — the sibling scheduler process owns the
@@ -1226,9 +1233,35 @@ func buildPodInformer(ctx context.Context, cfg *config.ServerConfig, cs kubernet
 	}
 	pi := executor.NewPodInformer(cs, cfg.Executor.TaskNamespace)
 	pi.Start(ctx)
-	if pi.WaitForCacheSync(ctx) {
+	// Bound the warm-up. This wait is on the boot path, ahead of startAPISide and
+	// therefore ahead of the HTTP and metrics listeners, and cache.WaitForCacheSync
+	// returns only on sync or on its context being canceled. Handed the process
+	// context — canceled at shutdown — a cache that cannot sync held boot forever:
+	// gRPC served, /readyz never bound, the liveness probe on that same port killed
+	// the container about every 70s, and each cycle was recorded as
+	// `Completed exit=0` because SIGTERM is handled cleanly. A dependency failure
+	// that reports itself as a success (#1083). The usual cause is a ServiceAccount
+	// without list/watch on pods in the task namespace, which the reflector retries
+	// forever.
+	//
+	// Not syncing is already survivable by design: CachedPodActive gates on
+	// HasSynced and consumers keep their live read paths, and HasSynced stays live
+	// so a cache that warms later (an RBAC fix) is picked up. That fallback was
+	// correct and unreachable; the deadline is what makes it reachable.
+	syncCtx, cancel := context.WithTimeout(ctx, podInformerSyncTimeout)
+	defer cancel()
+	switch {
+	case pi.WaitForCacheSync(syncCtx):
 		logger.Info("pod informer cache synced; reaper/reconciler read-path warm", "namespace", cfg.Executor.TaskNamespace)
-	} else {
+	case errors.Is(syncCtx.Err(), context.DeadlineExceeded):
+		// Say the cause, not just the symptom: without this line the operator has a
+		// readiness failure and a klog line from a vendored library to correlate.
+		logger.Warn("pod informer cache did not sync within the boot budget; continuing with live reads",
+			"namespace", cfg.Executor.TaskNamespace,
+			"budget", podInformerSyncTimeout,
+			"likely_cause", "the ServiceAccount cannot list/watch pods in this namespace, or the Kubernetes API is unreachable",
+			"effect", "reapers and the reconciler read pods live; no reap is authorized from a cold cache")
+	default:
 		logger.Warn("pod informer cache did not sync before shutdown; reapers use live reads until it warms")
 	}
 	return pi

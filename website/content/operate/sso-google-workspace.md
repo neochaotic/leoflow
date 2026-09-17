@@ -164,9 +164,11 @@ the server log, so check it first when SSO looks dead:
   grants.
 - **discovery timed out**: the pod could not fetch
   `https://accounts.google.com/.well-known/openid-configuration` within 15
-  seconds. The connection was accepted, so something is holding the request open:
-  an egress proxy, a NetworkPolicy dropping the response, an intercepting TLS
-  middlebox.
+  seconds. The error narrows this to the failures that wait rather than refuse
+  (a refused connection or an unknown host both fail fast instead): a
+  NetworkPolicy or firewall that drops egress instead of rejecting it, a name
+  that never resolves, an egress proxy or intercepting TLS middlebox holding the
+  request open, or an issuer that accepts the connection and never answers.
 
 Boot fails outright, with the missing keys named in one message, when `issuer`,
 `clientId`, `redirectUrl` or the tenant pin are absent.

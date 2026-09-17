@@ -288,3 +288,16 @@ Read anywhere in this ADR, "403" now means "rejected, fail-closed, audited". The
 credential path (`POST /auth/token`, including break-glass) is unchanged and
 still answers `problem+json`: it is an API call made by the login page's script,
 not a navigation.
+
+## Amendment (2026-09-17): the Helm gap the first amendment named is now closed
+
+The first amendment on this page, the one that withdrew D9's claim about the
+slice leaves, says "'Helm-values driven' was never true of either [map]," tracked
+the gap as #1143, and left it open. #1159 closes it:
+`helm/leoflow/templates/oidc-config.yaml` now renders `auth.oidc.tenantClaims`
+and `auth.oidc.roleMappings` into a mounted ConfigMap (the file the two
+dotted-key maps still need, per D9's surviving claim that they are
+config-file-only), and `LEOFLOW_CONFIG` is pointed at it. A Helm install can set
+both settings today; see
+[SSO with Google Workspace](/operate/sso-google-workspace/) and
+`helm/leoflow/examples/values-oidc-google.yaml` for the resulting values shape.

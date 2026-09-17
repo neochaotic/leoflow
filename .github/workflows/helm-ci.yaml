@@ -281,57 +281,10 @@ jobs:
             --as=system:serviceaccount:leoflow:leoflow
 
       # Upgrade smoke: re-apply the same release with a bumped value (the loop
-      # interval) to prove rolling updates roll cleanly. When OCI chart
-      # CROSS-VERSION UPGRADE (#1142, and #143's acceptance now that chart
-      # publishing has landed). The in-place step below upgrades HEAD to HEAD,
-      # which can never see a resource-adoption break: those only happen when a
-      # name that already exists in a live release starts being rendered by a
-      # different mechanism.
-      #
-      # That is not hypothetical. The 0.4.6 chart delivers the control plane's
-      # credentials through a Helm HOOK, and Helm stamps ownership metadata only
-      # on main-manifest resources, never in execHook. Measured against the
-      # released chart on a live cluster: the live Secret carries
-      # `app.kubernetes.io/managed-by: Helm` and NO `meta.helm.sh/release-name`.
-      # So promoting that same name into the manifest aborts every upgrade with
-      # "exists and cannot be imported into the current release: invalid
-      # ownership metadata", for the majority install path, while fixing the
-      # minority one. #1142 avoids it with a new name; this leg is what keeps the
-      # next contributor from reintroducing it.
-      - name: helm upgrade from the last released chart (adoption break guard)
-        run: |
-          set -euo pipefail
-          helm uninstall leoflow -n leoflow --wait
-          # No pinned version: the newest chart in the registry IS the previous
-          # release from this PR's point of view, and a pin here would go stale
-          # silently the first time nobody remembered to bump it.
-          repo="oci://ghcr.io/${{ github.repository_owner }}/charts/leoflow"
-          prev="$(helm show chart "$repo" | awk '/^version:/{print $2}')"
-          echo "installing last released chart ${prev}, then upgrading to HEAD"
-          # Released images on purpose: the point is a realistic previous release,
-          # not HEAD's binaries wearing an old chart. Same in-cluster addresses
-          # and the same required values as the install step above.
-          helm install leoflow "$repo" --version "${prev}" -n leoflow \
-            --set database.url='postgres://leoflow:leoflow@postgres:5432/leoflow?sslmode=disable' \
-            --set redis.url='redis://redis:6379/0' \
-            --set auth.jwtSecret=ci-jwt-secret \
-            --set 'secretKey=leoflow-helm-ci-secret-key-32by!' \
-            --set agentTLS.enabled=true \
-            --set database.caConfigMap=leoflow-db-ca-ci \
-            --set bootstrap.password=ci-admin \
-            --wait --timeout 300s
-          echo "upgrading to HEAD"
-          # --reuse-values keeps the released install's settings; the image
-          # overrides point at the images this job built and loaded into kind,
-          # because no registry has an image for an unreleased version.
-          helm upgrade leoflow helm/leoflow -n leoflow --reuse-values \
-            --set image.repository=leoflow-server --set image.tag=ci \
-            --set image.pullPolicy=IfNotPresent \
-            --set migrations.image.repository=leoflow-migrate --set migrations.image.tag=ci \
-            --set migrations.image.pullPolicy=IfNotPresent \
-            --wait --timeout 300s
-          kubectl -n leoflow rollout status deploy/leoflow --timeout=180s
-
+      # interval) to prove rolling updates roll cleanly. The cross-version leg,
+      # the other half of #143's acceptance, runs at the END of this job: it has
+      # to uninstall the release to install an older chart, and every assertion
+      # between the install above and this point is written against THIS release.
       - name: helm upgrade smoke (in-place)
         run: |
           helm upgrade leoflow helm/leoflow -n leoflow --reuse-values \
@@ -375,6 +328,98 @@ jobs:
             echo "/readyz never responded after helm upgrade" >&2
             exit 1
           fi
+
+      # CROSS-VERSION UPGRADE (#1142, and #143's acceptance now that chart
+      # publishing has landed). The in-place step above upgrades HEAD to HEAD,
+      # which by construction can never see a resource-adoption break: those
+      # happen only when a name that already exists in a live release starts
+      # being rendered by a different mechanism.
+      #
+      # That is not hypothetical. The 0.4.6 chart delivers the control plane's
+      # credentials through a Helm HOOK, and Helm stamps ownership metadata only
+      # on main-manifest resources, never in execHook. Measured against the
+      # released chart on a live cluster: the live Secret carries
+      # `app.kubernetes.io/managed-by: Helm` and NO `meta.helm.sh/release-name`.
+      # Promoting that same name into the manifest therefore aborts every upgrade
+      # with "exists and cannot be imported into the current release: invalid
+      # ownership metadata", for the majority install path, while fixing the
+      # minority one. #1142 avoids it with a new name; this leg is what keeps the
+      # next contributor from reintroducing it.
+      #
+      # LAST STEP IN THE JOB, deliberately. It uninstalls the release to put an
+      # older chart in its place, and `helm uninstall` takes the auto-generated
+      # agent CA with it, so the next install mints a fresh one. Run earlier,
+      # this step would make the #690 CA-stability assertion compare a CA from
+      # before the uninstall with a CA minted after it, and that assertion would
+      # fail for a reason that has nothing to do with the CA.
+      - name: helm upgrade from the last released chart (adoption break guard)
+        run: |
+          set -euo pipefail
+          helm uninstall leoflow -n leoflow --wait
+          # No pinned version: the newest chart in the registry IS the previous
+          # release from this PR's point of view, and a pin here would go stale
+          # silently the first time nobody remembered to bump it.
+          repo="oci://ghcr.io/${{ github.repository_owner }}/charts/leoflow"
+          prev="$(helm show chart "$repo" | awk '/^version:/{print $2}')"
+          echo "installing last released chart ${prev}, then upgrading to HEAD"
+          # Released images on purpose: the point is a realistic previous release,
+          # not HEAD's binaries wearing an old chart. Same in-cluster addresses
+          # and the same required values as the install step above.
+          helm install leoflow "$repo" --version "${prev}" -n leoflow \
+            --set database.url='postgres://leoflow:leoflow@postgres:5432/leoflow?sslmode=disable' \
+            --set redis.url='redis://redis:6379/0' \
+            --set auth.jwtSecret=ci-jwt-secret \
+            --set 'secretKey=leoflow-helm-ci-secret-key-32by!' \
+            --set agentTLS.enabled=true \
+            --set database.caConfigMap=leoflow-db-ca-ci \
+            --set bootstrap.password=ci-admin \
+            --wait --timeout 300s
+          echo "upgrading to HEAD"
+          # --reset-then-reuse-values, NOT --reuse-values. --reuse-values replaces
+          # the NEW chart's defaults with the OLD release's coalesced values, so
+          # every values key added since the previous release renders as nil and
+          # the upgrade dies on the first template that reads one. That is Helm's
+          # documented behaviour and it is not what this leg is here to measure.
+          # --reset-then-reuse-values takes the new chart's defaults and lays the
+          # previous release's own settings back on top, which is what an operator
+          # upgrading with their values file gets.
+          #
+          # The image overrides point at the images this job built and loaded into
+          # kind, because no registry has an image for an unreleased version.
+          helm upgrade leoflow helm/leoflow -n leoflow --reset-then-reuse-values \
+            --set image.repository=leoflow-server --set image.tag=ci \
+            --set image.pullPolicy=IfNotPresent \
+            --set migrations.image.repository=leoflow-migrate --set migrations.image.tag=ci \
+            --set migrations.image.pullPolicy=IfNotPresent \
+            --wait --timeout 300s
+          kubectl -n leoflow rollout status deploy/leoflow --timeout=180s
+
+      # The upgrade succeeding is only half the guard. These three assertions are
+      # the shape #1142 asks for, and each one fails on a different way of
+      # regressing it: a durable Secret that is still a hook, a Deployment still
+      # reading the hook's name, and a hook copy that outlives the operation that
+      # created it (which is what `hook-delete-policy: hook-succeeded` prevents,
+      # and it is also what keeps the pre-0.4.7 Secret from being left behind).
+      - name: the upgraded release reads a tracked Secret, and the hook copy is gone
+        run: |
+          set -euo pipefail
+          owner="$(kubectl -n leoflow get secret leoflow-credentials \
+            -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}')"
+          test "$owner" = "leoflow" \
+            || { echo "::error::leoflow-credentials is not owned by the release (got '${owner}'), so it is not a tracked resource and self-heal will not restore it" >&2; exit 1; }
+          test -z "$(kubectl -n leoflow get secret leoflow-credentials \
+            -o jsonpath='{.metadata.annotations.helm\.sh/hook}')" \
+            || { echo "::error::leoflow-credentials carries helm.sh/hook, which is the #1142 defect" >&2; exit 1; }
+          ref="$(kubectl -n leoflow get deploy leoflow \
+            -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="LEOFLOW_DATABASE_URL")].valueFrom.secretKeyRef.name}')"
+          test "$ref" = "leoflow-credentials" \
+            || { echo "::error::the Deployment reads '${ref}', not the durable Secret" >&2; exit 1; }
+          if kubectl -n leoflow get secret leoflow-secrets >/dev/null 2>&1; then
+            echo "::error::the migration hook Secret outlived the operation that created it; hook-delete-policy: hook-succeeded is missing or ineffective, and the pre-0.4.7 Secret is left behind holding every credential" >&2
+            exit 1
+          fi
+          echo "durable Secret is tracked, the Deployment reads it, the hook copy is gone"
+
 
       # If anything above failed (helm install, smoke, upgrade, post-upgrade
       # smoke), dump the cluster + helm state so the cause is visible from

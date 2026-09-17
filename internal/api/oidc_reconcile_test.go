@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"github.com/neochaotic/leoflow/internal/domain"
 	"testing"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -124,4 +125,43 @@ func TestOIDCReconcileFailureFailsClosed(t *testing.T) {
 	if !audit.has(auditOIDCLoginFailure, "denied") {
 		t.Error("the reconcile failure was not audited")
 	}
+}
+
+// TestUnknownTenantIsAuditedAsItself separates two failures that shared one
+// reason.
+//
+// RoleExists resolves the tenant before the role, so a tenant that does not
+// exist comes back as an error, exactly like a database that is down. Both were
+// audited role_check_failed and logged "oidc: checking role", so the audit row an
+// operator reads could not tell a one-character typo in tenant_claims from an
+// outage, and the boot warning that now names the typo precisely had no
+// counterpart at login time.
+func TestUnknownTenantIsAuditedAsItself(t *testing.T) {
+	f := newFakeIDP(t)
+	cfg := baseOIDCConfig(f)
+	cfg.DefaultRole = "viewer"
+
+	t.Run("a tenant that does not exist", func(t *testing.T) {
+		store := newFakeOIDCStore()
+		store.roleErr = domain.ErrNotFound
+		audit := &fakeAuthAudit{}
+		rec := driveCallback(t, oidcServer(t, f, cfg, store, audit, nil), f, cfg, nil)
+
+		assertLoginDenied(t, rec, "a login resolving to a tenant that does not exist")
+		if !audit.hasReason(auditOIDCLoginFailure, "unknown_tenant") {
+			t.Error("audited as something other than unknown_tenant, so the row cannot be told apart from a database outage")
+		}
+	})
+
+	t.Run("a database that is down keeps the reason that means that", func(t *testing.T) {
+		store := newFakeOIDCStore()
+		store.roleErr = errors.New("connection reset by peer")
+		audit := &fakeAuthAudit{}
+		rec := driveCallback(t, oidcServer(t, f, cfg, store, audit, nil), f, cfg, nil)
+
+		assertLoginDenied(t, rec, "a login during a database outage")
+		if !audit.hasReason(auditOIDCLoginFailure, "role_check_failed") {
+			t.Error("an outage lost the reason that distinguishes it from a configuration mistake")
+		}
+	})
 }

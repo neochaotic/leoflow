@@ -145,6 +145,11 @@ type fakeOIDCStore struct {
 	createErr    error
 	reconciled   []reconcileCall
 	reconcileErr error
+	// roleErr is what the lookup itself returns. The real repository resolves the
+	// tenant first, so domain.ErrNotFound here is a tenant that does not exist,
+	// while any other error is the database failing. The handler audits the two
+	// differently and a fake that collapsed them would make that untestable.
+	roleErr error
 }
 
 type createdOIDC struct {
@@ -191,6 +196,9 @@ func (s *fakeOIDCStore) CreateOIDCUser(_ context.Context, tenant, email, provide
 }
 
 func (s *fakeOIDCStore) RoleExists(_ context.Context, _ string, role string) (bool, error) {
+	if s.roleErr != nil {
+		return false, s.roleErr
+	}
 	return s.roles[role], nil
 }
 

@@ -186,6 +186,41 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   durable Secret is tracked, the Deployment reads it and the hook copy is gone,
   which is the leg that would have caught the adoption break.
 
+
+- **The startup gate no longer nil-pointers on a value tree that predates it.**
+  `helm upgrade --reuse-values` does not merge the new chart's defaults: helm
+  rebuilds the previous release's coalesced values and hands them to the new
+  templates. `probes.startup` is the only key this chart gained, so an operator
+  upgrading a 0.4.6 release with that flag got
+
+  ```
+  nil pointer evaluating interface {}.enabled
+  ```
+
+  and no render at all. Nothing caught it because every test and every CI install
+  starts from the chart's own defaults, where the key is always present; the
+  cross-version upgrade leg added alongside it is what surfaced the class.
+
+  An absent `probes.startup` is now read as "not configured", which renders the
+  same output the 0.4.6 chart did. Note what that means: a `--reuse-values`
+  upgrade lands WITHOUT the gate, because the flag never sees the default that
+  turns it on.
+
+- **`--reset-then-reuse-values` is now the documented upgrade flag, and
+  `--reuse-values` from 0.4.6 still will not render.** Fixing the nil pointer
+  above does not make that flag work, because the same rebuilt-old-tree also
+  carries 0.4.6's documented `config.cors.allowedOrigins: ["*"]`, which this
+  version refuses at render time. Every `--reuse-values` upgrade from 0.4.6 hits
+  that refusal, including operators who never set the key, since it was the old
+  chart's own default. The refusal stands, because the alternative is rendering a
+  wildcard nobody chose, but its message now names the flag and the fix.
+
+  `--reset-then-reuse-values` starts from this chart's defaults, lays the previous
+  release's user-supplied values over them, and then applies `--set`/`-f`. It
+  renders, it preserves what you configured, and it delivers new defaults such as
+  the startup gate. `website/content/operate/upgrades.md` documents it as the Pro
+  upgrade path.
+
 - **BREAKING: an unflagged `clearTaskInstances` now previews, and is scoped to
   failures (#1137).** Apache Airflow 3.2.1 declares `dry_run: bool = True` and
   `only_failed: bool = True` on `ClearTaskInstancesBody`. leoflow defaulted both

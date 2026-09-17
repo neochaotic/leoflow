@@ -136,6 +136,32 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   instances must send `"only_failed": false`. The embedded UI is unaffected: all
   three of its clear dialogs already send both fields explicitly. The OpenAPI
   spec and the generated `pkg/client` carry the new defaults.
+- **A slow boot is no longer a restart loop: the control plane gets a
+  `startupProbe`.** Liveness and readiness both target the API listener, which
+  binds at the END of boot, so the kubelet's answer to a boot that was slow or
+  stuck was to kill and restart the container. That is what turned #1083 into a
+  loop whose every cycle was recorded as `Completed exit=0`, and it would do the
+  same for any future boot-path dependency.
+
+  Kubernetes runs neither liveness nor readiness until a startup probe succeeds,
+  so that state now reads as "not ready yet" rather than "unhealthy". The budget
+  is `periodSeconds * failureThreshold` = 180s, sized from the server's own boot
+  bounds rather than picked: the Postgres connect retry is 30s and runs twice
+  (request pool + probe pool), the pod-informer warm-up is bounded at 10s
+  (#1141), and cloud credential detection and OIDC discovery sit on top of those
+  with no bound of their own. A boot that overruns even that still restarts,
+  which is the honest semantic, and a boot that outright fails still exits 1 and
+  CrashLoopBackOffs as before, untouched by this.
+
+  The gate probes `/healthz`, never `/readyz`: a failing startup probe restarts
+  the container, so gating it on dependency health would turn a database outage
+  into a crash loop. Readiness still gates endpoint membership on `/readyz` the
+  moment the gate opens.
+
+  The render refuses a startup budget at or below the liveness budget it replaces
+  (10 + 3*20 = 70s), because such a gate only moves the kill from one probe to
+  the other and leaves the loop where it was. Tunable under `probes.startup`, and
+  `probes.startup.enabled: false` hands the boot back to liveness.
 
 - **`config.cors.allowedOrigins` is read by the chart at all (#1144).** The key
   shipped in `values.yaml`, documented as the API's CORS policy with a default of

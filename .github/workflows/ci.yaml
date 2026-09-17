@@ -1290,6 +1290,8 @@ jobs:
       # argument that put the golangci-lint pin in this job.
       - name: Readiness probe budget sits under the chart's floor
         run: bash scripts/check-readiness-probe-budget.sh
+      - name: Startup probe budget covers the boot bounds the code states
+        run: bash scripts/check-startup-probe-budget.sh
       - name: Hugo pin agrees between the website build and deploy
         run: bash scripts/check-hugo-version-pin.sh
 

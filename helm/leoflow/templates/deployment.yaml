@@ -161,6 +161,25 @@ rejected install on their next control-plane upgrade.
 {{- end -}}
 
 {{- /*
+The startup gate has one job: give boot MORE room than the liveness probe gave
+it. Liveness and readiness both target the API listener, which binds at the END
+of boot, so before the gate existed the kubelet answered a slow or stuck boot by
+restarting the container (#1083). A startup budget at or below the liveness
+budget does not undo that; it only moves the kill from one probe to the other,
+and the loop is exactly where it was, now wearing a fix. The tests pin the
+shipped numbers, which is a different thing: an operator reaches this with a
+single `--set probes.startup.failureThreshold`, and the render is the only place
+that sees both budgets at once.
+*/ -}}
+{{- if .Values.probes.startup.enabled -}}
+{{- $startupBudget := mul (int .Values.probes.startup.periodSeconds) (int .Values.probes.startup.failureThreshold) -}}
+{{- $livenessBudget := add (int .Values.probes.liveness.initialDelaySeconds) (mul (int .Values.probes.liveness.periodSeconds) (int .Values.probes.liveness.failureThreshold)) -}}
+{{- if le $startupBudget $livenessBudget -}}
+{{- fail (printf "probes.startup gives boot a budget of %ds (periodSeconds %d * failureThreshold %d), which is not more than the %ds the liveness probe would have allowed (initialDelaySeconds %d + periodSeconds %d * failureThreshold %d). The startup gate exists to give a slow boot MORE room than liveness did: at or below the liveness budget it only changes which probe kills the container, and the restart loop leoflow hit in #1083 stays exactly where it was. Raise probes.startup.failureThreshold or probes.startup.periodSeconds, or set probes.startup.enabled=false to hand the boot back to liveness deliberately." $startupBudget (int .Values.probes.startup.periodSeconds) (int .Values.probes.startup.failureThreshold) $livenessBudget (int .Values.probes.liveness.initialDelaySeconds) (int .Values.probes.liveness.periodSeconds) (int .Values.probes.liveness.failureThreshold)) -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
 Warm worker pools reuse ONE pod — holding ONE live credential — across many
 attempts, so per-attempt identity is the only thing that stops a superseded
 attempt from still resolving secrets. That identity exists only when the agent

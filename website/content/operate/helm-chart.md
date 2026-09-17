@@ -75,6 +75,69 @@ A first-class values reference on this site is a TODO for a later migration phas
 
 ## Tuning the probes
 
+### The startup gate
+
+`probes.startup` runs before the other two, and while it is failing Kubernetes
+runs **neither** the liveness nor the readiness probe. That is what keeps a slow
+boot from being read as an unhealthy process. The pod is still not Ready during
+that window, so it stays out of the Service's endpoints: the gate buys boot time,
+it does not send traffic anywhere early.
+
+It matters because liveness and readiness both target the API listener, and that
+listener binds at the *end* of boot. Without a startup gate the kubelet answers
+a boot that is slow or stuck by restarting the container, roughly every minute,
+and each cycle is recorded as `Completed exit=0` because the process handles
+`SIGTERM` cleanly. An operator triaging that sees a Deployment whose containers
+keep finishing successfully, a readiness probe refusing connections, and no cause
+anywhere.
+
+```yaml
+probes:
+  startup:
+    enabled: true
+    periodSeconds: 5
+    failureThreshold: 36
+```
+
+The budget is `periodSeconds * failureThreshold`, 180 seconds by default. That
+number is sized from the server's own boot bounds rather than picked: the
+Postgres connect retry is 30 seconds and runs twice (the request pool and the
+dedicated probe pool), the pod-informer warm-up is bounded at 10 seconds, and on
+top of those sit credential detection for an object-store log sink and OIDC
+discovery, neither of which carries a bound of its own. That is 70 seconds of
+code-defined budget before anything cloud-shaped, and a gate tighter than the
+boot would kill a pod that was about to come up.
+
+It is deliberately generous, because the two directions are not symmetric. A boot
+that *fails* returns an error and the process exits 1, so `CrashLoopBackOff`
+reports it promptly whatever this budget says. The gate only bounds a boot that
+*hangs*, and restarting a hang is a lottery ticket rather than a fix. The cost of
+being too loose is a slower restart of something that was not going to recover
+anyway; the cost of being too tight is the restart loop back.
+
+The chart refuses to render a startup budget at or below the liveness budget it
+replaces (`initialDelaySeconds + periodSeconds * failureThreshold`, 70 seconds by
+default), because such a gate only moves the kill from one probe to the other.
+Raise `failureThreshold` if your control plane legitimately takes longer to come
+up, for example against a distant database or a node whose cloud metadata server
+is not yet serving credentials. Set `enabled: false` to hand the boot back to
+liveness deliberately.
+
+The gate probes `/healthz`, not `/readyz`, and that is not an oversight. A
+failing startup probe **restarts** the container, exactly like a failing liveness
+probe, so gating it on dependency health would turn a database outage or an
+in-flight migration into a crash loop. `/healthz` is a static 200 for the same
+reason: restarting a pod creates no schema and reaches no database. Nothing is
+lost by the narrower gate, because readiness still gates endpoint membership on
+`/readyz` the moment the gate opens, so a pod never joins the Service on the
+strength of a bound listener alone.
+
+If a pod never passes the gate, read `/readyz` rather than guessing: it names the
+dependency that is not ready. The common causes are a database the pod cannot
+reach and a ServiceAccount that cannot `list`/`watch` pods in the task namespace.
+
+### Timeouts under load
+
 `probes.liveness` and `probes.readiness` are exposed so you can loosen them
 under load: a busy scheduler can miss a 1s `/healthz` during a task-pod burst
 and be kubelet-killed mid-run, which cascades in-flight tasks to `agent_lost`.

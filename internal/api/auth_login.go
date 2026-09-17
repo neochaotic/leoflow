@@ -44,8 +44,8 @@ var loginPageTemplate = template.Must(template.New("login").Parse(`<!doctype htm
 <form id="f" autocomplete="on">
  <h1>Sign in to Leoflow</h1>
 {{ if .SSOError }} <p class="ssoerr" role="alert">Single sign-on did not complete, so you are not signed in.
- Try again. If it keeps failing, the reason is in the control plane's audit log and server log:
- it is deliberately not shown here.</p>
+ Try again. If it keeps failing, ask whoever administers this Leoflow: the reason is recorded in
+ the control plane's server log and audit trail, and is deliberately not shown here.</p>
 {{ end }}{{ if .SSO }} <a class="sso" href="/api/v2/auth/oidc/login?next={{ .NextQuery }}">Sign in with single sign-on</a>
 {{ end }}
 {{ if .Collapse }} <details>

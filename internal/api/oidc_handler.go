@@ -118,7 +118,8 @@ func oidcLoginHandler(flow *oidc.Flow, logger *slog.Logger) gin.HandlerFunc {
 // (issuer pin, audience, nonce, azp, clock skew, email_verified, tenant pin,
 // email-domain allowlist), resolves or JIT-provisions the user, mints the app's
 // _token session cookie, and redirects. Every terminal path is audited; a
-// verification failure is a 403 that never falls back to a default identity.
+// verification failure fails closed (see denyWithCause) and never falls back to
+// a default identity.
 func oidcCallbackHandler(deps oidcDeps) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		payload, ok := deps.readState(c)
@@ -159,7 +160,7 @@ func oidcCallbackHandler(deps oidcDeps) gin.HandlerFunc {
 		}
 		user, err := deps.resolveUser(c, identity)
 		if err != nil {
-			return // resolveUser already audited + wrote the 403
+			return // resolveUser already audited + answered the rejection
 		}
 		token, terr := auth.MintUserToken(deps.jwtSecret, deps.tokenTTL, *user)
 		if terr != nil {
@@ -175,7 +176,7 @@ func oidcCallbackHandler(deps oidcDeps) gin.HandlerFunc {
 }
 
 // readState reads and verifies the signed state cookie. A missing or invalid
-// cookie is a 403 (CSRF/replay), audited.
+// cookie is a rejection (CSRF/replay), audited.
 func (d oidcDeps) readState(c *gin.Context) (oidc.StatePayload, bool) {
 	cookie, err := c.Request.Cookie(oidcStateCookie)
 	if err != nil || cookie.Value == "" {
@@ -195,8 +196,8 @@ func (d oidcDeps) readState(c *gin.Context) (oidc.StatePayload, bool) {
 
 // resolveUser turns a verified identity into a Leoflow user, applying the
 // group→role mapping (with the default_role fallback), the JIT policy, and
-// fail-closed role validation. On any rejection it audits and writes the 403,
-// returning errRejected so the caller stops.
+// fail-closed role validation. On any rejection it audits and answers through
+// denyWithCause, returning errRejected so the caller stops.
 func (d oidcDeps) resolveUser(c *gin.Context, id *oidc.VerifiedIdentity) (*auth.User, error) {
 	ctx := c.Request.Context()
 	loginRoles := oidc.ApplyDefaultRole(oidc.MapRoles(id.Groups, d.cfg.RoleMappings), d.cfg.DefaultRole)
@@ -236,7 +237,7 @@ func (d oidcDeps) resolveUser(c *gin.Context, id *oidc.VerifiedIdentity) (*auth.
 	case errors.Is(err, auth.ErrUserNotFound):
 		resolved, err = d.jitProvision(c, id, loginRoles)
 		if err != nil {
-			return nil, err // jitProvision already audited + wrote the 403
+			return nil, err // jitProvision already audited + answered the rejection
 		}
 	default:
 		d.logger.Error("oidc: resolving user", "error", err)
@@ -286,12 +287,13 @@ func (d oidcDeps) jitProvision(c *gin.Context, id *oidc.VerifiedIdentity, loginR
 	return &auth.User{ID: created.ID, TenantID: id.Tenant, Email: id.Email, Roles: loginRoles}, nil
 }
 
-// errRejected is a sentinel signaling that a helper already wrote the 403 and
-// audited; the caller must simply stop.
+// errRejected is a sentinel signaling that a helper already answered the
+// rejection and audited it; the caller must simply stop.
 var errRejected = errors.New("oidc: request already rejected")
 
-// rejectVerify maps a verification error to a 403, choosing the audit action so
-// tenant-pin rejections are distinguishable from other verification failures.
+// rejectVerify maps a verification error to a rejection, choosing the audit
+// action so tenant-pin rejections are distinguishable from other verification
+// failures.
 func (d oidcDeps) rejectVerify(c *gin.Context, err error) {
 	action := auditOIDCLoginFailure
 	if errors.Is(err, oidc.ErrTenantNotAllowed) || errors.Is(err, oidc.ErrEmailNotVerified) || errors.Is(err, oidc.ErrEmailDomainNotAllowed) {
@@ -348,8 +350,8 @@ func verifyReason(err error) string {
 }
 
 // deny audits a failed login (outcome "denied", with a non-secret reason) and
-// writes the 403. Every fail-closed path funnels through here so a rejection is
-// always both recorded and answered — never a silent fall-through.
+// answers it. Every fail-closed path funnels through here so a rejection is
+// always both recorded and answered, never a silent fall-through.
 func (d oidcDeps) deny(c *gin.Context, action, tenant, userID, email, reason string) {
 	d.denyWithCause(c, action, tenant, userID, email, reason, nil)
 }

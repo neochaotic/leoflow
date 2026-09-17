@@ -159,10 +159,16 @@ func TestLoginPageExplainsARefusedSingleSignOn(t *testing.T) {
 	if !strings.Contains(body, "Single sign-on did not complete") {
 		t.Fatal("the page says nothing about the failed sign-on, so the button looks like it did nothing")
 	}
-	// The remedy has to be reachable by someone who cannot log in to read the
-	// audit log through the UI, which under SSO-only is everyone.
-	if !strings.Contains(body, "audit log") {
-		t.Error("the page does not say where the reason is recorded")
+	// The person reading this banner is locked out, and under provider: oidc with
+	// an empty break_glass_emails that is everyone. So the remedy cannot be "read
+	// the audit log": the audit UI is behind /ui/, which needs the session they do
+	// not have, and the server log needs cluster access. The banner has to name
+	// the human who can look, not just the place.
+	if !strings.Contains(body, "administers this Leoflow") {
+		t.Error("the banner tells a locked-out user to consult records they cannot reach, and names nobody who can")
+	}
+	if !strings.Contains(body, "server log") {
+		t.Error("the banner does not say where the reason is recorded, so the ask to an administrator is not actionable")
 	}
 	if !strings.Contains(body, "/api/v2/auth/oidc/login") {
 		t.Error("the sign-in control is gone from the page the user was sent back to, so there is no way to retry")
@@ -180,5 +186,41 @@ func TestLoginPageSaysNothingAboutSSOWithoutTheMarker(t *testing.T) {
 	// there: otherwise anyone can make the page claim a sign-on failed.
 	if strings.Contains(loginPageQuery(t, false, false, "?sso_error=1"), "Single sign-on did not complete") {
 		t.Error("a jwt-only deployment renders an SSO failure banner for anyone who appends the parameter")
+	}
+}
+
+// TestRefusedSingleSignOnLandsOnAPageThatSaysSo walks the two ends of the fix
+// across the real router, because each end is otherwise tested against its own
+// idea of the contract.
+//
+// oidc_flow_test.go asserts that a denial redirects to loginPageWithSSOError.
+// The tests above assert that the login page renders a banner when it sees
+// sso_error. Nothing asserted that the target of the first is served by the
+// second: renaming the parameter on one side only would leave every test green
+// and every refused user back on a bare form that looks like the button did
+// nothing.
+func TestRefusedSingleSignOnLandsOnAPageThatSaysSo(t *testing.T) {
+	f := newFakeIDP(t)
+	cfg := baseOIDCConfig(f)
+	srv := oidcServer(t, f, cfg, newFakeOIDCStore(), &fakeAuthAudit{}, nil)
+
+	// A callback with no state cookie is a real rejection through the real
+	// fail-closed path (missing_state), not a hand-built response.
+	denial := httptest.NewRecorder()
+	srv.ServeHTTP(denial, httptest.NewRequestWithContext(t.Context(),
+		http.MethodGet, "/api/v2/auth/oidc/callback?code=x&state=y", http.NoBody))
+	assertLoginDenied(t, denial, "callback with no state cookie")
+
+	landing := httptest.NewRecorder()
+	srv.ServeHTTP(landing, httptest.NewRequestWithContext(t.Context(),
+		http.MethodGet, denial.Header().Get("Location"), http.NoBody))
+	if landing.Code != http.StatusOK {
+		t.Fatalf("the page a refused login is sent to answered %d", landing.Code)
+	}
+	if !strings.Contains(landing.Body.String(), "Single sign-on did not complete") {
+		t.Errorf("a refused login lands on a page that says nothing about it:\n%s", landing.Body.String())
+	}
+	if !strings.Contains(landing.Body.String(), "/api/v2/auth/oidc/login") {
+		t.Error("the page a refused login lands on offers no way to retry")
 	}
 }

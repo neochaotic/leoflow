@@ -217,3 +217,35 @@ matching comment in `internal/config/server.go`, as the explanation for a proble
 it does not explain. Both the comment and the configuration reference are
 corrected; this note keeps the record honest about where the belief came from.
 
+
+## Amendment (2026-09-17): a refused login answers the browser, not an API client
+
+D4, D5a, D6 and D6a each describe a rejection as a **403**, and the Audit note
+says "a 403 stays a 403". The decisions are unaffected: every one of those paths
+still fails closed, still audits, and still never falls back to a default
+identity or a default tenant. What changes is the **answer on the wire**.
+
+Both OIDC routes are reached only by a top-level browser navigation: the user
+clicks the sign-in control, or the IdP redirects them back. `problem+json` is the
+right answer to an API client and the wrong one to a browser, which renders it as
+a page of raw JSON with no way back to the sign-in page, which is also where the
+retry and the break-glass form live.
+
+A refused login now answers **`302` to `/api/v2/auth/login?sso_error=1`**, and
+the login page says that sign-on did not complete.
+
+**The redirect carries no reason.** Withholding the cause from the browser is the
+posture of this whole path, since it is the same information someone probing the
+deployment is after. The marker is `sso_error=1` and nothing else, the response
+body is the bare redirect, and no response header carries the cause. The marker
+is ignored unless an OIDC flow was discovered at boot, so it cannot be used to
+make a `provider: jwt` deployment claim a sign-on was rejected.
+
+Where the reason goes is unchanged: the audit row (`oidc.login.failure` /
+`oidc.tenant_pin_rejected`, with the non-secret `reason`) and, since #1162, a
+`WARN` on the control plane's server log.
+
+Read anywhere in this ADR, "403" now means "rejected, fail-closed, audited". The
+credential path (`POST /auth/token`, including break-glass) is unchanged and
+still answers `problem+json`: it is an API call made by the login page's script,
+not a navigation.

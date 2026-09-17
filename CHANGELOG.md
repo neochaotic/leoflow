@@ -100,6 +100,23 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Every rejected SSO login now says why, in the logs.** Each fail-closed path
+  recorded an audit row, wrote a 403, and logged nothing. The audit row is the
+  record of truth, but it lives in a Postgres table reachable only through an API
+  that needs a working session, and with `auth.provider: oidc` and an empty
+  `break_glass_emails` there is no session to be had. So the one channel an
+  operator could actually read carried nothing: a deployment rejecting 100% of
+  logins looked, in the logs, exactly like a deployment nobody was using.
+
+  Denials are now logged at WARN with the audit reason, the action, and the email
+  and tenant when known.
+
+  **`token_invalid` carries the underlying error.** It is the catch-all arm, so a
+  JWKS fetch failure, a network timeout to the IdP, an audience mismatch and a
+  signature surprise all collapsed into it and the real error was discarded. The
+  cause is attached there and only there: a reason the server recognizes is
+  already self-describing, and the underlying error can carry claim values.
+
 - **OpenMetadata can catalogue leoflow again: `class_ref.module_path` is no
   longer null.** A field team reported that they could not integrate leoflow with
   OpenMetadata and could not say why. The cause was one field. `classRefDTO`

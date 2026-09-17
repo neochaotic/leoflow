@@ -26,6 +26,24 @@ func oidcWarnConfig() *config.ServerConfig {
 	return cfg
 }
 
+// warnLineFor returns the log line whose structured config_key attribute is key,
+// or "" when no warning named that key.
+//
+// Matching the attribute rather than the prose is what keeps these tests
+// distinguishing anything: the boot warnings name each other's keys inside their
+// remedy sentences (the jit_provisioning warning tells the operator to set
+// default_role or role_mappings alongside it), so a substring match over the
+// whole buffer reports a warning that never fired. The leading space is what
+// separates config_key= from missing_config_key=.
+func warnLineFor(out, key string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, " config_key="+key) {
+			return line
+		}
+	}
+	return ""
+}
+
 // TestWarnStartupFlagsOIDCWithNoRoleSource covers the failure the tenant-pin boot
 // gate makes reachable.
 //
@@ -47,13 +65,17 @@ func TestWarnStartupFlagsOIDCWithNoRoleSource(t *testing.T) {
 	warnStartup(oidcWarnConfig(), slog.New(slog.NewTextHandler(&buf, nil)))
 
 	out := buf.String()
+	line := warnLineFor(out, "auth.oidc.default_role")
+	if line == "" {
+		t.Fatalf("no role WARN logged for an OIDC deployment with no role source:\n%s", out)
+	}
 	for _, want := range []string{"auth.oidc.role_mappings", "auth.oidc.default_role"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("the WARN does not name %q, so it cannot point at the remedy:\n%s", want, out)
+		if !strings.Contains(line, want) {
+			t.Errorf("the WARN does not name %q, so it cannot point at the remedy:\n%s", want, line)
 		}
 	}
-	if !strings.Contains(out, "level=WARN") {
-		t.Errorf("no WARN logged for an OIDC deployment with no role source:\n%s", out)
+	if !strings.Contains(line, "level=WARN") {
+		t.Errorf("the role signal is not logged at WARN:\n%s", line)
 	}
 }
 
@@ -99,7 +121,7 @@ func TestWarnStartupOIDCRoleWarningReachesAnAPIOnlyReplica(t *testing.T) {
 	cfg.Server.Role = config.RoleAPI
 	var buf bytes.Buffer
 	warnStartup(cfg, slog.New(slog.NewTextHandler(&buf, nil)))
-	if !strings.Contains(buf.String(), "auth.oidc.role_mappings") {
+	if warnLineFor(buf.String(), "auth.oidc.default_role") == "" {
 		t.Errorf("api-only replica logged no role WARN, yet it is the process that reconciles roles:\n%s", buf.String())
 	}
 }

@@ -196,17 +196,24 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     Workspace emits no `groups` claim at all unless Directory API group sync is
     configured, so on that IdP every login takes this path. The warning fired
     before only when both keys were empty, which is the shape a Google deployment
-    is least likely to be in.
+    is least likely to be in. Boot cannot tell that from a deliberately strict
+    deployment on an IdP that does emit the claim, so the warning names both and
+    can be dismissed on purpose: `default_role` is not free, it grants that role
+    to every login the tenant pin admits.
   - **An empty `client_secret` breaks the code exchange.** Google Workspace and
     Entra always register a server-side application as confidential, and a
     confidential client rejects an exchange with no secret. It stays optional at
     boot because a public client is a valid registration.
-  - **A hung IdP parked boot forever.** Discovery runs before the HTTP listener
-    binds, on a client with no timeout, so an issuer that accepts the connection
-    and never answers meant the probe endpoint never came up and the kubelet
-    restarted the pod on a probe failure that named nothing. It is bounded at 15s
-    and the failure now names the issuer and what holds a request open. The
-    startup-probe budget gate counts the new bound.
+  - **An IdP that never answers parked boot forever.** Discovery runs before the
+    HTTP listener binds, on a client with no timeout, so a request that waits
+    instead of failing meant the probe endpoint never came up and the kubelet
+    restarted the pod on a probe failure that named nothing. It is bounded at 15s,
+    and the failure names the issuer, the bound, and the causes that wait rather
+    than refuse: a NetworkPolicy or firewall that DROPs egress instead of
+    REJECTing it, a name that never resolves, an egress proxy or intercepting TLS
+    middlebox, or an issuer that accepts the connection and goes silent. The
+    underlying transport error is wrapped, not replaced, so the detail that
+    separates them survives. The startup-probe budget gate counts the new bound.
 
 - **OpenMetadata can catalogue leoflow again: `class_ref.module_path` is no
   longer null.** A field team reported that they could not integrate leoflow with

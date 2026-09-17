@@ -262,7 +262,10 @@ and the server logs a WARN at boot for both:
   every login takes this path.
 
 Setting `default_role` to a read-only role such as `viewer` gives resolution a
-floor and makes the clear impossible.
+floor and makes the clear impossible. It is not free: that role is granted to
+every login the tenant pin admits, so on an IdP that does emit the groups claim,
+`role_mappings` alone is the stricter posture and the WARN is one to dismiss
+deliberately rather than configure away.
 {{% /alert %}}
 
 {{% alert title="`client_secret` is required by every confidential client" color="warning" %}}

@@ -463,8 +463,9 @@ func platformDefaultWarnings(c config.PlatformDefaultsSection) []configWarning {
 // boot warnings point at it, so it is named once.
 const defaultRoleKey = "auth.oidc.default_role"
 
-// oidcRoleSourceWarnings reports an OIDC deployment that has no source of roles
-// at all: neither auth.oidc.role_mappings nor auth.oidc.default_role.
+// oidcRoleSourceWarnings reports an OIDC deployment whose role resolution has no
+// floor: auth.oidc.default_role is empty, with or without auth.oidc.role_mappings.
+// The two shapes get different messages because they are different mistakes.
 //
 // Role resolution is IdP-authoritative (ADR 0057 D5): every login computes its
 // roles from role_mappings, applies default_role when that yields none, and hands
@@ -479,6 +480,16 @@ const defaultRoleKey = "auth.oidc.default_role"
 // (#1143): before that, a deployment configured this loosely was usually also
 // missing the pin, and the login was rejected before reconciliation ran. Removing
 // that accidental shield is what makes the WARN necessary.
+//
+// With role_mappings set the same clear happens per login rather than always, and
+// boot cannot tell a broken deployment from a strict one: on an IdP that emits
+// the groups claim, granting nothing outside a mapped group is the intended
+// posture, while on Google Workspace without Directory API group sync the claim
+// never arrives and the mapping can never match. That is why this half names the
+// Google shape and ends with a clause the operator can deliberately dismiss:
+// default_role is not a free fix, it grants that role to every login the tenant
+// pin admits, and a warning whose only remedy is to widen access is one a correct
+// deployment learns to ignore.
 func oidcRoleSourceWarnings(c config.AuthSection) []configWarning {
 	const mappingsKey = "auth.oidc.role_mappings"
 	if c.Provider != config.AuthProviderOIDC {
@@ -494,7 +505,8 @@ func oidcRoleSourceWarnings(c config.AuthSection) []configWarning {
 				"and roles are reconciled to exactly that set, so the user's existing grants are CLEARED rather than left alone. " +
 				"Google Workspace emits no groups claim at all unless Directory API group sync is configured, " +
 				"so every login on that IdP takes this path. Set " + defaultRoleKey +
-				" to a read-only role such as viewer to give resolution a floor",
+				" to a read-only role such as viewer to give resolution a floor, or ignore this if your IdP does emit " +
+				"auth.oidc.groups_claim and a login outside every mapped group is meant to hold no roles",
 			Key:        defaultRoleKey,
 			Value:      "",
 			MissingKey: defaultRoleKey,
@@ -847,13 +859,27 @@ func discoverOIDCFlow(ctx context.Context, cfg *config.ServerConfig, logger *slo
 	defer cancel()
 	flow, err := oidc.NewFlow(discCtx, cfg.Auth.OIDC, cfg.Auth.JWT.Secret)
 	if err != nil {
-		if errors.Is(discCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+		// Keyed on the returned error rather than on discCtx.Err(): the deadline
+		// belongs to this request only if the request is what hit it, and a
+		// context that happens to expire while an unrelated error is on its way
+		// back would otherwise be reported as a hung IdP. ctx.Err() == nil then
+		// separates our own bound from a parent that was canceled or timed out,
+		// which is a shutdown and not an IdP problem.
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			// The prose stops at what a deadline actually proves. An accepted-and-
+			// silent issuer, a name that never resolves, and a SYN dropped by a
+			// NetworkPolicy all surface as the same context deadline, so claiming
+			// the connection was accepted would point at the IdP for a failure
+			// that is usually inside the cluster. The wrapped error carries the
+			// URL and the transport-level detail that does separate them.
 			return nil, fmt.Errorf("oidc setup: %s did not answer discovery within %s. "+
-				"The connection was accepted, so the issuer resolves and is reachable; something between this pod and the "+
-				"IdP is holding the request open (an egress proxy, a NetworkPolicy that drops the response, an "+
-				"intercepting TLS middlebox). Discovery runs before the HTTP listener binds, so without this bound the "+
-				"probe endpoint never comes up and the pod restarts on a probe failure that names nothing",
-				cfg.Auth.OIDC.Issuer, oidcDiscoveryTimeout)
+				"Nothing about the request completed, which narrows it to the failures that wait rather than refuse: "+
+				"a NetworkPolicy or firewall that DROPs egress instead of REJECTing it, a name that never resolves, "+
+				"an egress proxy or intercepting TLS middlebox holding the request open, or an issuer that accepts the "+
+				"connection and never answers. A refused connection and an unknown host both fail fast instead. "+
+				"Discovery runs before the HTTP listener binds, so without this bound the probe endpoint never comes up "+
+				"and the pod restarts on a probe failure that names nothing: %w",
+				cfg.Auth.OIDC.Issuer, oidcDiscoveryTimeout, err)
 		}
 		return nil, fmt.Errorf("oidc setup: %w", err)
 	}

@@ -21,9 +21,10 @@
 # that was about to come up, which is the restart loop the gate exists to end
 # (#1083). Nothing reconciles a Go constant with a Helm value: raising
 # pgStartupBudget to 60s "so a failover blip cannot fail boot" would put the
-# code-defined floor at 130s under a 180s gate with 50s of headroom gone and the
-# whole test suite green. The same drift shape this repo already gates for the
-# readiness timeout, the Lite pre-pull tag and the Task SDK pin.
+# code-defined floor at 145s under a 180s gate, leaving 35s of slack where the
+# gate requires 60s, and the whole test suite green. The same drift shape this
+# repo already gates for the readiness timeout, the Lite pre-pull tag and the
+# Task SDK pin.
 #
 # The gate also re-asserts, on the shipped defaults, the relation the chart
 # enforces per-render: the startup budget must EXCEED the liveness budget it

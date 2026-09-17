@@ -36,6 +36,19 @@ func TestRoleWarningCoversTheGoogleShape(t *testing.T) {
 		if !strings.Contains(w[0].Msg, "default_role") {
 			t.Errorf("the warning does not name the setting that fixes it: %s", w[0].Msg)
 		}
+		// role_mappings with no default_role is also the correct strict posture on
+		// an IdP that does emit the claim: a login outside every mapped group is
+		// meant to hold no roles. The warning cannot tell the two apart from
+		// config alone, so it has to say which one it is guessing at. Without
+		// that, the only way to silence it is to set default_role, which grants a
+		// role to every login the tenant pin admits: a warning that instructs a
+		// correctly configured operator to widen access is one they learn to
+		// ignore, and then it is worse than none. The client-secret warning in
+		// this same set already ends with its own "or ignore this if" clause.
+		if !strings.Contains(w[0].Msg, "groups_claim") {
+			t.Errorf("the warning reads as an instruction to set default_role without naming the deployment where the "+
+				"current configuration is correct, so it cannot be dismissed on purpose: %s", w[0].Msg)
+		}
 	})
 
 	t.Run("neither set: still warns", func(t *testing.T) {
@@ -110,9 +123,12 @@ func TestWarnStartupEmitsEveryOIDCWarningOnAnAPIReplica(t *testing.T) {
 	cfg.Auth.OIDC.RoleMappings = map[string]string{"platform-admins": "admin"}
 	var buf bytes.Buffer
 	warnStartup(cfg, slog.New(slog.NewTextHandler(&buf, nil)))
+	// Keyed on the structured config_key, not on the prose: each of these
+	// warnings names another one's key in its remedy sentence, so a substring
+	// match over the buffer would report a warning that was never wired in.
 	for _, want := range []string{"auth.oidc.default_role", "auth.oidc.client_secret", "auth.oidc.jit_provisioning"} {
-		if !strings.Contains(buf.String(), want) {
-			t.Errorf("warnStartup never logged %s:\n%s", want, buf.String())
+		if warnLineFor(buf.String(), want) == "" {
+			t.Errorf("warnStartup never logged a warning keyed %s:\n%s", want, buf.String())
 		}
 	}
 }

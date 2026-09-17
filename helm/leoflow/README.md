@@ -18,6 +18,7 @@ production-like install — distinct from the host-run `test/e2e/e2e.sh` smoke.
 | ServiceAccount + Role/RoleBinding | lets the control plane create/watch/delete **task pods** and read their logs in `taskNamespace` |
 | ClusterRole + ClusterRoleBinding | **only** when `auth.agentTokenTransport: exchange` — `create` on `tokenreviews` (cluster-scoped API). See [Agent credential transport](#agent-credential-transport-and-warm-worker-pools) |
 | Secret | holds inline DB/Redis/JWT/bootstrap credentials (skipped when you bring your own) |
+| ConfigMap | **only** when `auth.oidc.enabled` — the two OIDC settings that are maps and therefore have no env-var route (`tenantClaims`, `roleMappings`), mounted as the server's `LEOFLOW_CONFIG`. See [SSO with OIDC](#sso-with-oidc) |
 | Job (hook) | runs `golang-migrate` before install/upgrade |
 | Ingress | optional |
 
@@ -312,6 +313,82 @@ It is an escape hatch, not an override: an entry redefining
 `LEOFLOW_AUTH_SECRET_LIVENESS_MODE` fails the render, because those three are the
 values the guard above validates against each other.
 
+## SSO with OIDC
+
+The server has had a complete OIDC implementation for several releases; this
+chart could not reach it until now, and the reason is worth knowing because it
+shapes how the values are laid out.
+
+Two of the server's OIDC settings are **maps** — `auth.oidc.tenant_claims` and
+`auth.oidc.role_mappings` — and a map has no environment-variable route at all.
+Viper binds env only for the scalar leaves the server registers, and those two are
+deliberately unregistered: a Google Workspace `hd` key is a domain, always dotted,
+and viper's `.` key delimiter would split it into nested maps and fail to decode
+(#826). The server reads them out-of-band from the YAML file named by
+`LEOFLOW_CONFIG`. The chart shipped no such file and no volume to put one in, so
+`auth.provider: oidc` could only ever fail boot closed on the missing tenant pin
+(#1143).
+
+So the chart splits the delivery:
+
+| What | How |
+|---|---|
+| `issuer`, `clientId`, `redirectUrl`, `tenantClaim`, `scopes`, `groupsClaim`, `defaultRole`, `allowedEmailDomains`, `breakGlassEmails`, `jitProvisioning`, `clockSkewSeconds` | `LEOFLOW_AUTH_OIDC_*` env vars, the way the rest of this chart delivers server settings |
+| `tenantClaims`, `roleMappings` | a ConfigMap mounted read-only at `/etc/leoflow/oidc`, with `LEOFLOW_CONFIG` pointing at it |
+| `clientSecret` | the chart-managed Secret (or `auth.oidc.existingSecret`), by `secretKeyRef` — never the ConfigMap |
+
+The mounted file is **partial on purpose**. Viper ranks env above a config file,
+and a key a file omits keeps the value it already had, so a file holding only the
+two maps can neither override nor blank anything the Deployment's env delivers.
+That is what makes mixing the two routes safe, and why nothing else is written
+there.
+
+```yaml
+auth:
+  jwtSecret: "…"          # still required: OIDC is the login flow, not the token signer
+  oidc:
+    enabled: true
+    issuer: "https://accounts.google.com"
+    clientId: "…apps.googleusercontent.com"
+    existingSecret: leoflow-idp          # key: oidcClientSecret
+    redirectUrl: "https://leoflow.example.com/api/v2/auth/oidc/callback"
+    tenantClaim: "hd"                    # `tid` on Entra
+    tenantClaims:
+      "example.com": "default"
+    defaultRole: "viewer"
+    breakGlassEmails: ["admin@example.com"]
+```
+
+A full worked example is in
+[`examples/values-oidc-google.yaml`](https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/examples/values-oidc-google.yaml).
+
+Three things the chart refuses at render time rather than letting them become a
+CrashLoopBackOff whose cause is visible only in container logs — the one channel a
+GitOps sync never shows, since Argo CD does not render `NOTES.txt`:
+
+- `enabled: true` without `issuer`, `clientId`, `redirectUrl`, `tenantClaim` **and**
+  a non-empty `tenantClaims`. All missing keys are named in one error, because each
+  boot failure on Kubernetes costs a values edit, an upgrade and a rollout to learn
+  the next one.
+- a non-`https://` `issuer`.
+- an `extraEnv` entry setting `LEOFLOW_CONFIG` while SSO is on, which would repoint
+  the server away from the mounted file and take the tenant pin with it.
+
+Two more it only warns about, in `NOTES.txt`, because both are legitimate
+configurations that are almost always mistakes: an empty `breakGlassEmails` (SSO
+becomes the only way in, so an IdP outage or one wrong `tenantClaims` key locks out
+everybody, including whoever has to fix it), and neither `roleMappings` nor
+`defaultRole` set (role resolution is default-deny, so logins succeed into a UI
+that shows nothing).
+
+`auth.oidc.existingSecret` is separate from `auth.existingSecret` on purpose: the
+JWT signing key and the IdP client secret rotate on different schedules and usually
+have different owners. Like every `existingSecret` in this chart it sits outside
+the `checksum/secret` annotation's visibility, so rotating it needs a manual
+`kubectl rollout restart`. The maps do not — they carry their own
+`checksum/oidc-config` annotation, because `LoadServer` parses the file once at
+boot and would otherwise leave an edited tenant map sitting on disk unread.
+
 ## Evaluating without a managed Postgres + Redis
 
 For a one-cluster evaluation (kind, minikube, k3d, scratch namespace), the
@@ -365,6 +442,22 @@ differ from what's committed.
 | auth.agentTokenTransport | string | `"envvar"` | Agent credential transport: `envvar` (default) puts the task-scoped bearer in a plaintext `LEOFLOW_AGENT_TOKEN` env var on the Pod object; `exchange` mounts a projected ServiceAccount token that the agent trades once — via a control-plane TokenReview — for the task-scoped JWT, so no bearer sits in plaintext on the pod spec. `exchange` needs the cluster-scoped TokenReview grant the chart renders with it (`rbac.create`), and is a hard prerequisite of `execution.warmPoolsEnabled` (ADR 0058 D2). Server-wide: switching it changes how EVERY task pod authenticates, warm or dedicated. |
 | auth.existingSecret | string | `""` | Name of a Secret with key `jwtSecret` (takes precedence over `jwtSecret`). |
 | auth.jwtSecret | string | `""` | HMAC secret signing API + agent JWTs. Set inline OR reference an existing Secret via `existingSecret`. Generate with `openssl rand -base64 64`. |
+| auth.oidc.allowedEmailDomains | list | `[]` | Login-level email-domain allowlist layered ON TOP of the tenant pin, not a replacement for it. Checked only after the pin and `email_verified` have passed, so the domain is trustworthy by then. Empty (the default) imposes no extra restriction. It gates EVERY OIDC login, not only JIT-provisioned ones. Rendered comma-joined, omitted when empty. |
+| auth.oidc.breakGlassEmails | list | `[]` | Local password logins still accepted while SSO is on; every other password login is rejected. This is the lock-out escape hatch: with the list empty, an IdP outage or a wrong `tenantClaims` entry leaves nobody able to reach the UI, including the operator who has to fix it. Put at least one break-glass admin here before enabling SSO. Rendered comma-joined, omitted when empty. |
+| auth.oidc.clientId | string | `""` | The registered application (client) id. It is also the expected `aud` of every ID token, so it must be the client the redirect URL below is registered against. |
+| auth.oidc.clientSecret | string | `""` | The client secret, used ONLY for the authorization-code exchange (ID-token verification is keyless, against the issuer's published JWKS). Set inline OR reference an existing Secret via `oidc.existingSecret`. Never goes into the ConfigMap. |
+| auth.oidc.clockSkewSeconds | int | `60` | Tolerance in seconds applied to the ID token's `exp`/`iat`/`nbf` checks, to absorb clock drift between the IdP and this server. The shipped 60 is the server's own default; raise it only if boot-time clock sync is genuinely unreliable, since it widens the window a replayed token stays valid. |
+| auth.oidc.defaultRole | string | `""` | Single role granted to an authenticated user who resolves to ZERO mapped roles. Empty (the default) keeps strict default-deny, which with an empty `roleMappings` means a successful SSO login that can see nothing — correct, and a confusing first experience. Set a read-only role such as `viewer` while you work the group mapping out. It must name a role that already exists for the resolved tenant; an unknown name fails the login closed. |
+| auth.oidc.enabled | bool | `false` | Turn on the OIDC/SSO login flow (sets `auth.provider: oidc`). While off, none of the keys below render at all — no env vars, no ConfigMap, no volume — so a non-SSO install is unaffected by this block existing. Turning it on makes SSO the login path for everyone except `breakGlassEmails`, so configure those before you flip it or an IdP misconfiguration locks every operator out of the UI. |
+| auth.oidc.existingSecret | string | `""` | Name of a Secret with key `oidcClientSecret` (takes precedence over `clientSecret`). Separate from `auth.existingSecret` on purpose: the JWT signing key and the IdP client secret rotate on different schedules and are usually owned by different people. Like every `existingSecret` in this chart it is outside the `checksum/secret` annotation's visibility, so rotating it needs a manual `kubectl rollout restart`. |
+| auth.oidc.groupsClaim | string | `"groups"` | ID-token claim carrying the user's IdP groups; its values are what `roleMappings` matches on. Entra emits `groups` (object ids unless the app registration is configured to emit names); Okta emits whatever the groups claim is named in the authorization server. |
+| auth.oidc.issuer | string | `""` | The IdP's issuer URL, `https://` only (the ID token's `iss` is pinned to it — a token from any other issuer is rejected). Entra: `https://login.microsoftonline.com/<tenant-id>/v2.0`. Google Workspace: `https://accounts.google.com`. Okta: `https://<org>.okta.com`. |
+| auth.oidc.jitProvisioning | bool | `false` | Create a user row on first successful OIDC login instead of requiring one to be pre-provisioned. OFF by default. With it on, the new user is granted the roles `roleMappings` resolves (or `defaultRole`), so turn it on only once one of those two actually grants something. |
+| auth.oidc.redirectUrl | string | `""` | This server's callback URL as registered with the IdP; it must end in `/api/v2/auth/oidc/callback` and be reachable from the browser, not from inside the cluster. `https://` is required except on loopback hosts, so this is the ingress hostname, never the Service name. |
+| auth.oidc.roleMappings | object | `{}` | Maps an IdP group value → an existing Leoflow role name. Default-DENY: a group with no entry here grants nothing. This is one of the two keys that CANNOT travel as an env var, so the chart writes it into the mounted `config.yaml`. Keys are quoted on render, which is what lets a dotted group name (`app.admins`) survive (#826). Optional — leave empty and every user falls back to `defaultRole`. |
+| auth.oidc.scopes | list | `["openid","email","profile"]` | OAuth scopes requested at login. The shipped three are what the flow needs; add the IdP's groups scope (Okta `groups`, Entra exposes groups without one) when `roleMappings` is used, or the `groupsClaim` arrives empty and every user resolves to zero roles. Rendered comma-joined into one env var — viper's decode hook splits it back into a list, the same mechanism `config.trustedProxies` uses. |
+| auth.oidc.tenantClaim | string | `""` | Which claim identifies the tenant: `tid` on Entra, `hd` on Google Workspace. REQUIRED with `enabled: true` — together with `tenantClaims` it is the tenant pin, and the chart refuses to render without both. |
+| auth.oidc.tenantClaims | object | `{}` | Maps each accepted `tenantClaim` VALUE → a Leoflow tenant name. REQUIRED and non-empty with `enabled: true`. A claim value that is not a key here is rejected with a generic 403 whose cause reaches only the audit log — which, in an SSO-only deployment, nobody can log in to read (#1143) — and it never falls back to the `default` tenant. This is the second key that cannot travel as an env var, so it too is written into the mounted `config.yaml` with its keys quoted: a Google `hd` value is always a dotted domain. Example: `{"example.com": "default"}`. |
 | auth.secretLivenessMode | string | `"observe"` | Secret-delivery liveness gate: `observe` (default) logs and audits a would-have-denied when the calling task instance is no longer live but still delivers the secrets; `enforce` denies. Required at `enforce` by `execution.warmPoolsEnabled` (ADR 0058 D2) — a reused pod's superseded attempt would otherwise still resolve secrets. Run `observe` first and read the audit trail before flipping. |
 | auth.secretScoping | string | `"permissive"` | Scope-by-declaration policy for secret delivery: `permissive` (default) delivers the WHOLE tenant vault to every task regardless of what its `leoflow.yaml` declares, and only logs + audits a warning when a task declared a narrower non-empty set; `enforce` delivers only the declared subset; `off` disables scoping and its warning entirely. `enforce` denies secrets to a DAG that declares NONE, which — the declaration schema being new — is most DAGs, so run `permissive` first and read the scope-warning trail before flipping. A clean trail proves only that no DAG whose declarations still RESOLVE is over-served: the warning counts only declared names that actually resolve, so it says nothing about a DAG that declares nothing, nor about one whose declared names were since deleted from the vault (an all-stale declaration counts as zero) (#800). Operator-scoped, never DAG-author-settable. |
 | auth.tokenTtlSeconds | int | `3600` | API + agent JWT lifetime in seconds. Default 1h; raise for longer agent sessions. |

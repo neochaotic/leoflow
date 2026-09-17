@@ -192,6 +192,15 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `default` only. This one matters because "set `default_role` to `viewer`" is
     the remedy the server's own warnings recommend, so it is the name most likely
     to be typed by hand.
+  - **a `break_glass_emails` whose addresses cannot sign in.** This is the worse
+    half of the lock-out problem, and it was silent: a non-empty allowlist looks
+    safe and is not. The gate admits the address and the credential store then
+    rejects it exactly like a wrong password, so the hatch does not open while
+    the operator believes it will. The only local password user that ever exists
+    is the bootstrap admin; every other one comes from the admin-authenticated
+    user API, which is precisely what cannot be reached during a lock-out. A user
+    provisioned through SSO does not count either: it has no password for
+    anything to verify against.
   - **an empty `break_glass_emails` under `provider: oidc`.** Every password
     login is rejected, which is correct, and is also the state in which any of
     the failures above leaves nobody able to reach the control plane, including

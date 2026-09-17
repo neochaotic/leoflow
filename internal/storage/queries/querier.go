@@ -51,6 +51,16 @@ type Querier interface {
 	CountDags(ctx context.Context, tenantID pgtype.UUID) (int64, error)
 	CountDagsByLatestRunState(ctx context.Context, tenantID pgtype.UUID) ([]CountDagsByLatestRunStateRow, error)
 	CountDagsFiltered(ctx context.Context, arg CountDagsFilteredParams) (int64, error)
+	// Does this address have a usable LOCAL password login in the tenant? The boot
+	// check on auth.oidc.break_glass_emails asks it: an address on that allowlist
+	// with no password row is an escape hatch that does not open, which is worse
+	// than an empty allowlist because the operator believes they have one.
+	//
+	// password_hash IS NOT NULL is the point, not merely that the row exists. A user
+	// created by OIDC just-in-time provisioning has a NULL password (the table's
+	// users_has_auth check permits it because the OIDC subject is the other half),
+	// so the row can exist while no password can ever be verified against it.
+	CountLocalPasswordUser(ctx context.Context, arg CountLocalPasswordUserParams) (int64, error)
 	CountPools(ctx context.Context, tenantID pgtype.UUID) (int64, error)
 	CountTaskInstanceStatesInWindow(ctx context.Context, arg CountTaskInstanceStatesInWindowParams) ([]CountTaskInstanceStatesInWindowRow, error)
 	CountUsers(ctx context.Context, tenantID pgtype.UUID) (int64, error)

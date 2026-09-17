@@ -11,7 +11,7 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **SSO is configurable from the chart (`auth.oidc.*`).** The server has had OIDC
   since ADR 0057, but no Helm install could turn it on: the chart exposed no
   `auth.oidc` key, and `validateOIDC` requires `auth.oidc.tenant_claims`, a map
-  that loads only from the YAML file named by `LEOFLOW_CONFIG` — which the chart
+  that loads only from the YAML file named by `LEOFLOW_CONFIG`, which the chart
   never mounted and still has no `extraVolumes` to mount. SSO was not
   misconfigured in Kubernetes; it was unreachable.
 
@@ -25,8 +25,8 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `auth.oidc.existingSecret`: the JWT signing key and the IdP secret rotate on
   different clocks.
 
-  Three render guards fail the template rather than the pod — a missing tenant
-  pin, a non-`https` issuer, and an `extraEnv` that hijacks `LEOFLOW_CONFIG` —
+  Three render guards fail the template rather than the pod (a missing tenant
+  pin, a non-`https` issuer, and an `extraEnv` that hijacks `LEOFLOW_CONFIG`),
   because a chart error is visible to an Argo CD sync and `NOTES.txt` is not.
 
   **What to change:** nothing, unless you want SSO. With `auth.oidc.enabled`

@@ -1,4 +1,4 @@
-# values-oidc-google.yaml — SSO with Google Workspace.
+# values-oidc-google.yaml, SSO with Google Workspace.
 #
 # Use with:  helm install leoflow leoflow/leoflow -n leoflow -f values-oidc-google.yaml
 #
@@ -34,7 +34,7 @@ agentTLS:
 
 auth:
   # SSO does NOT replace the JWT signing secret: OIDC is the login flow, and the
-  # token it mints for the browser — and every agent token — is still signed with
+  # token it mints for the browser (and every agent token) is still signed with
   # this key. An SSO-only install needs it exactly as much as a password install.
   jwtSecret: "CHANGEME-jwt-signing-secret"
 
@@ -55,7 +55,7 @@ auth:
     redirectUrl: "https://leoflow.example.com/api/v2/auth/oidc/callback"
 
     # The tenant pin. `hd` is the Google Workspace domain of the signed-in user,
-    # and it is present ONLY for Workspace accounts — a personal @gmail.com
+    # and it is present ONLY for Workspace accounts, a personal @gmail.com
     # account has no hd claim at all, so this pin also excludes those by
     # construction. Every domain you accept needs a line in tenantClaims; a value
     # that is not a key here is rejected 403 and never falls back to `default`.
@@ -74,13 +74,13 @@ auth:
     # THE LOCK-OUT ESCAPE HATCH. With SSO on, every local password login is
     # rejected except the addresses listed here. Leave it empty and a Google
     # outage, an expired client secret, or one wrong key above locks out
-    # everybody — including whoever has to fix it. Use an address that already has
+    # everybody, including whoever has to fix it. Use an address that already has
     # an admin user row and a password set.
     breakGlassEmails:
       - "admin@example.com"
 
     # Google emits no groups claim by default, so roleMappings would match nothing
-    # and every user would resolve to zero roles — a successful login into a UI
+    # and every user would resolve to zero roles, a successful login into a UI
     # that shows them nothing. Grant a read-only role instead, and tighten later.
     defaultRole: "viewer"
     roleMappings: {}

@@ -11,7 +11,7 @@ serves no HTTP API).
 {{- /* One definition of where the OIDC config file lands, because three places
      have to agree on it: the volumeMount, the volume, and the LEOFLOW_CONFIG
      env var the server resolves. A disagreement between them is not a render
-     error — it is a boot that reads no file and then fails closed on a tenant
+     error: it is a boot that reads no file and then fails closed on a tenant
      pin the operator can see configured in the ConfigMap right next to it. */ -}}
 {{- $oidcMountPath := "/etc/leoflow/oidc" -}}
 apiVersion: apps/v1
@@ -368,7 +368,7 @@ spec:
                   key: jwtSecret
             {{- if .ctx.Values.auth.oidc.enabled }}
             # OIDC/SSO (#1143). The scalars ride the env path the rest of this
-            # chart uses; the two MAPS (tenant_claims, role_mappings) cannot —
+            # chart uses; the two MAPS (tenant_claims, role_mappings) cannot,
             # viper binds env only for the scalar leaves in serverDefaults, and
             # those two are deliberately unregistered because a Google `hd` key
             # is a dotted domain its "." delimiter would split (#826). They are
@@ -423,7 +423,7 @@ spec:
               value: {{ join "," .ctx.Values.auth.oidc.breakGlassEmails | quote }}
             {{- end }}
             {{- if or .ctx.Values.auth.oidc.existingSecret .ctx.Values.auth.oidc.clientSecret }}
-            # Code-exchange credential only — ID-token verification is keyless
+            # Code-exchange credential only, ID-token verification is keyless
             # against the issuer's JWKS. Delivered by secretKeyRef, never in the
             # ConfigMap. Optional: a public client using PKCE has none, and
             # validateOIDC does not require it.

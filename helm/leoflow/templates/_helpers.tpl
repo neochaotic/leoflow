@@ -696,7 +696,7 @@ obvious value for someone shrinking a deployment and the min default is 2.
 {{/*
 Name of the ConfigMap carrying the OIDC settings that CANNOT travel as env vars.
 Only auth.oidc.tenantClaims and auth.oidc.roleMappings live there: both are maps,
-and viper binds env only for the scalar leaves registered in serverDefaults —
+and viper binds env only for the scalar leaves registered in serverDefaults,
 these two are deliberately absent from it because a Google `hd` key is a dotted
 domain that viper's "." delimiter would split into nested maps (#826). The server
 reads them out-of-band from the YAML file named by LEOFLOW_CONFIG

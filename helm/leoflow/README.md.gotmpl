@@ -18,7 +18,7 @@ production-like install — distinct from the host-run `test/e2e/e2e.sh` smoke.
 | ServiceAccount + Role/RoleBinding | lets the control plane create/watch/delete **task pods** and read their logs in `taskNamespace` |
 | ClusterRole + ClusterRoleBinding | **only** when `auth.agentTokenTransport: exchange` — `create` on `tokenreviews` (cluster-scoped API). See [Agent credential transport](#agent-credential-transport-and-warm-worker-pools) |
 | Secret | holds inline DB/Redis/JWT/bootstrap credentials (skipped when you bring your own) |
-| ConfigMap | **only** when `auth.oidc.enabled` — the two OIDC settings that are maps and therefore have no env-var route (`tenantClaims`, `roleMappings`), mounted as the server's `LEOFLOW_CONFIG`. See [SSO with OIDC](#sso-with-oidc) |
+| ConfigMap | **only** when `auth.oidc.enabled`, the two OIDC settings that are maps and therefore have no env-var route (`tenantClaims`, `roleMappings`), mounted as the server's `LEOFLOW_CONFIG`. See [SSO with OIDC](#sso-with-oidc) |
 | Job (hook) | runs `golang-migrate` before install/upgrade |
 | Ingress | optional |
 
@@ -319,8 +319,8 @@ The server has had a complete OIDC implementation for several releases; this
 chart could not reach it until now, and the reason is worth knowing because it
 shapes how the values are laid out.
 
-Two of the server's OIDC settings are **maps** — `auth.oidc.tenant_claims` and
-`auth.oidc.role_mappings` — and a map has no environment-variable route at all.
+Two of the server's OIDC settings are **maps** (`auth.oidc.tenant_claims` and
+`auth.oidc.role_mappings`), and a map has no environment-variable route at all.
 Viper binds env only for the scalar leaves the server registers, and those two are
 deliberately unregistered: a Google Workspace `hd` key is a domain, always dotted,
 and viper's `.` key delimiter would split it into nested maps and fail to decode
@@ -335,7 +335,7 @@ So the chart splits the delivery:
 |---|---|
 | `issuer`, `clientId`, `redirectUrl`, `tenantClaim`, `scopes`, `groupsClaim`, `defaultRole`, `allowedEmailDomains`, `breakGlassEmails`, `jitProvisioning`, `clockSkewSeconds` | `LEOFLOW_AUTH_OIDC_*` env vars, the way the rest of this chart delivers server settings |
 | `tenantClaims`, `roleMappings` | a ConfigMap mounted read-only at `/etc/leoflow/oidc`, with `LEOFLOW_CONFIG` pointing at it |
-| `clientSecret` | the chart-managed Secret (or `auth.oidc.existingSecret`), by `secretKeyRef` — never the ConfigMap |
+| `clientSecret` | the chart-managed Secret (or `auth.oidc.existingSecret`), by `secretKeyRef`: never the ConfigMap |
 
 The mounted file is **partial on purpose**. Viper ranks env above a config file,
 and a key a file omits keeps the value it already had, so a file holding only the
@@ -363,7 +363,7 @@ A full worked example is in
 [`examples/values-oidc-google.yaml`](https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/examples/values-oidc-google.yaml).
 
 Three things the chart refuses at render time rather than letting them become a
-CrashLoopBackOff whose cause is visible only in container logs — the one channel a
+CrashLoopBackOff whose cause is visible only in container logs: the one channel a
 GitOps sync never shows, since Argo CD does not render `NOTES.txt`:
 
 - `enabled: true` without `issuer`, `clientId`, `redirectUrl`, `tenantClaim` **and**
@@ -385,7 +385,7 @@ that shows nothing).
 JWT signing key and the IdP client secret rotate on different schedules and usually
 have different owners. Like every `existingSecret` in this chart it sits outside
 the `checksum/secret` annotation's visibility, so rotating it needs a manual
-`kubectl rollout restart`. The maps do not — they carry their own
+`kubectl rollout restart`. The maps do not: they carry their own
 `checksum/oidc-config` annotation, because `LoadServer` parses the file once at
 boot and would otherwise leave an edited tenant map sitting on disk unread.
 

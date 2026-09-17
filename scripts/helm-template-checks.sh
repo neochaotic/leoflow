@@ -101,7 +101,7 @@ for fixture in helm/leoflow/examples/*.yaml; do
   # `|| true` because the script runs under `set -o pipefail` and grep exits 1 when
   # a fixture legitimately sets no secretKey (an SSO example needs none): without it
   # the pipeline's status becomes the assignment's, `set -e` kills the run HERE, and
-  # every check below this loop — the whole agent-TLS auto-gen section — is silently
+  # every check below this loop (the whole agent-TLS auto-gen section) is silently
   # skipped while the script still prints nothing but OK lines.
   fixture_key=$(grep -E '^secretKey: ' "$fixture" 2>/dev/null \
     | head -1 \
@@ -203,8 +203,8 @@ refute_in "$RENDERED" 'name: LEOFLOW_CONFIG'        "no server config file env o
 refute_in "$RENDERED" 'oidc-config'                 "no OIDC volume or ConfigMap on a non-SSO install"
 
 # Half 2: ON delivers the scalars as env and the two maps as a mounted file. The
-# dotted tenant key is the point of the file — viper's key delimiter is "." and
-# would split a Google `hd` domain into nested maps (#826) — so assert it survives
+# dotted tenant key is the point of the file, viper's key delimiter is "." and
+# would split a Google `hd` domain into nested maps (#826): so assert it survives
 # the render quoted and intact.
 OIDC_RENDERED=$(helm template leoflow-test "$CHART" \
   --set database.url='postgres://leoflow:p@db:5432/leoflow?sslmode=disable' \

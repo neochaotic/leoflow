@@ -1,12 +1,12 @@
 {{/*
-The OIDC config file — deliberately PARTIAL, and deliberately the only file this
+The OIDC config file, deliberately PARTIAL, and deliberately the only file this
 chart mounts as server config.
 
 It carries exactly the two settings that have no other route into the server:
 auth.oidc.tenant_claims and auth.oidc.role_mappings are maps, and viper binds
 environment variables only for the scalar leaves registered in serverDefaults. The
 two maps are not registered there (a Google Workspace `hd` key is a dotted domain,
-and viper's "." key delimiter would split it into nested maps and fail to decode —
+and viper's "." key delimiter would split it into nested maps and fail to decode,
 #826), so the server decodes them straight from the raw YAML named by
 LEOFLOW_CONFIG. Without this file `auth.provider: oidc` cannot boot: validateOIDC
 requires the tenant pin and reports the miss with a hint that says, correctly, that
@@ -38,7 +38,7 @@ data:
   config.yaml: |
     # Rendered by the leoflow chart. Partial on purpose: every other server
     # setting arrives as a LEOFLOW_* environment variable, which outranks this
-    # file. Edit helm values, not this ConfigMap — a `helm upgrade` replaces it.
+    # file. Edit helm values, not this ConfigMap, a `helm upgrade` replaces it.
     auth:
       oidc:
         tenant_claims:

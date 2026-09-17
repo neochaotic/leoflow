@@ -3,7 +3,7 @@
 # The server has had a complete OIDC implementation for several releases and this
 # chart could not reach it: values.yaml exposed no `auth.oidc.*` key, and the pod
 # had no volume a server config file could be mounted into. `extraEnv` was not a
-# way around it either — `auth.oidc.tenant_claims` is a MAP, no environment
+# way around it either, `auth.oidc.tenant_claims` is a MAP, no environment
 # variable can carry one, and the server fails boot closed without it. So SSO was
 # not something you could configure badly; it was something you could not
 # configure at all.
@@ -64,7 +64,7 @@ tests:
             readOnly: true
 
   # Property 2. LEOFLOW_CONFIG has to resolve to the file the volume actually
-  # projects. A mismatch is not a render error — it is a server that reads no file
+  # projects. A mismatch is not a render error: it is a server that reads no file
   # and then fails boot on a tenant pin the operator can see sitting in the
   # ConfigMap next to the pod, which is the most expensive possible way to spell a
   # typo. One template-local variable defines the path and all three sites read it;
@@ -206,7 +206,7 @@ tests:
   # Property 4, and the whole reason these two keys need a file. viper's key
   # delimiter is ".", so a dotted map key is split into nested maps and fails to
   # decode (#826); the server parses them out-of-band from the raw YAML, and the
-  # quoting here is what keeps a Google Workspace `hd` domain — always dotted —
+  # quoting here is what keeps a Google Workspace `hd` domain, always dotted,
   # one key rather than two levels of nesting.
   - it: writes the two maps into the mounted config with their keys quoted
     template: oidc-config.yaml
@@ -233,7 +233,7 @@ tests:
           pattern: '"app\.admins": "admin"'
 
   # The file is partial ON PURPOSE. viper ranks env above a config file, and a key
-  # a file omits keeps the value it already had — so a file holding only the two
+  # a file omits keeps the value it already had: so a file holding only the two
   # maps can neither override nor blank anything the Deployment's env delivers. A
   # later change that started writing other keys here would invert that silently,
   # so pin the absence, and pin the credential's absence hardest.
@@ -256,7 +256,7 @@ tests:
   # Property 5. The server reports every missing OIDC key in ONE error because each
   # boot failure on Kubernetes costs a values edit, an upgrade and a rollout to
   # learn the next one. The render guard owes the operator the same, one step
-  # earlier — where a GitOps sync can actually show it, since Argo never renders
+  # earlier, where a GitOps sync can actually show it, since Argo never renders
   # NOTES.txt.
   - it: refuses to render an SSO install with no tenant pin
     template: deployment.yaml
@@ -284,7 +284,7 @@ tests:
           errorPattern: "must be an https:// URL"
 
   # extraEnv renders last and last-wins, so this entry would repoint the server
-  # away from the mounted file and take the tenant pin — which has no other route —
+  # away from the mounted file and take the tenant pin, which has no other route,
   # with it. The resulting boot failure looks exactly like a missing pin the
   # operator can see configured in the ConfigMap. Refused only while SSO is on:
   # pointing LEOFLOW_CONFIG at a file of your own is legitimate otherwise.

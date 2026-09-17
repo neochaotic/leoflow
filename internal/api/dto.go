@@ -43,6 +43,12 @@ type dagDTO struct {
 	ScheduleInterval *scheduleIntervalDTO `json:"schedule_interval"`
 	MaxActiveRuns    int                  `json:"max_active_runs"`
 	Catchup          bool                 `json:"catchup"`
+	// Fileloc is where Airflow says the DAG was defined. Airflow's DAGResponse
+	// declares it as a required string, and it is the only place a consumer of the
+	// list route can learn a DAG's location: OpenMetadata reads pipelineLocation
+	// from here and never calls the details endpoint. Same derivation the details
+	// route has always used.
+	Fileloc string `json:"fileloc"`
 }
 
 type dagCollectionDTO struct {
@@ -74,6 +80,7 @@ func toDagDTO(d domain.DAG) dagDTO {
 		ScheduleInterval: schedule,
 		MaxActiveRuns:    d.MaxActiveRuns,
 		Catchup:          d.Catchup,
+		Fileloc:          d.DagID + "/dag.py",
 	}
 }
 

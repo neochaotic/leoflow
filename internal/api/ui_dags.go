@@ -127,7 +127,11 @@ func toDagWithRunsDTO(d domain.DAG, runs []domain.DagRun) dagWithRunsDTO {
 		LatestDagRuns:               latest,
 		PendingActions:              []any{},
 		FileToken:                   "",
-		Fileloc:                     "",
+		// Mirrors the details endpoint, which has carried the same derivation all
+		// along, and the /api/v2/dags list, which is the route OpenMetadata reads.
+		// This one is the UI's own list; it is here so the three agree rather than
+		// because any consumer needs it.
+		Fileloc: d.DagID + "/dag.py",
 	}
 }
 

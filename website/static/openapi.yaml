@@ -885,6 +885,7 @@ components:
         max_active_runs: { type: integer }
         catchup: { type: boolean }
         has_task_concurrency_limits: { type: boolean }
+        fileloc: { type: string }
 
     DAGCollection:
       type: object

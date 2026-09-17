@@ -290,3 +290,87 @@ The scheduler observer seam (D1) already has the full picture.
 - Generic (non-dbt) dataset/column lineage in v1 (D2, D5).
 - Running OpenLineage's Python SQL extractors in the pod (D5, v3).
 - Any OpenMetadata-specific entity model beyond the OL wire format (D6).
+
+## Amendment A (2026-09-17): an official Go SDK exists, OpenMetadata does not take HTTP, and the design is source-agnostic
+
+Five corrections, all found while scoping the implementation. The decision this
+ADR records stands; what changes is how it is built and two factual claims it
+makes.
+
+**A1 supersedes D1's emitter implementation.** There is a first-party OpenLineage
+Go SDK, `github.com/OpenLineage/openlineage/client/go`, v1.53.0, released
+2026-09-01 from the OpenLineage monorepo alongside the Java and Python clients
+and versioned on the same release train. It targets spec 2-0-2 and already ships
+a constructor for every facet this ADR names, for both v1a and v1b. D1 reads as
+hand-rolling an HTTP client and event types; that is now the wrong default under
+the project's rule of preferring a first-party SDK. `internal/lineage` supplies
+leoflow's own implementation of the SDK's two-method transport interface, so only
+the client and facet packages are imported: the SDK's transport package pulls in
+Google Cloud Data Catalog unconditionally, with no build tag, which has no place
+in the leoflow binary. D1's scheduler observer seam is unchanged, but its cited
+line numbers have drifted post-v0.4.7 and should be refreshed when this is
+implemented.
+
+**A2 corrects D4's OpenMetadata URL, and does NOT withdraw D6.** An earlier
+draft of this amendment withdrew both, on evidence that OpenMetadata's
+OpenLineage connector is a Kafka or Kinesis consumer. That evidence is real but
+it describes OM's ingestion-side PULL connector. OM also ships a first-party HTTP
+PUSH receiver in the server itself: `OpenLineageResource` at `@Path("/v1/openlineage")`
+with `POST /lineage` and `POST /lineage/batch`, whose settings schema is titled
+"Configuration for OpenLineage HTTP API integration" and whose `enabled` default
+is true. So D6 stands as written: an HTTP emitter reaches OpenMetadata directly,
+with no broker in between. What was wrong in D4 is only the path and the port.
+The endpoint is `POST http://<om>:8585/api/v1/openlineage/lineage`.
+
+Two operational facts that path forces, which neither D4 nor the original
+Alternatives section carries, and which decide whether v1a is visible at all:
+
+- OM's `eventTypeFilter` defaults to `["COMPLETE"]`, so START, RUNNING, FAIL and
+  ABORT are dropped unless an operator widens it. This ADR's v1a slice is exactly
+  lifecycle events, so under default settings the v1a deliverable produces nothing
+  an OM user can see. That has to be stated in the operator documentation, and it
+  argues for shipping v1b closer to v1a than the original sequencing implied.
+- Authorisation is `EDIT_LINEAGE` on Table, so D4's api_key must be an OM bot
+  token carrying that policy, not an arbitrary token.
+
+OM's Kafka connector remains a second, pull-shaped path. It is an option, not the
+requirement an earlier reading of this made it.
+
+**A3 replaces D3's dbt-first framing with a spine and a provider seam.** Dataset
+lineage is defined once, independent of where the datasets came from: a dataset
+reference model, a single function that builds the OpenLineage namespace and name
+from structured parts, and one optional field on the task spec that every
+provider writes into. Providers, in the order they ship: datasets declared by the
+author on the task, the dbt manifest, and the connections a DAG already declares.
+SQL parsing stays out of scope and needs its own ADR, per D5 and ADR 0048. dbt is
+the first provider, not the design. Building it dbt-first would bake dbt's shape
+into the emitter and make the second source a rewrite.
+
+**A4 adds two dbt facts D3 omits.** The manifest reader consumes only the `nodes`
+map; dbt's `manifest.json` carries a separate top-level `sources` map whose ids
+appear in `depends_on.nodes` and which are the input datasets at the ROOT of the
+lineage graph. Reading it is required, not optional, or the dbt graph has no
+roots. Physical identity should prefer a node's `relation_name` when present,
+because dbt has already applied quoting and casing there, falling back to the
+database, schema and alias parts. Every manifest fixture in the dbt package is a
+hand-written stub carrying none of these fields, so at least one real
+dbt-generated manifest has to be captured as a golden fixture from the existing
+dbt e2e runs.
+
+**A5 states the naming invariant as a hard requirement, and corrects its own
+evidence.** Consumers attach lineage by matching the dataset namespace and name
+to tables they already catalogue, and they fail SILENTLY when the match misses.
+Namespace and name strings are therefore produced in exactly one function, from
+structured parts, covered by a per-warehouse table test. No provider builds them
+itself. This is the failure mode most likely to reach production, because
+everything upstream of it reports success.
+
+An earlier draft cited OpenMetadata's exact-match scheme dictionary, which
+accepts `postgres` and not `postgresql`, as the mechanism. That dictionary
+governs the **Kafka** connector. On the HTTP path this ADR actually uses,
+resolution is operator-configured through `namespaceToServiceMapping` (exact
+match, then prefix) plus OM's own dataset-name normaliser, and OM's own code
+comments use `postgresql://host:5432/db` as the example namespace. The
+prescription above is unchanged and still correct. The specific scheme claim is
+withdrawn, because it would have sent us to normalise against the wrong rule.
+

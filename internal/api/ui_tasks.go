@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"sort"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -66,6 +67,48 @@ type taskCollectionDTO struct {
 
 // operatorName maps a Leoflow task type to an Airflow-style operator name the UI
 // displays.
+// classRef splits a task into the (module_path, class_name) pair Airflow exposes
+// on its tasks endpoint.
+//
+// module_path was declared here and never assigned, so every task carried
+// `"module_path": null`. Airflow itself populates it, and OpenMetadata's REST
+// connector types the pair as dict[str, str], so a null made its validator raise
+// and discard the DAG, for every DAG, with no pipeline ingested and the test
+// connection still reporting success (it probes reachability, not shape).
+//
+// The module paths are the ones this project already tells authors to import
+// from, which are Airflow 3's: the core `airflow.operators.*` modules were
+// removed and the compiler refuses them by name.
+func classRef(t domain.TaskSpec) classRefDTO {
+	// A captured provider operator already carries its own dotted class, so the
+	// module is whatever precedes the final dot rather than a lookup.
+	if t.Type == domain.TaskTypeAirflowOperator && t.OperatorClass != "" {
+		if i := strings.LastIndex(t.OperatorClass, "."); i > 0 {
+			mod := t.OperatorClass[:i]
+			return classRefDTO{ModulePath: &mod, ClassName: t.OperatorClass[i+1:]}
+		}
+		return classRefDTO{ModulePath: strPtr("leoflow.tasks"), ClassName: t.OperatorClass}
+	}
+	switch t.Type {
+	case domain.TaskTypePython:
+		return classRefDTO{ModulePath: strPtr("airflow.providers.standard.operators.python"), ClassName: "PythonOperator"}
+	case domain.TaskTypeBash:
+		return classRefDTO{ModulePath: strPtr("airflow.providers.standard.operators.bash"), ClassName: "BashOperator"}
+	default:
+		// A leoflow-owned module rather than an Airflow one. The pair means "this
+		// class, in this module", so naming a real Airflow module that does not
+		// contain the class produces a reference that resolves to nothing: a
+		// consumer treating it as an import gets an error, and a human reading the
+		// catalog is told something false. leoflow.tasks is a non-empty string, so
+		// OpenMetadata is satisfied, it cannot be mistaken for an importable path,
+		// and it says the true thing: a leoflow task type with no Airflow class
+		// behind it.
+		return classRefDTO{ModulePath: strPtr("leoflow.tasks"), ClassName: operatorName(t.Type)}
+	}
+}
+
+func strPtr(s string) *string { return &s }
+
 func operatorName(t domain.TaskType) string {
 	switch t {
 	case domain.TaskTypePython:
@@ -102,7 +145,7 @@ func toTaskResponse(spec domain.DAGSpec, t domain.TaskSpec) taskResponseDTO {
 		TaskDisplayName: t.TaskID,
 		Owner:           strPtrOrNil(spec.Owner),
 		OperatorName:    operatorName(t.Type),
-		ClassRef:        classRefDTO{ClassName: operatorName(t.Type)},
+		ClassRef:        classRef(t),
 		TriggerRule:     tr,
 		Retries:         retries,
 		// Airflow's default retry_delay is 300s; emit it as a TimeDelta object

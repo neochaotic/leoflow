@@ -210,6 +210,7 @@ type DAG struct {
 	DagDisplayName           *string                 `json:"dag_display_name,omitempty"`
 	DagId                    *string                 `json:"dag_id,omitempty"`
 	Description              *string                 `json:"description,omitempty"`
+	Fileloc                  *string                 `json:"fileloc,omitempty"`
 	HasTaskConcurrencyLimits *bool                   `json:"has_task_concurrency_limits,omitempty"`
 	IsActive                 *bool                   `json:"is_active,omitempty"`
 	IsPaused                 *bool                   `json:"is_paused,omitempty"`

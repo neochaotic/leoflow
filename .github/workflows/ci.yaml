@@ -1346,6 +1346,47 @@ jobs:
         run: pytest -v --cov=leoflow_parser --cov-fail-under=70
 
   # ─────────────────────────────────────────────────────────────────────
+  # OpenMetadata REST contract
+  #
+  # Two layers on purpose. A Go test cannot prove that OpenMetadata's pydantic
+  # models accept our bodies, and the defect this guards was exactly that: a
+  # field that is valid JSON, valid against our own OpenAPI spec, and rejected by
+  # OM's type, so every DAG failed validation and no pipeline was ingested while
+  # OM's Test Connection stayed green. So Go writes the six responses OM reads
+  # and Python judges them against OM's own vendored models.
+  # ─────────────────────────────────────────────────────────────────────
+  om-contract:
+    name: OpenMetadata REST contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install pydantic
+        run: pip install --upgrade pip && pip install 'pydantic>=2'
+
+      # om_models.py is a verbatim copy of OpenMetadata's own models, pinned to a
+      # release tag. The pin is the whole value: an edited copy would validate our
+      # bodies against a model OM does not have, which is a green gate over a
+      # broken integration. Refreshing the copy means updating both files.
+      - name: Check the vendored OpenMetadata models are unedited
+        run: cd test/om-contract && shasum -a 256 -c om_models.py.sha256
+
+      - name: Capture the responses OpenMetadata reads
+        env:
+          LEOFLOW_OM_GOLDEN: ${{ runner.temp }}/om-golden
+        run: go test ./internal/api/ -run TestWriteOpenMetadataGoldenBodies -count=1
+
+      - name: Validate them against OpenMetadata's own models
+        run: python3 test/om-contract/validate.py "${{ runner.temp }}/om-golden"
+
+  # ─────────────────────────────────────────────────────────────────────
   # Python task runtime tests
   # ─────────────────────────────────────────────────────────────────────
   python-runtime:

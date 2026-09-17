@@ -100,6 +100,39 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **OpenMetadata can catalogue leoflow again: `class_ref.module_path` is no
+  longer null.** A field team reported that they could not integrate leoflow with
+  OpenMetadata and could not say why. The cause was one field. `classRefDTO`
+  declared `ModulePath *string` and never assigned it, so `GET /api/v2/dags/{id}/tasks`
+  emitted `"class_ref": {"module_path": null, ...}`. OpenMetadata types that pair
+  as a string map, pydantic does not coerce null into a string, and the model
+  raises. OM catches that per DAG and files it as a failed record, so **no**
+  pipeline was ingested. Not a partial result, zero.
+
+  What made it hard to see from outside: OM's Test Connection probe checks
+  reachability and deliberately accepts any body from that endpoint, so the
+  wizard reported success while ingestion produced nothing.
+
+  Airflow itself populates `module_path`, so this was a compatibility gap as well
+  as an OpenMetadata one. `GET /api/v2/dags` also now carries `fileloc`, the field
+  Airflow declares as a required string on that response and the only place a
+  consumer of the list route can learn where a DAG is defined; OpenMetadata reads
+  its `pipelineLocation` from there and never calls the details endpoint.
+
+  There is a new `operate/openmetadata` page with the configuration, including
+  the detail that `hostPort` must be the bare root (OM appends `api` and the
+  version itself, so a trailing `/api` produces `/api/api/...` and 404s
+  everywhere), and an explicit statement of what this path does not give you:
+  **no table lineage**, by construction on OM's side.
+
+  CI gains a contract job that captures the six responses OM reads (the token
+  exchange, the version probe, the DAG list, one DAG's tasks, its runs and one
+  run's task instances) and validates them against OpenMetadata's own pydantic
+  models, vendored verbatim from the 2.0.1 release and checksum-pinned so an
+  edited copy fails the job. Two layers, because a Go test cannot prove that
+  pydantic accepts a body, and this defect was valid JSON that was valid against
+  our own OpenAPI spec.
+
 - **BREAKING: an unflagged `clearTaskInstances` now previews, and is scoped to
   failures (#1137).** Apache Airflow 3.2.1 declares `dry_run: bool = True` and
   `only_failed: bool = True` on `ClearTaskInstancesBody`. leoflow defaulted both

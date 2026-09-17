@@ -18,6 +18,10 @@ const { chromium } = require('playwright-core');
 
 const URL_BASE = process.env.LEOFLOW_URL || 'http://localhost:18080';
 const EXPECT_SSO = process.env.LEOFLOW_EXPECT_SSO !== '0';
+// Where the flow is supposed to end up. Asserting only that the browser left the
+// sign-in page is satisfied by a 500 from /api/v2/auth/oidc/login, whose URL does
+// not contain "/api/v2/auth/login" either.
+const IDP_ORIGIN = process.env.LEOFLOW_IDP_ORIGIN || 'https://localhost:18443';
 
 function cachedChromium() {
   const fs = require('fs');
@@ -43,7 +47,11 @@ const fail = (msg) => { console.error(`FAIL: ${msg}`); process.exitCode = 1; };
 
 (async () => {
   const browser = await chromium.launch({ headless: true, executablePath: cachedChromium() });
-  const page = await browser.newPage();
+  // The fake IdP holds a throwaway CA's cert. Without this the redirect ends on
+  // Chromium's interstitial, whose URL is still the IdP's, so the assertions
+  // below would pass on a handshake that never completed.
+  const context = await browser.newContext({ ignoreHTTPSErrors: true });
+  const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
 
@@ -63,13 +71,23 @@ const fail = (msg) => { console.error(`FAIL: ${msg}`); process.exitCode = 1; };
       if (!href.includes('next=')) {
         fail('the SSO control drops ?next=, so an SSO login cannot return the user to the page they asked for');
       }
-      // Following it must actually leave for the IdP. A control that renders and
-      // goes nowhere is the same dead end with extra steps.
+      // Following it must actually reach the IdP's authorization endpoint with a
+      // usable request. A control that renders and goes nowhere is the same dead
+      // end with extra steps, and so is one that 500s on the way.
       await sso.first().click();
       await page.waitForLoadState('domcontentloaded');
       const landed = page.url();
-      if (landed.includes('/api/v2/auth/login')) {
-        fail(`clicking the SSO control stayed on the sign-in page (${landed})`);
+      if (!landed.startsWith(IDP_ORIGIN)) {
+        fail(`clicking the SSO control landed on ${landed}, not the IdP at ${IDP_ORIGIN}`);
+      } else {
+        const q = new URL(landed).searchParams;
+        // PKCE and the CSRF/replay bindings are what make the redirect a login
+        // rather than a link. Losing any of them is silent from the browser.
+        for (const param of ['client_id', 'redirect_uri', 'state', 'nonce', 'code_challenge']) {
+          if (!q.get(param)) {
+            fail(`the authorization request carries no ${param}: ${landed}`);
+          }
+        }
       }
     }
     // break_glass_emails exists so named local logins still work when the IdP is
@@ -83,6 +101,7 @@ const fail = (msg) => { console.error(`FAIL: ${msg}`); process.exitCode = 1; };
   }
 
   if (errors.length) fail(`uncaught page errors: ${errors.join(' | ')}`);
+  await context.close();
   await browser.close();
   if (!process.exitCode) {
     console.log(`ok: sign-in page at ${URL_BASE} ${EXPECT_SSO ? 'offers' : 'correctly omits'} the SSO flow`);

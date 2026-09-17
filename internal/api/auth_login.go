@@ -94,11 +94,10 @@ func sanitizeNext(next string) string {
 }
 
 // loginPageHandler implements GET /api/v2/auth/login: it serves the login page
-// (the Airflow UI redirects here when unauthenticated).
-// loginPageHandler renders the sign-in page. sso says whether an OIDC flow was
-// discovered at boot, which is the same condition the router uses to register
-// /api/v2/auth/oidc/login: advertising the link without it would 404 the user
-// (#1160).
+// (the Airflow UI redirects here when unauthenticated). sso says whether an OIDC
+// flow was discovered at boot, which is the same condition the router uses to
+// register /api/v2/auth/oidc/login: advertising the link without it would 404 the
+// user (#1160).
 func loginPageHandler(sso bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Status(http.StatusOK)

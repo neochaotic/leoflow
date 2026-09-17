@@ -7,8 +7,8 @@
 # discovery happens at boot, so a fake IdP has to serve
 # /.well-known/openid-configuration over TLS before the server will start at all.
 # This generates a throwaway CA for it and points the server at that CA through
-# SSL_CERT_FILE, which Go's crypto/x509 honours. Nothing here touches the system
-# trust store.
+# SSL_CERT_FILE, which the Linux build of Go's crypto/x509 reads. Nothing here
+# touches the system trust store.
 #
 # Requirements: openssl, python3, node with playwright-core, a built
 # bin/leoflow-server, and a reachable dev Postgres.
@@ -18,11 +18,18 @@ set -euo pipefail
 
 # PLATFORM NOTE. This needs Go to trust a throwaway CA through SSL_CERT_FILE,
 # because leoflow refuses a non-https issuer and discovery happens at boot. That
-# works on Linux, which is where CI runs it. It does NOT work on macOS: Go uses
-# the platform verifier there and SSL_CERT_FILE populates nothing, which was
-# measured rather than assumed (x509.SystemCertPool returns an empty pool with
-# the variable set). On a Mac, run it the way test/ui-contract/run.sh runs its
-# suite, inside a Linux container, or let CI run it.
+# works on Linux, which is where CI runs it. It does NOT work on macOS: the darwin
+# build of crypto/x509 defers to the platform verifier and has no SSL_CERT_FILE
+# path at all, so the variable is read by nothing.
+#
+# Measure that with a handshake, not with the cert pool. x509.SystemCertPool on
+# darwin returns a pool whose Subjects() is empty whether or not SSL_CERT_FILE is
+# set, so "empty pool" is the same observation in both cases and distinguishes
+# nothing. An https GET against a server holding a cert signed by the named CA
+# does distinguish, and on macOS it fails with "certificate signed by unknown
+# authority" with the variable set (measured, go1.26, darwin/arm64).
+#
+# On a Mac, run it inside a Linux container or let CI run it.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORK="$(mktemp -d)"
@@ -131,6 +138,7 @@ env LEOFLOW_UI_EDITION=pro \
     LEOFLOW_AUTH_OIDC_CLIENT_ID=leoflow \
     LEOFLOW_AUTH_OIDC_REDIRECT_URL="https://localhost:${SSO_PORT}/api/v2/auth/oidc/callback" \
     LEOFLOW_AUTH_OIDC_TENANT_CLAIM=hd \
+    LEOFLOW_AUTH_OIDC_BREAK_GLASS_EMAILS=breakglass@example.com \
     LEOFLOW_SERVER_GRPC_TLS_CERT="$WORK/grpc.crt" \
     LEOFLOW_SERVER_GRPC_TLS_KEY="$WORK/grpc.key" \
     LEOFLOW_SERVER_HTTP_ADDR="0.0.0.0:${SSO_PORT}" \
@@ -144,7 +152,7 @@ log "Booting a control plane WITHOUT sso on :${PLAIN_PORT}"
 env LEOFLOW_AUTH_JWT_SECRET=plain-e2e \
     LEOFLOW_SERVER_HTTP_ADDR="0.0.0.0:${PLAIN_PORT}" \
     LEOFLOW_SERVER_METRICS_ADDR="0.0.0.0:19091" \
-    LEOFLOW_SERVER_GRPC_ADDR="0.0.0.0:19091" \
+    LEOFLOW_SERVER_GRPC_ADDR="0.0.0.0:19092" \
     LEOFLOW_DATABASE_URL="$DB" \
     "$ROOT/bin/leoflow-server" >"$WORK/plain-server.log" 2>&1 &
 PIDS+=($!)
@@ -162,7 +170,8 @@ wait_ready "$SSO_PORT" sso-server
 wait_ready "$PLAIN_PORT" plain-server
 
 log "Asserting the SSO deployment offers the flow"
-LEOFLOW_URL="http://localhost:${SSO_PORT}" node "$ROOT/test/e2e/sso-login-page.js"
+LEOFLOW_URL="http://localhost:${SSO_PORT}" LEOFLOW_IDP_ORIGIN="$ISSUER" \
+  node "$ROOT/test/e2e/sso-login-page.js"
 
 log "Asserting the JWT-only deployment does not advertise a route it never registered"
 LEOFLOW_URL="http://localhost:${PLAIN_PORT}" LEOFLOW_EXPECT_SSO=0 node "$ROOT/test/e2e/sso-login-page.js"

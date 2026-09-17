@@ -165,6 +165,10 @@ chaos-runtime: ## Runtime fault-injection chaos e2e (#231 Phase 2): kill schedul
 e2e-timeout: ## Run the k3d execution_timeout e2e (#925/#930: agent clock beats the kubelet, durable reason, agent-lost reap; needs k3d, kubectl, docker, jq, migrate; run make dev-up + make build first)
 	bash test/e2e/execution-timeout-e2e.sh
 
+.PHONY: e2e-sso
+e2e-sso: ## Run the sign-in page SSO e2e (#1160: a configured deployment must offer the flow; Linux only, needs openssl, python3, node with playwright-core, local Postgres; run make build first)
+	bash test/e2e/sso-login-page.sh
+
 .PHONY: e2e-split
 e2e-split: ## Run the k3d two-process api/scheduler split e2e (ADR 0049; needs k3d, kubectl, docker, jq; run make dev-up + make build first)
 	bash test/e2e/split-two-process.sh

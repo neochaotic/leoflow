@@ -8,6 +8,32 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **SSO is configurable from the chart (`auth.oidc.*`).** The server has had OIDC
+  since ADR 0057, but no Helm install could turn it on: the chart exposed no
+  `auth.oidc` key, and `validateOIDC` requires `auth.oidc.tenant_claims`, a map
+  that loads only from the YAML file named by `LEOFLOW_CONFIG` — which the chart
+  never mounted and still has no `extraVolumes` to mount. SSO was not
+  misconfigured in Kubernetes; it was unreachable.
+
+  The scalars now render as `LEOFLOW_AUTH_OIDC_*` environment variables, and only
+  the two maps (`tenant_claims`, `role_mappings`) go into a ConfigMap as a
+  deliberately partial `config.yaml`, mounted read only. Partial is safe because
+  `LoadServer` reads the file before the environment, so every other setting
+  keeps arriving by env and outranks the file.
+
+  The IdP client secret goes to the Secret, never the ConfigMap, with its own
+  `auth.oidc.existingSecret`: the JWT signing key and the IdP secret rotate on
+  different clocks.
+
+  Three render guards fail the template rather than the pod — a missing tenant
+  pin, a non-`https` issuer, and an `extraEnv` that hijacks `LEOFLOW_CONFIG` —
+  because a chart error is visible to an Argo CD sync and `NOTES.txt` is not.
+
+  **What to change:** nothing, unless you want SSO. With `auth.oidc.enabled`
+  false, the render is byte-identical to before. See
+  `helm/leoflow/examples/values-oidc-google.yaml` for a Google Workspace setup
+  pinned on the `hd` claim.
+
 - **BREAKING: `clear` now re-runs a task on the image that produced it, not the
   newest one (`run_on_latest_version`).** Clearing always re-bound the run to the
   DAG's current version, so "clear last week's task" executed today's code and

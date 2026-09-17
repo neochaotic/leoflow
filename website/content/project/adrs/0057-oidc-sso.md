@@ -173,3 +173,47 @@ nonce/azp/state/skew/iss checks, not assumed from the library). H5 → the audit
 decision. Verification order is fixed and fail-closed at every step:
 signature/audience/issuer → nonce → azp → clock skew → subject → email_verified →
 tenant pin → email-domain allowlist.
+
+## Amendment (2026-09-17): the slice leaves do bind from the environment, and D9's claim about them is withdrawn
+
+D9 says, of the configuration surface:
+
+> the map/slice leaves (role_mappings, tenant_claims, allowed_email_domains,
+> break_glass_emails) are config-file / Helm-values driven.
+
+The decision D9 records is unaffected: the verify path is still keyless, and the
+client secret still travels only as an environment variable. What is withdrawn is
+the supporting statement about how those four settings are loaded. It grouped two
+different things and got one of them wrong.
+
+**The slices bind from a single environment variable.** viper's default decoder
+installs `StringToSliceHookFunc(",")`, so a comma-separated value becomes a list.
+Measured against `LoadServer` rather than reasoned about:
+
+```
+LEOFLOW_AUTH_OIDC_SCOPES=openid,email,profile,groups   -> 4 elements
+LEOFLOW_AUTH_OIDC_ALLOWED_EMAIL_DOMAINS=a.com,b.com    -> 2 elements
+LEOFLOW_AUTH_OIDC_BREAK_GLASS_EMAILS=x@a.com,y@b.com   -> 2 elements
+LEOFLOW_AUTH_OIDC_TENANT_CLAIMS=t1:default             -> empty map
+```
+
+**The two maps do not, and for a different reason than D9 gives.** `role_mappings`
+and `tenant_claims` are tagged `mapstructure:"-"` and are absent from
+`serverDefaults`, so viper never sees them at all. Their keys may contain dots (an
+IdP group name, a Google Workspace domain), and a dotted key is ambiguous in both
+the environment and viper's own key space, so they are read from the YAML config
+file by a dedicated decoder. That exclusion is deliberate and correct.
+
+**"Helm-values driven" was never true of either.** The chart ships no server
+config file and no volume to mount one, so the two maps cannot be set through Helm
+by any route. That is tracked in #1143, along with the boot gate that now refuses
+the resulting unsatisfiable configuration instead of letting it reject every login
+in silence.
+
+This is recorded as an amendment rather than an edit because the original text is
+what a reader of this ADR believed at the time, and because it did mislead
+someone: a field report quoted the same claim back to the project, from the
+matching comment in `internal/config/server.go`, as the explanation for a problem
+it does not explain. Both the comment and the configuration reference are
+corrected; this note keeps the record honest about where the belief came from.
+

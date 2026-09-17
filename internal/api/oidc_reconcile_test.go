@@ -2,7 +2,6 @@ package api
 
 import (
 	"errors"
-	"net/http"
 	"testing"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -25,9 +24,7 @@ func TestOIDCReturningUserReconcilesToMappedRoles(t *testing.T) {
 
 	rec := driveCallback(t, srv, f, cfg, nil) // groups: [data-eng]
 
-	if rec.Code != http.StatusFound {
-		t.Fatalf("callback = %d, want 302", rec.Code)
-	}
+	assertLoginSucceeded(t, rec, "callback")
 	roles, ok := store.lastReconcile("user-1")
 	if !ok {
 		t.Fatal("returning user was not reconciled")
@@ -54,9 +51,7 @@ func TestOIDCReturningUserEmptyMappingWithDefaultRole(t *testing.T) {
 
 	rec := driveCallback(t, srv, f, cfg, func(c jwt.MapClaims) { c["groups"] = []string{"unmapped-group"} })
 
-	if rec.Code != http.StatusFound {
-		t.Fatalf("callback = %d, want 302", rec.Code)
-	}
+	assertLoginSucceeded(t, rec, "callback")
 	roles, ok := store.lastReconcile("user-1")
 	if !ok || len(roles) != 1 || roles[0] != "viewer" {
 		t.Errorf("reconciled roles = %v (found=%v), want [viewer] via default_role", roles, ok)
@@ -76,9 +71,7 @@ func TestOIDCReturningUserEmptyMappingNoDefaultRole(t *testing.T) {
 
 	rec := driveCallback(t, srv, f, cfg, func(c jwt.MapClaims) { c["groups"] = []string{"unmapped-group"} })
 
-	if rec.Code != http.StatusFound {
-		t.Fatalf("callback = %d, want 302", rec.Code)
-	}
+	assertLoginSucceeded(t, rec, "callback")
 	roles, ok := store.lastReconcile("user-1")
 	if !ok {
 		t.Fatal("returning user was not reconciled")
@@ -100,9 +93,7 @@ func TestOIDCJITUserAlsoReconciles(t *testing.T) {
 
 	rec := driveCallback(t, srv, f, cfg, nil) // groups [data-eng] → editor
 
-	if rec.Code != http.StatusFound {
-		t.Fatalf("callback = %d, want 302", rec.Code)
-	}
+	assertLoginSucceeded(t, rec, "callback")
 	if len(store.created) != 1 {
 		t.Fatalf("JIT created %d users, want 1", len(store.created))
 	}
@@ -129,12 +120,7 @@ func TestOIDCReconcileFailureFailsClosed(t *testing.T) {
 
 	rec := driveCallback(t, srv, f, cfg, nil)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("reconcile failure = %d, want 403 (fail closed)", rec.Code)
-	}
-	if sessionCookie(rec) != nil {
-		t.Error("a failed reconcile must NOT mint a session cookie")
-	}
+	assertLoginDenied(t, rec, "reconcile failure")
 	if !audit.has(auditOIDCLoginFailure, "denied") {
 		t.Error("the reconcile failure was not audited")
 	}

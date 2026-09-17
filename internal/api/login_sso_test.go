@@ -20,11 +20,16 @@ func loginPage(t *testing.T, sso bool) string {
 
 func loginPageWith(t *testing.T, sso, breakGlass bool) string {
 	t.Helper()
+	return loginPageQuery(t, sso, breakGlass, "?next=/dags")
+}
+
+func loginPageQuery(t *testing.T, sso, breakGlass bool, query string) string {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.GET("/api/v2/auth/login", loginPageHandler(sso, breakGlass))
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v2/auth/login?next=/dags", http.NoBody))
+	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v2/auth/login"+query, http.NoBody))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("login page = %d", rec.Code)
 	}
@@ -133,5 +138,47 @@ func TestLoginPageKeepsTheFormWhenBreakGlassAccountsExist(t *testing.T) {
 func TestLoginPageFocusesTheFormWhenItIsTheOnlyWayIn(t *testing.T) {
 	if !strings.Contains(loginPageWith(t, false, false), "autofocus") {
 		t.Error("a JWT-only login page no longer focuses its username field")
+	}
+}
+
+// TestLoginPageExplainsARefusedSingleSignOn covers what the user sees when SSO
+// is denied.
+//
+// Every fail-closed path answered problem+json with 403. That is the right
+// answer to an API client and the wrong one to a browser, and both OIDC routes
+// are reached only by a top-level browser navigation: the user clicks the
+// sign-in control, or the IdP redirects them back. So a denied login rendered a
+// page of raw JSON with no way back to the sign-in page.
+//
+// The redirect carries no reason. The cause is withheld from the browser on
+// purpose, because it is the same information an attacker probing the deployment
+// would be after; it goes to the audit row and the server log instead.
+func TestLoginPageExplainsARefusedSingleSignOn(t *testing.T) {
+	body := loginPageQuery(t, true, true, "?sso_error=1&next=/dags")
+
+	if !strings.Contains(body, "Single sign-on did not complete") {
+		t.Fatal("the page says nothing about the failed sign-on, so the button looks like it did nothing")
+	}
+	// The remedy has to be reachable by someone who cannot log in to read the
+	// audit log through the UI, which under SSO-only is everyone.
+	if !strings.Contains(body, "audit log") {
+		t.Error("the page does not say where the reason is recorded")
+	}
+	if !strings.Contains(body, "/api/v2/auth/oidc/login") {
+		t.Error("the sign-in control is gone from the page the user was sent back to, so there is no way to retry")
+	}
+}
+
+// TestLoginPageSaysNothingAboutSSOWithoutTheMarker keeps the banner off a normal
+// visit: a login page that always says sign-on failed is a page that says
+// nothing.
+func TestLoginPageSaysNothingAboutSSOWithoutTheMarker(t *testing.T) {
+	if strings.Contains(loginPage(t, true), "Single sign-on did not complete") {
+		t.Error("the failure banner renders on a plain visit to the login page")
+	}
+	// A JWT-only deployment has no SSO at all, so the marker must mean nothing
+	// there: otherwise anyone can make the page claim a sign-on failed.
+	if strings.Contains(loginPageQuery(t, false, false, "?sso_error=1"), "Single sign-on did not complete") {
+		t.Error("a jwt-only deployment renders an SSO failure banner for anyone who appends the parameter")
 	}
 }

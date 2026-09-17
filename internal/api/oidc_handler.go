@@ -297,8 +297,26 @@ func (d oidcDeps) rejectVerify(c *gin.Context, err error) {
 	if errors.Is(err, oidc.ErrTenantNotAllowed) || errors.Is(err, oidc.ErrEmailNotVerified) || errors.Is(err, oidc.ErrEmailDomainNotAllowed) {
 		action = auditOIDCTenantReject
 	}
-	d.deny(c, action, "", "", "", verifyReason(err))
+	reason := verifyReason(err)
+	// token_invalid is the catch-all arm, and it swallowed the only thing that
+	// tells a JWKS fetch failure apart from a wrong client_id: the error itself.
+	// Attach the cause there, and on the one recognized reason whose error text
+	// is the remedy rather than a restatement of the reason.
+	//
+	// Everything else verifyReason recognizes is a bare package-level sentinel
+	// with fixed text, returned unwrapped, so logging it beside its own reason
+	// adds a second copy of the same words. Withholding it there is about noise,
+	// not about secrecy: none of those sentinels is formatted from a claim.
+	if reason == reasonTokenInvalid || errors.Is(err, oidc.ErrGroupOverage) {
+		d.denyWithCause(c, action, "", "", "", reason, err)
+		return
+	}
+	d.deny(c, action, "", "", "", reason)
 }
+
+// reasonTokenInvalid is the arm of verifyReason that means "we did not recognize
+// this", which is exactly the case where the operator needs the real error.
+const reasonTokenInvalid = "token_invalid"
 
 // verifyReason returns a stable, non-secret audit reason for a verification
 // error.
@@ -318,8 +336,14 @@ func verifyReason(err error) string {
 		return "tenant_not_allowed"
 	case errors.Is(err, oidc.ErrEmailDomainNotAllowed):
 		return "email_domain_not_allowed"
+	case errors.Is(err, oidc.ErrMissingExpiry):
+		return "token_missing_expiry"
+	case errors.Is(err, oidc.ErrNoSubject):
+		return "token_no_subject"
+	case errors.Is(err, oidc.ErrGroupOverage):
+		return "group_claim_overage"
 	default:
-		return "token_invalid"
+		return reasonTokenInvalid
 	}
 }
 
@@ -327,7 +351,39 @@ func verifyReason(err error) string {
 // writes the 403. Every fail-closed path funnels through here so a rejection is
 // always both recorded and answered — never a silent fall-through.
 func (d oidcDeps) deny(c *gin.Context, action, tenant, userID, email, reason string) {
+	d.denyWithCause(c, action, tenant, userID, email, reason, nil)
+}
+
+// denyWithCause is deny plus the underlying error, for the arms where the reason
+// alone does not identify the failure.
+//
+// The log line is the point. The audit row is the record of truth, but it lives
+// in a Postgres table reachable only through an API that needs a working session,
+// and under provider: oidc with an empty break_glass_emails there is no session
+// to be had. So an operator whose SSO rejects every login had exactly one channel
+// they could read, and it said nothing: a deployment failing 100% of logins
+// looked identical to one nobody was using.
+//
+// WARN rather than INFO because a rejected login is an operational event, and
+// rather than ERROR because fail-closed is this path working as designed.
+func (d oidcDeps) denyWithCause(c *gin.Context, action, tenant, userID, email, reason string, cause error) {
 	d.recordCtx(c.Request.Context(), action, tenant, userID, email, "denied", map[string]string{"reason": reason})
+	attrs := []any{"reason", reason, "action", action}
+	if email != "" {
+		attrs = append(attrs, "email", email)
+	}
+	if userID != "" {
+		attrs = append(attrs, "user", userID)
+	}
+	if tenant != "" {
+		attrs = append(attrs, "tenant", tenant)
+	}
+	if cause != nil {
+		attrs = append(attrs, "error", cause.Error())
+	}
+	if d.logger != nil {
+		d.logger.Warn("oidc: login denied", attrs...)
+	}
 	AbortProblem(c, http.StatusForbidden, "forbidden", "single sign-on was rejected")
 }
 

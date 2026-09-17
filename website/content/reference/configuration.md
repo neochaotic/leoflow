@@ -246,15 +246,33 @@ lacks the tenant pin. See the chart README's SSO section and
 | `auth.oidc.tenant_claims` | _(empty map)_ | Pro | **Required with `provider: oidc`, with at least one entry** (boot fails otherwise). Maps a `tenant_claim` value → a Leoflow tenant name. A value not present is rejected (403); the login never falls back to `default`. Config file only (a map does not bind from an env var), read from the path in `LEOFLOW_CONFIG`. Helm: `auth.oidc.tenantClaim` + `auth.oidc.tenantClaims`, which the chart requires together before it will render an SSO install. |
 | `LEOFLOW_AUTH_OIDC_ALLOWED_EMAIL_DOMAINS` | _(empty)_ | Pro | Login-level allowlist layered on TOP of the `tid`/`hd` tenant pin (not the pin itself). Empty imposes no domain restriction. Non-empty admits a login only when the verified email's domain is in the list. A list, set as a comma-separated env var. |
 | `LEOFLOW_AUTH_OIDC_BREAK_GLASS_EMAILS` | _(empty)_ | Pro | Allowlist of local password logins permitted while provider is `oidc`; every other password login is rejected (SSO-only). A list, set as a comma-separated env var. |
-| `LEOFLOW_AUTH_OIDC_JIT_PROVISIONING` | `false` | Pro | Create a user row on first OIDC login when none matches; the new row is granted the roles from `role_mappings` (or `default_role`). **Off means no SSO login can succeed**: a login is matched by `(oidc_provider, oidc_subject)` and JIT is the only path that ever writes those columns, so there is no supported way to pre-provision a matching account and every first login is denied (audited `no_user_jit_off`). The Helm chart therefore defaults `auth.oidc.jitProvisioning` to `true`. An address that already has a local password account in the same tenant cannot be provisioned either way (unique `(tenant, email)`; audited `jit_failed`). |
+| `LEOFLOW_AUTH_OIDC_JIT_PROVISIONING` | `false` | Pro | Create a user row on first OIDC login when none matches; the new row is granted the roles from `role_mappings` (or `default_role`). **Off means no SSO login can succeed**: a login is matched by `(oidc_provider, oidc_subject)` and JIT is the only path that ever writes those columns, so there is no supported way to pre-provision a matching account and every first login is denied (audited `no_user_jit_off`). The Helm chart therefore defaults `auth.oidc.jitProvisioning` to `true`. An address that already has a local password account in the same tenant cannot be provisioned either way (unique `(tenant, email)`; audited `jit_failed`). The server logs a WARN at boot when it is off, so the cause is visible before the first login is attempted. |
 | `LEOFLOW_AUTH_OIDC_CLOCK_SKEW_SECONDS` | `60` | Pro | Tolerance (seconds) on the ID token's `exp`/`iat`/`nbf` checks to absorb clock differences between the IdP and this server. |
 
-{{% alert title="Configure `role_mappings` or `default_role`" color="warning" %}}
-Roles are IdP-authoritative: each login resolves a role set and the user's
-grants are reconciled to **exactly** that set, so with neither key set every
-login resolves to zero roles and a pre-provisioned admin's first single sign-on
-**clears the grants they were provisioned with**. The server logs a WARN naming
-both keys at boot.
+{{% alert title="Set `default_role`, not only `role_mappings`" color="warning" %}}
+Roles are IdP-authoritative: each login resolves a role set and the user's grants
+are reconciled to **exactly** that set, so a login that resolves to zero roles
+**clears every grant the user already had**. That happens in two configurations,
+and the server logs a WARN at boot for both:
+
+- **neither key set** - every login resolves to zero roles;
+- **`role_mappings` set, `default_role` empty** - a login whose group claim
+  matches no entry resolves to zero roles. Google Workspace emits no `groups`
+  claim at all unless Directory API group sync is configured, so on that IdP
+  every login takes this path.
+
+Setting `default_role` to a read-only role such as `viewer` gives resolution a
+floor and makes the clear impossible.
+{{% /alert %}}
+
+{{% alert title="`client_secret` is required by every confidential client" color="warning" %}}
+`client_secret` is optional at boot because a public client (PKCE only, no
+secret) is a valid registration. It is not optional for Google Workspace or
+Entra, which always register a server-side application as confidential, nor for
+Okta or Keycloak unless the client is explicitly public. Without it the
+authorization-code exchange is rejected with `invalid_client`, and the callback
+answers the same generic 403 it answers for every other failure. The server logs
+a WARN at boot when the secret is empty.
 {{% /alert %}}
 
 ### Scheduler (`scheduler.*`)

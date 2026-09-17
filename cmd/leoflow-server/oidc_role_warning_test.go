@@ -65,10 +65,14 @@ func TestWarnStartupSilentWhenARoleSourceExists(t *testing.T) {
 		name  string
 		apply func(*config.ServerConfig)
 	}{
-		{"role_mappings set", func(c *config.ServerConfig) {
-			c.Auth.OIDC.RoleMappings = map[string]string{"platform-admins": "admin"}
-		}},
+		// role_mappings alone is deliberately NOT here: it still warns, because a
+		// group claim that matches nothing resolves to zero roles and clears the
+		// user. TestRoleWarningCoversTheGoogleShape owns that case.
 		{"default_role set", func(c *config.ServerConfig) { c.Auth.OIDC.DefaultRole = "viewer" }},
+		{"both set", func(c *config.ServerConfig) {
+			c.Auth.OIDC.RoleMappings = map[string]string{"platform-admins": "admin"}
+			c.Auth.OIDC.DefaultRole = "viewer"
+		}},
 		{"provider is jwt", func(c *config.ServerConfig) { c.Auth.Provider = "jwt" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -76,8 +80,11 @@ func TestWarnStartupSilentWhenARoleSourceExists(t *testing.T) {
 			tc.apply(cfg)
 			var buf bytes.Buffer
 			warnStartup(cfg, slog.New(slog.NewTextHandler(&buf, nil)))
-			if strings.Contains(buf.String(), "role_mappings") {
-				t.Errorf("warned about role mapping for a configured deployment:\n%s", buf.String())
+			// Match the structured key rather than the prose: the other boot
+			// warnings name default_role in their remedy sentence, so a substring
+			// match on the message would report a role warning that never fired.
+			if strings.Contains(buf.String(), "config_key=auth.oidc.default_role") {
+				t.Errorf("warned about role resolution for a configured deployment:\n%s", buf.String())
 			}
 		})
 	}

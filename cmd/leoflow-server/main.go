@@ -385,7 +385,12 @@ func warnStartup(cfg *config.ServerConfig, logger *slog.Logger) {
 	// Role resolution is API-side, so this one is gated on the API rather than the
 	// scheduler: an api-only replica is the process that reconciles roles.
 	if cfg.Server.ServesAPI() {
-		for _, w := range oidcRoleSourceWarnings(cfg.Auth) {
+		// Both are API-side: role reconciliation and the code exchange both run in
+		// the process that serves the callback.
+		oidcWarnings := oidcRoleSourceWarnings(cfg.Auth)
+		oidcWarnings = append(oidcWarnings, oidcClientSecretWarnings(cfg.Auth)...)
+		oidcWarnings = append(oidcWarnings, oidcJITWarnings(cfg.Auth)...)
+		for _, w := range oidcWarnings {
 			logger.Warn(w.Msg, "config_key", w.Key, "value", w.Value, "missing_config_key", w.MissingKey)
 		}
 	}
@@ -454,6 +459,10 @@ func platformDefaultWarnings(c config.PlatformDefaultsSection) []configWarning {
 	}}
 }
 
+// defaultRoleKey is the config key that gives OIDC role resolution a floor. Two
+// boot warnings point at it, so it is named once.
+const defaultRoleKey = "auth.oidc.default_role"
+
 // oidcRoleSourceWarnings reports an OIDC deployment that has no source of roles
 // at all: neither auth.oidc.role_mappings nor auth.oidc.default_role.
 //
@@ -471,22 +480,98 @@ func platformDefaultWarnings(c config.PlatformDefaultsSection) []configWarning {
 // missing the pin, and the login was rejected before reconciliation ran. Removing
 // that accidental shield is what makes the WARN necessary.
 func oidcRoleSourceWarnings(c config.AuthSection) []configWarning {
-	const mappingsKey, defaultKey = "auth.oidc.role_mappings", "auth.oidc.default_role"
+	const mappingsKey = "auth.oidc.role_mappings"
 	if c.Provider != config.AuthProviderOIDC {
 		return nil
 	}
-	if len(c.OIDC.RoleMappings) > 0 || c.OIDC.DefaultRole != "" {
+	if c.OIDC.DefaultRole != "" {
+		return nil
+	}
+	if len(c.OIDC.RoleMappings) > 0 {
+		return []configWarning{{
+			Msg: "auth.oidc.role_mappings without " + defaultRoleKey +
+				" makes the IdP group claim load-bearing: a login whose groups match no entry resolves to an EMPTY role set, " +
+				"and roles are reconciled to exactly that set, so the user's existing grants are CLEARED rather than left alone. " +
+				"Google Workspace emits no groups claim at all unless Directory API group sync is configured, " +
+				"so every login on that IdP takes this path. Set " + defaultRoleKey +
+				" to a read-only role such as viewer to give resolution a floor",
+			Key:        defaultRoleKey,
+			Value:      "",
+			MissingKey: defaultRoleKey,
+		}}
+	}
+	return []configWarning{{
+		Msg: "auth.provider: oidc with neither " + mappingsKey + " nor " + defaultRoleKey +
+			" grants no roles to anyone: every login resolves to an empty role set, and roles are reconciled to EXACTLY that set on each login, " +
+			"so a pre-provisioned user's existing grants are CLEARED on their first single sign-on. " +
+			"Map at least one IdP group to a role under " + mappingsKey + " (config file only: it is a map), or set " + defaultRoleKey +
+			" to a read-only role such as viewer",
+		Key:        defaultRoleKey,
+		Value:      "",
+		MissingKey: mappingsKey,
+	}}
+}
+
+// oidcJITWarnings reports an OIDC deployment with just-in-time provisioning off.
+//
+// The flag reads as "require a pre-provisioned user", but no pre-provisioning
+// path exists. A login resolves a user ONLY through FindUserByOIDCSubject, so a
+// row matches only if it carries oidc_provider and oidc_subject, and the sole
+// statement that writes those two columns is CreateOIDCUser, reached only from
+// the JIT path. No API endpoint, CLI command or migration writes them. With the
+// flag off, every first login is denied (audited no_user_jit_off) and the
+// operator has no supported way to create a user that would ever match.
+//
+// It is a WARN and not a boot failure because an operator who wrote the two
+// columns directly with SQL has a working deployment, and boot must not break
+// it. Closing the gap properly is linking an existing user by verified email
+// (ADR 0057 D3), which is a behavior change and not an RC fix.
+func oidcJITWarnings(c config.AuthSection) []configWarning {
+	const key = "auth.oidc.jit_provisioning"
+	if c.Provider != config.AuthProviderOIDC || c.OIDC.JITProvisioning {
 		return nil
 	}
 	return []configWarning{{
-		Msg: "auth.provider: oidc with neither " + mappingsKey + " nor " + defaultKey +
-			" grants no roles to anyone: every login resolves to an empty role set, and roles are reconciled to EXACTLY that set on each login, " +
-			"so a pre-provisioned user's existing grants are CLEARED on their first single sign-on. " +
-			"Map at least one IdP group to a role under " + mappingsKey + " (config file only: it is a map), or set " + defaultKey +
-			" to a read-only role such as viewer",
-		Key:        defaultKey,
+		Msg: "auth.provider: oidc with " + key + " disabled denies every first login (audited no_user_jit_off): " +
+			"a login matches a user only by (oidc_provider, oidc_subject), and the only statement that writes those " +
+			"columns is the just-in-time provisioning this flag disables. No API, CLI or migration can pre-provision " +
+			"an OIDC identity, so with this off nobody can sign in for the first time. Set " + key + " to true, " +
+			"together with " + defaultRoleKey + " or auth.oidc.role_mappings so a provisioned user gets the roles you intend",
+		Key:        key,
+		Value:      "false",
+		MissingKey: key,
+	}}
+}
+
+// oidcClientSecretWarnings reports an OIDC deployment with no client secret.
+//
+// The secret is used in exactly one place: the authorization-code exchange
+// (internal/oidc/flow.go). A confidential client rejects an exchange without it
+// with invalid_client, and every managed IdP an operator is likely to use
+// registers a server-side application as confidential: Google Workspace and
+// Entra always issue one, Okta and Keycloak do unless the client is explicitly
+// registered as public. The rejection arrives at the callback, which answers a
+// generic 403 by design (the browser must not learn why a login was refused), so
+// the operator sees a login that fails with nothing anywhere naming the secret.
+//
+// It is a WARN and not a boot failure because a public client (PKCE only, no
+// secret) is a legitimate registration, and failing boot on an empty secret
+// would break a deployment that works today.
+func oidcClientSecretWarnings(c config.AuthSection) []configWarning {
+	const key = "auth.oidc.client_secret"
+	if c.Provider != config.AuthProviderOIDC || c.OIDC.ClientSecret != "" {
+		return nil
+	}
+	return []configWarning{{
+		Msg: "auth.provider: oidc with no " + key + ": the authorization-code exchange is sent without a client secret, " +
+			"which a confidential client rejects with invalid_client. Google Workspace and Entra always register a server-side " +
+			"application as confidential; Okta and Keycloak do unless the client is explicitly public. The callback answers a " +
+			"generic 403 on failure, so the login breaks with nothing naming this. Set it via the " +
+			"LEOFLOW_AUTH_OIDC_CLIENT_SECRET environment variable (never in the config file), or ignore this if the IdP client " +
+			"is registered as public",
+		Key:        key,
 		Value:      "",
-		MissingKey: mappingsKey,
+		MissingKey: key,
 	}}
 }
 
@@ -742,14 +827,34 @@ func startAPISide(ctx context.Context, cfg *config.ServerConfig, tel *observabil
 	return buildAPIServer(cfg, tel, authn, pg, repo, xcomReader, logSink, logTailer, checks, executorInfo, schedulerHealth, oidcFlow), nil
 }
 
+// oidcDiscoveryTimeout bounds the IdP discovery request on the boot path. It is
+// a var so tests can shrink it; the value is what ships.
+//
+// go-oidc discovers over http.DefaultClient, which has no timeout, so an issuer
+// that accepts the connection and never answers parks boot before the listener
+// binds. 15s is generous for one well-known document over the public internet
+// and far below the startup-probe budget that gates the pod
+// (scripts/check-startup-probe-budget.sh reconciles the two).
+var oidcDiscoveryTimeout = 15 * time.Second
+
 // discoverOIDCFlow discovers the IdP and builds the Authorization Code + PKCE
 // login flow. It is only called under provider: oidc (so it always returns a
 // flow or an error, never nil,nil). The client secret comes from the environment
 // (LEOFLOW_AUTH_OIDC_CLIENT_SECRET, bound by viper); it is never logged.
 // Discovery failure is a boot failure — fail closed.
 func discoverOIDCFlow(ctx context.Context, cfg *config.ServerConfig, logger *slog.Logger) (*oidc.Flow, error) {
-	flow, err := oidc.NewFlow(ctx, cfg.Auth.OIDC, cfg.Auth.JWT.Secret)
+	discCtx, cancel := context.WithTimeout(ctx, oidcDiscoveryTimeout)
+	defer cancel()
+	flow, err := oidc.NewFlow(discCtx, cfg.Auth.OIDC, cfg.Auth.JWT.Secret)
 	if err != nil {
+		if errors.Is(discCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+			return nil, fmt.Errorf("oidc setup: %s did not answer discovery within %s. "+
+				"The connection was accepted, so the issuer resolves and is reachable; something between this pod and the "+
+				"IdP is holding the request open (an egress proxy, a NetworkPolicy that drops the response, an "+
+				"intercepting TLS middlebox). Discovery runs before the HTTP listener binds, so without this bound the "+
+				"probe endpoint never comes up and the pod restarts on a probe failure that names nothing",
+				cfg.Auth.OIDC.Issuer, oidcDiscoveryTimeout)
+		}
 		return nil, fmt.Errorf("oidc setup: %w", err)
 	}
 	logger.Info("oidc login enabled",

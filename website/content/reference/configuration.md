@@ -126,8 +126,10 @@ default map in
 config key by upper-casing it and replacing `.` (and `-`) with `_`: e.g.
 `auth.oidc.client_id` → `LEOFLOW_AUTH_OIDC_CLIENT_ID`. The same keys can be set in
 a YAML config file. The Helm chart models many of them as values, but not all: a
-key with no chart value has to go through `extraEnv`, and the two OIDC maps below
-cannot go through either.
+key with no chart value has to go through `extraEnv`. The two OIDC maps below are
+the exception in both directions: no env var can carry them, so `extraEnv` is not
+a route, and the chart delivers them by writing a partial config file into a
+mounted ConfigMap (`auth.oidc.tenantClaims`, `auth.oidc.roleMappings`).
 
 Values resolve in increasing order of precedence — a later source overrides an
 earlier one:
@@ -153,9 +155,12 @@ YAML lists.
 **Map**-valued keys do not. `auth.oidc.role_mappings` and `auth.oidc.tenant_claims`
 are read only from a YAML config file, because their keys may contain dots (an IdP
 group name, a Google Workspace domain) and a dotted key is ambiguous in both env
-and viper's own key space. Since the chart ships no server config file, these two
-cannot be set through Helm at all; see
-[#1143](https://github.com/neochaotic/leoflow/issues/1143).
+and viper's own key space. The chart sets them through `auth.oidc.tenantClaims`
+and `auth.oidc.roleMappings`, which it renders into a ConfigMap mounted as the
+server's `LEOFLOW_CONFIG` file, with the keys quoted so a dotted domain survives
+([#1143](https://github.com/neochaotic/leoflow/issues/1143)). That file is
+deliberately partial: it carries only these two keys, so it can never override a
+setting the chart delivers as an env var.
 
 In the tables below, the row name tells you which of these two groups a key is
 in: a row named after its `LEOFLOW_*` env var binds from that env var (and so
@@ -219,10 +224,13 @@ it boots green and rejects 100% of logins ([#1143](https://github.com/neochaotic
 token is validated against the issuer's public JWKS), so no secret is stored for
 the verify path.
 
-No `auth.oidc.*` key has a modeled Helm value today. Every env-bindable key in
-this section (everything except the two maps) is set through the chart's
-`extraEnv`; the two maps have no route through the chart at all (see the note
-above the tables).
+Every key in this section has a modeled Helm value under `auth.oidc.*`, off by
+default (`auth.oidc.enabled: false`, which renders nothing at all). The chart
+sends the scalars and lists as `LEOFLOW_AUTH_OIDC_*` env vars, the two maps as a
+mounted config file, and the client secret through the chart-managed Secret or
+`auth.oidc.existingSecret`. It refuses to render an `enabled: true` block that
+lacks the tenant pin. See the chart README's SSO section and
+`helm/leoflow/examples/values-oidc-google.yaml`.
 
 | Variable | Default | Edition | Purpose |
 |---|---|---|---|
@@ -232,13 +240,13 @@ above the tables).
 | `LEOFLOW_AUTH_OIDC_REDIRECT_URL` | _(empty)_ | Pro | This server's callback URL registered with the IdP (`…/api/v2/auth/oidc/callback`). Must be `https://` (http allowed only for loopback hosts). |
 | `LEOFLOW_AUTH_OIDC_SCOPES` | `openid, email, profile` | Pro | OAuth scopes requested. A list, set as a comma-separated env var. Add the IdP's groups scope when group→role mapping is used. |
 | `LEOFLOW_AUTH_OIDC_GROUPS_CLAIM` | `groups` | Pro | The ID-token claim carrying the user's IdP groups; its values drive `role_mappings`. |
-| `auth.oidc.role_mappings` | _(empty map)_ | Pro | Maps an IdP group value → an existing Leoflow role name. **Default-DENY**: an unmapped group grants no role. YAML config file only. The chart ships none today, so this has no route through Helm ([#1143](https://github.com/neochaotic/leoflow/issues/1143)). |
+| `auth.oidc.role_mappings` | _(empty map)_ | Pro | Maps an IdP group value → an existing Leoflow role name. **Default-DENY**: an unmapped group grants no role. YAML config file only (a map does not bind from an env var). Helm: `auth.oidc.roleMappings`, rendered into the mounted config file. Reconciliation is IdP-authoritative, so an EMPTY resolved set CLEARS the user's existing grants on every login: configure this or `default_role`. |
 | `LEOFLOW_AUTH_OIDC_DEFAULT_ROLE` | _(empty)_ | Pro | When an authenticated user resolves to zero mapped roles and this is set, grants this single role (advised: a read-only role such as `viewer`). Empty keeps strict default-deny. Must name an existing DB role for the resolved tenant. |
 | `LEOFLOW_AUTH_OIDC_TENANT_CLAIM` | _(empty)_ | Pro | **Required with `provider: oidc`** (boot fails otherwise). Which IdP claim identifies the tenant: `tid` (Entra) or `hd` (Google Workspace). |
-| `auth.oidc.tenant_claims` | _(empty map)_ | Pro | **Required with `provider: oidc`, with at least one entry** (boot fails otherwise). Maps a `tenant_claim` value → a Leoflow tenant name. A value not present is rejected (403); the login never falls back to `default`. Config file only (a map does not bind from an env var), read from the path in `LEOFLOW_CONFIG`. |
+| `auth.oidc.tenant_claims` | _(empty map)_ | Pro | **Required with `provider: oidc`, with at least one entry** (boot fails otherwise). Maps a `tenant_claim` value → a Leoflow tenant name. A value not present is rejected (403); the login never falls back to `default`. Config file only (a map does not bind from an env var), read from the path in `LEOFLOW_CONFIG`. Helm: `auth.oidc.tenantClaim` + `auth.oidc.tenantClaims`, which the chart requires together before it will render an SSO install. |
 | `LEOFLOW_AUTH_OIDC_ALLOWED_EMAIL_DOMAINS` | _(empty)_ | Pro | Login-level allowlist layered on TOP of the `tid`/`hd` tenant pin (not the pin itself). Empty imposes no domain restriction. Non-empty admits a login only when the verified email's domain is in the list. A list, set as a comma-separated env var. |
 | `LEOFLOW_AUTH_OIDC_BREAK_GLASS_EMAILS` | _(empty)_ | Pro | Allowlist of local password logins permitted while provider is `oidc`; every other password login is rejected (SSO-only). A list, set as a comma-separated env var. |
-| `LEOFLOW_AUTH_OIDC_JIT_PROVISIONING` | `false` | Pro | Create a user row on first OIDC login when none matches. Off by default (pre-provisioned user required); when on, the new row is granted the roles from `role_mappings`. |
+| `LEOFLOW_AUTH_OIDC_JIT_PROVISIONING` | `false` | Pro | Create a user row on first OIDC login when none matches; the new row is granted the roles from `role_mappings` (or `default_role`). **Off means no SSO login can succeed**: a login is matched by `(oidc_provider, oidc_subject)` and JIT is the only path that ever writes those columns, so there is no supported way to pre-provision a matching account and every first login is denied (audited `no_user_jit_off`). The Helm chart therefore defaults `auth.oidc.jitProvisioning` to `true`. An address that already has a local password account in the same tenant cannot be provisioned either way (unique `(tenant, email)`; audited `jit_failed`). |
 | `LEOFLOW_AUTH_OIDC_CLOCK_SKEW_SECONDS` | `60` | Pro | Tolerance (seconds) on the ID token's `exp`/`iat`/`nbf` checks to absorb clock differences between the IdP and this server. |
 
 {{% alert title="Configure `role_mappings` or `default_role`" color="warning" %}}

@@ -249,6 +249,54 @@ working wildcard while `has` on a non-slice would never see it.
 {{- end -}}
 
 {{- /*
+OIDC/SSO (#1143). The server's validateOIDC fails boot closed on a missing
+issuer, client id, redirect URL or tenant pin, and reports every miss in one
+error on purpose, each boot failure on Kubernetes costs a values edit, an
+upgrade and a rollout to learn the next one. Do the same check at render time,
+for the same reason one step earlier: a chart that renders an unsatisfiable SSO
+config hands the operator a CrashLoopBackOff whose cause is visible only in
+container logs, and a GitOps sync shows a green apply over it.
+
+The tenant pin is in the required set because it decides whether ANY login can
+succeed, not merely how a login is labelled: a claim value that is absent or
+unmapped is rejected 403 and never falls back to the default tenant, so an
+install missing it authenticates everyone and admits no one, and the cause is
+audited into a system that, in an SSO-only deployment, nobody can log in to read.
+
+Collected and reported together rather than one `fail` per key, mirroring the
+server's own message, so one render names everything that is missing.
+*/ -}}
+{{- $oidc := .Values.auth.oidc -}}
+{{- if $oidc.enabled -}}
+{{- $missing := list -}}
+{{- if not $oidc.issuer -}}{{- $missing = append $missing "auth.oidc.issuer" -}}{{- end -}}
+{{- if not $oidc.clientId -}}{{- $missing = append $missing "auth.oidc.clientId" -}}{{- end -}}
+{{- if not $oidc.redirectUrl -}}{{- $missing = append $missing "auth.oidc.redirectUrl" -}}{{- end -}}
+{{- if not $oidc.tenantClaim -}}{{- $missing = append $missing "auth.oidc.tenantClaim" -}}{{- end -}}
+{{- if not $oidc.tenantClaims -}}{{- $missing = append $missing "auth.oidc.tenantClaims" -}}{{- end -}}
+{{- if $missing -}}
+{{- fail (printf "auth.oidc.enabled requires %s to be set: the server refuses to boot without them (internal/config/server.go validateOIDC), so this install would CrashLoopBackOff rather than serve SSO. tenantClaim + tenantClaims are the TENANT PIN and are required together, tenantClaim names the claim carrying the tenant (`tid` on Entra, `hd` on Google Workspace) and tenantClaims maps each value of it you accept to a Leoflow tenant. Without the pin every SSO login is rejected with a generic 403 (audited as tenant_not_allowed) that never falls back to the default tenant. tenantClaims is a MAP: the chart delivers it in a mounted ConfigMap because no LEOFLOW_AUTH_OIDC_* env var can carry one. To keep serving password logins while SSO is configured, set auth.oidc.enabled=false." (join ", " $missing)) -}}
+{{- end -}}
+{{- if not (hasPrefix "https://" $oidc.issuer) -}}
+{{- fail (printf "auth.oidc.issuer must be an https:// URL (got %q): discovery and the JWKS fetch that verifies every ID token run over it, and the server rejects a non-https issuer at boot. Use the IdP's issuer exactly as published in its /.well-known/openid-configuration." $oidc.issuer) -}}
+{{- end -}}
+{{- /*
+extraEnv renders after the chart-managed block and last-wins, so an entry setting
+LEOFLOW_CONFIG would repoint the server at a file that is not the mounted one,
+and the tenant pin, which has no other route, would vanish with it. The failure
+then looks exactly like a missing pin the operator can see configured in the
+ConfigMap next to the pod. Refuse it, narrowly and only while SSO is on: pointing
+LEOFLOW_CONFIG somewhere of your own is a legitimate thing to do in an install
+that does not depend on this chart's file.
+*/ -}}
+{{- range .Values.extraEnv -}}
+{{- if eq .name "LEOFLOW_CONFIG" -}}
+{{- fail "extraEnv must not set LEOFLOW_CONFIG while auth.oidc.enabled: it renders after the chart-managed env and wins, repointing the server away from the mounted OIDC ConfigMap, which is the only route auth.oidc.tenantClaims and auth.oidc.roleMappings have, since neither map can travel in an env var. Boot would then fail on a tenant pin the operator can see sitting in the ConfigMap. Put the maps in auth.oidc.tenantClaims / auth.oidc.roleMappings instead." -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
 Render one "all" Deployment (default, byte-identical to the pre-0049 monolith) or,
 when split.enabled, separate api and scheduler Deployments — ADR 0049. The
 scheduler is always a single leader (ADR 0009), so its replica count is pinned to 1

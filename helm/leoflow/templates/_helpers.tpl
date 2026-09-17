@@ -692,3 +692,21 @@ obvious value for someone shrinking a deployment and the min default is 2.
 {{- end -}}
 {{- if eq $which "min" -}}{{- $min -}}{{- else -}}{{- $max -}}{{- end -}}
 {{- end -}}
+
+{{/*
+Name of the ConfigMap carrying the OIDC settings that CANNOT travel as env vars.
+Only auth.oidc.tenantClaims and auth.oidc.roleMappings live there: both are maps,
+and viper binds env only for the scalar leaves registered in serverDefaults,
+these two are deliberately absent from it because a Google `hd` key is a dotted
+domain that viper's "." delimiter would split into nested maps (#826). The server
+reads them out-of-band from the YAML file named by LEOFLOW_CONFIG
+(internal/config/server.go, decodeDottedOIDCMaps), which is the file this
+ConfigMap holds.
+
+Suffixed off fullname rather than roleName: the maps are identical for every
+role, so the split api and scheduler Deployments mount one object instead of two
+copies that could drift apart on a partial upgrade.
+*/}}
+{{- define "leoflow.oidcConfigMapName" -}}
+{{- printf "%s-oidc" (include "leoflow.fullname" .) -}}
+{{- end -}}

@@ -106,6 +106,36 @@ WARNING: no database URL set. Provide .Values.database.url or .Values.database.e
 
 WARNING: no JWT secret set. Provide .Values.auth.jwtSecret or .Values.auth.existingSecret (key jwtSecret).
 {{- end }}
+{{- if and .Values.auth.oidc.enabled (not .Values.auth.oidc.breakGlassEmails) }}
+
+WARNING: auth.oidc.enabled with an EMPTY auth.oidc.breakGlassEmails. SSO is now
+the only way into this install: every local password login is rejected, and the
+break-glass list is the allowlist of the ones that are not. An IdP outage, an
+expired client secret, or one wrong key in auth.oidc.tenantClaims therefore locks
+out everybody, including the operator who has to fix it, and including the
+audit log that would have said why (every rejection is a generic 403). Add at
+least one address you control:
+     --set auth.oidc.breakGlassEmails[0]=admin@example.com
+{{- end }}
+{{- if and .Values.auth.oidc.enabled (not .Values.auth.oidc.jitProvisioning) }}
+
+WARNING: auth.oidc.enabled with auth.oidc.jitProvisioning=false. No SSO login
+can succeed in this configuration. A login is matched to a user by the IdP's
+(provider, subject) pair, and the only code path that ever writes those two
+columns is the JIT one, so there is no account to match and every first login is
+denied with a generic 403 whose reason (no_user_jit_off) reaches only the audit
+log. Set auth.oidc.jitProvisioning=true (the chart default) unless you have
+linked the identities yourself in the database.
+{{- end }}
+{{- if and .Values.auth.oidc.enabled (not .Values.auth.oidc.roleMappings) (not .Values.auth.oidc.defaultRole) }}
+
+NOTE: auth.oidc has neither roleMappings nor defaultRole. Role resolution is
+default-DENY, so an SSO login will succeed and then grant nothing, the user
+lands in a UI that shows them no DAG and lets them do nothing, with no error to
+explain it. Map the IdP groups you use (auth.oidc.roleMappings, remembering the
+IdP's groups scope in auth.oidc.scopes), or set auth.oidc.defaultRole to a
+read-only role such as `viewer` while you work that mapping out.
+{{- end }}
 {{- if .Values.taskServiceAccount.imagePullSecrets }}
 
 NOTE: taskServiceAccount.imagePullSecrets is set (for private DAG images), but

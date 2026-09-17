@@ -18,6 +18,7 @@ production-like install — distinct from the host-run `test/e2e/e2e.sh` smoke.
 | ServiceAccount + Role/RoleBinding | lets the control plane create/watch/delete **task pods** and read their logs in `taskNamespace` |
 | ClusterRole + ClusterRoleBinding | **only** when `auth.agentTokenTransport: exchange` — `create` on `tokenreviews` (cluster-scoped API). See [Agent credential transport](#agent-credential-transport-and-warm-worker-pools) |
 | Secret | holds inline DB/Redis/JWT/bootstrap credentials (skipped when you bring your own) |
+| ConfigMap | **only** when `auth.oidc.enabled`, the two OIDC settings that are maps and therefore have no env-var route (`tenantClaims`, `roleMappings`), mounted as the server's `LEOFLOW_CONFIG`. See [SSO with OIDC](#sso-with-oidc) |
 | Job (hook) | runs `golang-migrate` before install/upgrade |
 | Ingress | optional |
 
@@ -311,6 +312,96 @@ It is an escape hatch, not an override: an entry redefining
 `LEOFLOW_EXECUTION_WARM_POOLS_ENABLED`, `LEOFLOW_AUTH_AGENT_TOKEN_TRANSPORT` or
 `LEOFLOW_AUTH_SECRET_LIVENESS_MODE` fails the render, because those three are the
 values the guard above validates against each other.
+
+## SSO with OIDC
+
+The server has had a complete OIDC implementation for several releases; this
+chart could not reach it until now, and the reason is worth knowing because it
+shapes how the values are laid out.
+
+Two of the server's OIDC settings are **maps** (`auth.oidc.tenant_claims` and
+`auth.oidc.role_mappings`), and a map has no environment-variable route at all.
+Viper binds env only for the scalar leaves the server registers, and those two are
+deliberately unregistered: a Google Workspace `hd` key is a domain, always dotted,
+and viper's `.` key delimiter would split it into nested maps and fail to decode
+(#826). The server reads them out-of-band from the YAML file named by
+`LEOFLOW_CONFIG`. The chart shipped no such file and no volume to put one in, so
+`auth.provider: oidc` could only ever fail boot closed on the missing tenant pin
+(#1143).
+
+So the chart splits the delivery:
+
+| What | How |
+|---|---|
+| `issuer`, `clientId`, `redirectUrl`, `tenantClaim`, `scopes`, `groupsClaim`, `defaultRole`, `allowedEmailDomains`, `breakGlassEmails`, `jitProvisioning`, `clockSkewSeconds` | `LEOFLOW_AUTH_OIDC_*` env vars, the way the rest of this chart delivers server settings |
+| `tenantClaims`, `roleMappings` | a ConfigMap mounted read-only at `/etc/leoflow/oidc`, with `LEOFLOW_CONFIG` pointing at it |
+| `clientSecret` | the chart-managed Secret (or `auth.oidc.existingSecret`), by `secretKeyRef`: never the ConfigMap |
+
+The mounted file is **partial on purpose**. Viper ranks env above a config file,
+and a key a file omits keeps the value it already had, so a file holding only the
+two maps can neither override nor blank anything the Deployment's env delivers.
+That is what makes mixing the two routes safe, and why nothing else is written
+there.
+
+```yaml
+auth:
+  jwtSecret: "…"          # still required: OIDC is the login flow, not the token signer
+  oidc:
+    enabled: true
+    issuer: "https://accounts.google.com"
+    clientId: "…apps.googleusercontent.com"
+    existingSecret: leoflow-idp          # key: oidcClientSecret
+    redirectUrl: "https://leoflow.example.com/api/v2/auth/oidc/callback"
+    tenantClaim: "hd"                    # `tid` on Entra
+    tenantClaims:
+      "example.com": "default"
+    defaultRole: "viewer"
+    breakGlassEmails: ["admin@example.com"]
+```
+
+A full worked example is in
+[`examples/values-oidc-google.yaml`](https://github.com/neochaotic/leoflow/blob/main/helm/leoflow/examples/values-oidc-google.yaml).
+
+Three things the chart refuses at render time rather than letting them become a
+CrashLoopBackOff whose cause is visible only in container logs: the one channel a
+GitOps sync never shows, since Argo CD does not render `NOTES.txt`:
+
+- `enabled: true` without `issuer`, `clientId`, `redirectUrl`, `tenantClaim` **and**
+  a non-empty `tenantClaims`. All missing keys are named in one error, because each
+  boot failure on Kubernetes costs a values edit, an upgrade and a rollout to learn
+  the next one.
+- a non-`https://` `issuer`.
+- an `extraEnv` entry setting `LEOFLOW_CONFIG` while SSO is on, which would repoint
+  the server away from the mounted file and take the tenant pin with it.
+
+`auth.oidc.jitProvisioning` defaults to `true` here, unlike the server's own
+default, because `false` means no SSO login can succeed at all: a login is matched
+to a user by `(oidc_provider, oidc_subject)`, and just-in-time provisioning is the
+only code path that ever writes those two columns, so there is nothing to match
+and every first login is denied (audited `no_user_jit_off`) behind a generic 403.
+It is not a widening of who may log in: the tenant pin, `email_verified` and
+`allowedEmailDomains` decide that, and a JIT-created row carries only the roles
+`roleMappings`/`defaultRole` resolve, which is none by default. One address it
+cannot serve either way is one that already has a LOCAL password account in the
+same tenant: it collides on the users table's unique `(tenant, email)` and the
+login is denied `jit_failed`, so keep `breakGlassEmails` off the domain your
+users sign in with.
+
+Two more it only warns about, in `NOTES.txt`, because both are legitimate
+configurations that are almost always mistakes: `jitProvisioning: false` (no
+login can succeed), an empty `breakGlassEmails` (SSO
+becomes the only way in, so an IdP outage or one wrong `tenantClaims` key locks out
+everybody, including whoever has to fix it), and neither `roleMappings` nor
+`defaultRole` set (role resolution is default-deny, so logins succeed into a UI
+that shows nothing).
+
+`auth.oidc.existingSecret` is separate from `auth.existingSecret` on purpose: the
+JWT signing key and the IdP client secret rotate on different schedules and usually
+have different owners. Like every `existingSecret` in this chart it sits outside
+the `checksum/secret` annotation's visibility, so rotating it needs a manual
+`kubectl rollout restart`. The maps do not: they carry their own
+`checksum/oidc-config` annotation, because `LoadServer` parses the file once at
+boot and would otherwise leave an edited tenant map sitting on disk unread.
 
 ## Evaluating without a managed Postgres + Redis
 

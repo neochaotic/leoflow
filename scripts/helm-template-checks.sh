@@ -98,9 +98,14 @@ expect_in_job 'runAsUser: 65532'   "runAsUser:65532 (distroless nonroot UID)"
 # bug. The check is plain bash — no python / yq dependency.
 for fixture in helm/leoflow/examples/*.yaml; do
   [ -f "$fixture" ] || continue
+  # `|| true` because the script runs under `set -o pipefail` and grep exits 1 when
+  # a fixture legitimately sets no secretKey (an SSO example needs none): without it
+  # the pipeline's status becomes the assignment's, `set -e` kills the run HERE, and
+  # every check below this loop (the whole agent-TLS auto-gen section) is silently
+  # skipped while the script still prints nothing but OK lines.
   fixture_key=$(grep -E '^secretKey: ' "$fixture" 2>/dev/null \
     | head -1 \
-    | sed -E 's/^secretKey: *//; s/^["'\'']?//; s/["'\'']?$//; s/ *#.*$//')
+    | sed -E 's/^secretKey: *//; s/^["'\'']?//; s/["'\'']?$//; s/ *#.*$//' || true)
   if [ -n "$fixture_key" ]; then
     if [ "${#fixture_key}" -eq 32 ]; then
       echo "OK:   $(basename "$fixture") secretKey is exactly 32 bytes (AES-256)"
@@ -182,6 +187,84 @@ refute_in "$RENDERED" 'type: kubernetes.io/tls'      "no auto-gen tls Secret ren
 refute_in "$RENDERED" 'leoflow-test-agent-tls'       "no auto-gen server cert Secret name on the BYO path"
 refute_in "$RENDERED" 'leoflow-test-agent-ca'        "no auto-gen CA ConfigMap name on the BYO path"
 expect_in "$RENDERED" 'secretName: leoflow-agent-tls-fixture' "BYO server cert Secret mounted verbatim"
+
+# ---------------------------------------------------------------------------
+# OIDC / SSO (#1143). The chart exposed no auth.oidc.* key and mounted no server
+# config file, so SSO was not reachable at all: auth.oidc.tenant_claims is a MAP,
+# no LEOFLOW_AUTH_OIDC_* env var can carry one, and the server fails boot closed
+# without it. The checks below cover the two halves of the fix and the one thing
+# that must never travel with them.
+
+# Half 1: OFF renders nothing. $RENDERED above is a default (non-SSO) install, and
+# an operator upgrading onto this chart version without touching their values must
+# get the pod spec they already had.
+refute_in "$RENDERED" 'name: LEOFLOW_AUTH_PROVIDER' "no auth provider env on a non-SSO install"
+refute_in "$RENDERED" 'name: LEOFLOW_CONFIG'        "no server config file env on a non-SSO install"
+refute_in "$RENDERED" 'oidc-config'                 "no OIDC volume or ConfigMap on a non-SSO install"
+
+# Half 2: ON delivers the scalars as env and the two maps as a mounted file. The
+# dotted tenant key is the point of the file, viper's key delimiter is "." and
+# would split a Google `hd` domain into nested maps (#826): so assert it survives
+# the render quoted and intact.
+OIDC_RENDERED=$(helm template leoflow-test "$CHART" \
+  --set database.url='postgres://leoflow:p@db:5432/leoflow?sslmode=disable' \
+  --set redis.url='redis://r:6379/0' \
+  --set auth.jwtSecret='helm-template-check-jwt-fixture' \
+  --set agentTLS.serverCertSecret='leoflow-agent-tls-fixture' \
+  --set agentTLS.caConfigMap='leoflow-agent-ca-fixture' \
+  --set auth.oidc.enabled=true \
+  --set auth.oidc.issuer='https://accounts.google.com' \
+  --set auth.oidc.clientId='helm-template-check-client-id' \
+  --set auth.oidc.clientSecret='helm-template-check-oidc-fixture' \
+  --set auth.oidc.redirectUrl='https://leoflow.example.com/api/v2/auth/oidc/callback' \
+  --set auth.oidc.tenantClaim=hd \
+  --set 'auth.oidc.tenantClaims.example\.com=default')
+
+expect_in "$OIDC_RENDERED" 'value: "oidc"'                     "auth provider set to oidc when SSO is on"
+expect_in "$OIDC_RENDERED" 'value: "/etc/leoflow/oidc/config.yaml"' "LEOFLOW_CONFIG points at the mounted OIDC file"
+expect_in "$OIDC_RENDERED" 'name: LEOFLOW_AUTH_OIDC_ISSUER'    "OIDC issuer env entry in deployment"
+expect_in "$OIDC_RENDERED" 'name: LEOFLOW_AUTH_OIDC_TENANT_CLAIM' "OIDC tenant claim env entry in deployment"
+expect_in "$OIDC_RENDERED" 'name: leoflow-test-oidc'           "OIDC ConfigMap named <fullname>-oidc"
+expect_in "$OIDC_RENDERED" 'mountPath: /etc/leoflow/oidc'      "Deployment mounts the OIDC ConfigMap"
+expect_in "$OIDC_RENDERED" '"example.com": "default"'          "dotted tenant_claims key survives the render quoted (#826)"
+expect_in "$OIDC_RENDERED" 'oidcClientSecret:'                 "IdP client secret in the chart-managed Secret"
+
+# The one thing that must never travel in the ConfigMap. A ConfigMap is readable
+# by anything with get on the namespace and is not encrypted at rest, so the
+# code-exchange credential takes the jwtSecret route (secretKeyRef) instead. The
+# needle is the fixture VALUE, not the key name: the key name legitimately appears
+# in the Secret, and it is the value leaking into the ConfigMap that would matter.
+OIDC_CONFIGMAP=$(helm template leoflow-test "$CHART" \
+  --set database.url='postgres://leoflow:p@db:5432/leoflow?sslmode=disable' \
+  --set redis.url='redis://r:6379/0' \
+  --set auth.jwtSecret='helm-template-check-jwt-fixture' \
+  --set agentTLS.serverCertSecret='leoflow-agent-tls-fixture' \
+  --set agentTLS.caConfigMap='leoflow-agent-ca-fixture' \
+  --set auth.oidc.enabled=true \
+  --set auth.oidc.issuer='https://accounts.google.com' \
+  --set auth.oidc.clientId='helm-template-check-client-id' \
+  --set auth.oidc.clientSecret='helm-template-check-oidc-fixture' \
+  --set auth.oidc.redirectUrl='https://leoflow.example.com/api/v2/auth/oidc/callback' \
+  --set auth.oidc.tenantClaim=hd \
+  --set 'auth.oidc.tenantClaims.example\.com=default' \
+  --show-only templates/oidc-config.yaml)
+refute_in "$OIDC_CONFIGMAP" 'helm-template-check-oidc-fixture' "IdP client secret absent from the OIDC ConfigMap"
+
+# The render guard. The server reports every missing OIDC key in one error because
+# each boot failure on Kubernetes costs a values edit, an upgrade and a rollout to
+# learn the next one; the chart owes the same one step earlier, where a GitOps sync
+# can show it. An install missing the tenant pin must not render at all.
+OIDC_NO_PIN=$(helm template leoflow-test "$CHART" \
+  --set database.url='postgres://leoflow:p@db:5432/leoflow?sslmode=disable' \
+  --set redis.url='redis://r:6379/0' \
+  --set auth.jwtSecret='helm-template-check-jwt-fixture' \
+  --set agentTLS.serverCertSecret='leoflow-agent-tls-fixture' \
+  --set agentTLS.caConfigMap='leoflow-agent-ca-fixture' \
+  --set auth.oidc.enabled=true \
+  --set auth.oidc.issuer='https://accounts.google.com' \
+  --set auth.oidc.clientId='helm-template-check-client-id' \
+  --set auth.oidc.redirectUrl='https://leoflow.example.com/api/v2/auth/oidc/callback' 2>&1 || true)
+expect_in "$OIDC_NO_PIN" 'auth.oidc.tenantClaim, auth.oidc.tenantClaims' "render refused for an SSO install with no tenant pin"
 
 if [ "$fail" -ne 0 ]; then
   echo

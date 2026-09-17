@@ -430,7 +430,12 @@ spec:
             - name: LEOFLOW_AUTH_OIDC_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ .ctx.Values.auth.oidc.existingSecret | default (include "leoflow.secretName" .ctx) }}
+                  # The DURABLE Secret, not the hook one. #1142 split them: the hook
+                  # copy exists only to feed the pre-install migration Job, carries
+                  # databaseUrl alone, and is deleted when that hook succeeds. A
+                  # Deployment reading from it lands in CreateContainerConfigError,
+                  # which is the exact outage #1142 was filed for.
+                  name: {{ .ctx.Values.auth.oidc.existingSecret | default (include "leoflow.credentialsSecretName" .ctx) }}
                   key: oidcClientSecret
             {{- end }}
             {{- end }}

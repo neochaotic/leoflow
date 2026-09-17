@@ -197,6 +197,8 @@ tests:
   # Property 3. A ConfigMap is readable by anything with `get` on the namespace and
   # is not encrypted at rest, so the code-exchange credential takes the jwtSecret
   # route instead: the chart-managed Secret, delivered by secretKeyRef.
+  # documentIndex 0 is the DURABLE Secret since #1142; index 1 is the hook copy
+  # that feeds the migration Job and carries databaseUrl alone.
   - it: keeps the client secret in the Secret
     template: secret.yaml
     set:
@@ -208,6 +210,7 @@ tests:
       auth.oidc.tenantClaim: hd
       auth.oidc.tenantClaims:
         example.com: default
+    documentIndex: 0
     asserts:
       - equal:
           path: stringData.oidcClientSecret
@@ -231,7 +234,7 @@ tests:
             name: LEOFLOW_AUTH_OIDC_CLIENT_SECRET
             valueFrom:
               secretKeyRef:
-                name: leoflow-secrets
+                name: leoflow-credentials
                 key: oidcClientSecret
 
   # Separate from auth.existingSecret on purpose: the JWT signing key and the IdP
@@ -277,7 +280,7 @@ tests:
             name: LEOFLOW_AUTH_OIDC_CLIENT_SECRET
             valueFrom:
               secretKeyRef:
-                name: leoflow-secrets
+                name: leoflow-credentials
                 key: oidcClientSecret
 
   # Property 4, and the whole reason these two keys need a file. viper's key

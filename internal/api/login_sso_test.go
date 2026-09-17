@@ -1,6 +1,9 @@
 package api
 
 import (
+	"bytes"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -222,5 +225,69 @@ func TestRefusedSingleSignOnLandsOnAPageThatSaysSo(t *testing.T) {
 	}
 	if !strings.Contains(landing.Body.String(), "/api/v2/auth/oidc/login") {
 		t.Error("the page a refused login lands on offers no way to retry")
+	}
+}
+
+// TestServerSideSSOFailureIsNotShownAsARefusal covers the half of the browser
+// problem the first pass left behind.
+//
+// Three paths on these two browser-only routes answer 500 rather than deny:
+// token generation failing at the start of the flow, the state cookie failing to
+// seal, and the session failing to mint. The last is the worst of them, because
+// it is the tail of a completely successful round trip through the IdP: the user
+// authenticated, was accepted, and then got a page of raw JSON.
+//
+// It needs its own marker and its own words. "We refused you" and "we broke"
+// send the user to different places: the first to an administrator who has to
+// change a setting, the second to a retry that may well work.
+func TestServerSideSSOFailureIsNotShownAsARefusal(t *testing.T) {
+	refused := loginPageQuery(t, true, true, "?sso_error=1")
+	broke := loginPageQuery(t, true, true, "?sso_error=server")
+
+	if !strings.Contains(broke, "on its side") {
+		t.Fatalf("a server-side failure is described as a refusal, which sends the user to an administrator for a problem no setting fixes:\n%s", broke)
+	}
+	if refused == broke {
+		t.Error("both markers render the same page, so the distinction exists only in the URL")
+	}
+	if !strings.Contains(broke, "/api/v2/auth/oidc/login") {
+		t.Error("no way to retry, which is the one thing that may work for a transient failure")
+	}
+}
+
+// TestServerFailureLandsOnThePageThatDescribesIt ties the two ends together, the
+// way TestRefusedSingleSignOnLandsOnAPageThatSaysSo does for a refusal.
+//
+// The three 500 paths are hard to drive from outside: HMAC signing does not fail
+// on any input the handler can produce, and neither does sealing the state
+// cookie. So this drives the exit itself and then serves its target on the real
+// route. Without it, renaming one side of the marker leaves every test green,
+// which is exactly the gap this file already found once.
+func TestServerFailureLandsOnThePageThatDescribesIt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var buf bytes.Buffer
+	r := gin.New()
+	r.GET("/boom", func(c *gin.Context) {
+		abortSSOServerFailure(c, slog.New(slog.NewTextHandler(&buf, nil)), "minting session token", errors.New("hsm unreachable at 10.0.0.9"))
+	})
+	r.GET("/api/v2/auth/login", loginPageHandler(true, true))
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/boom", http.NoBody))
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("server failure = %d, want a redirect; problem+json renders as raw JSON on a browser-only route", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "hsm unreachable") || strings.Contains(rec.Header().Get("Location"), "hsm") {
+		t.Errorf("the cause reached the browser:\n%s\n%s", rec.Header().Get("Location"), rec.Body.String())
+	}
+	if !strings.Contains(buf.String(), "hsm unreachable at 10.0.0.9") {
+		t.Errorf("the cause reached nobody at all, which is worse than showing it:\n%s", buf.String())
+	}
+
+	landed := httptest.NewRecorder()
+	r.ServeHTTP(landed, httptest.NewRequestWithContext(t.Context(), http.MethodGet, rec.Header().Get("Location"), http.NoBody))
+	if !strings.Contains(landed.Body.String(), "on its side") {
+		t.Errorf("the page the failure redirects to does not describe a failure:\n%s", landed.Body.String())
 	}
 }

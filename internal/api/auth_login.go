@@ -31,9 +31,19 @@ var loginPageTemplate = template.Must(template.New("login").Parse(`<!doctype htm
  input{width:100%;padding:.6rem;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;box-sizing:border-box}
  button{margin-top:1.25rem;width:100%;padding:.65rem;border:0;border-radius:6px;background:#6366f1;color:#fff;font-weight:600;cursor:pointer}
  .err{color:#f87171;font-size:.8rem;margin-top:.75rem;min-height:1rem}
+ .sso{display:block;margin-top:.5rem;padding:.65rem;border-radius:6px;background:#e2e8f0;color:#0f172a;
+   font-weight:600;text-align:center;text-decoration:none}
+ .or{display:flex;align-items:center;gap:.6rem;margin:1.1rem 0 .2rem;color:#64748b;font-size:.75rem}
+ .or::before,.or::after{content:"";flex:1;height:1px;background:#334155}
+ .hint{color:#94a3b8;font-size:.75rem;line-height:1.35;margin:.4rem 0 0}
 </style></head><body>
 <form id="f" autocomplete="on">
  <h1>Sign in to Leoflow</h1>
+{{ if .SSO }} <a class="sso" href="/api/v2/auth/oidc/login?next={{ .NextQuery }}">Sign in with single sign-on</a>
+ <div class="or"><span>or</span></div>
+ <p class="hint">The form below is for break-glass accounts. If your organization uses
+ single sign-on, use the button above: a password here will not be accepted.</p>
+{{ end }}
  <label for="u">Username</label><input id="u" name="username" autocomplete="username" autofocus>
  <label for="p">Password</label><input id="p" name="password" type="password" autocomplete="current-password">
  <button type="submit">Sign in</button>
@@ -85,14 +95,32 @@ func sanitizeNext(next string) string {
 
 // loginPageHandler implements GET /api/v2/auth/login: it serves the login page
 // (the Airflow UI redirects here when unauthenticated).
-func loginPageHandler() gin.HandlerFunc {
+// loginPageHandler renders the sign-in page. sso says whether an OIDC flow was
+// discovered at boot, which is the same condition the router uses to register
+// /api/v2/auth/oidc/login: advertising the link without it would 404 the user
+// (#1160).
+func loginPageHandler(sso bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Status(http.StatusOK)
 		c.Header("Content-Type", "text/html; charset=utf-8")
 		c.Header("Cache-Control", "no-cache")
-		// template/html escapes Next for safe embedding as a JS string literal.
-		if err := loginPageTemplate.Execute(c.Writer, struct{ Next template.JS }{
-			Next: template.JS("'" + template.JSEscapeString(sanitizeNext(c.Query("next"))) + "'"),
+		next := sanitizeNext(c.Query("next"))
+		// Next is embedded as a JS string literal. NextQuery goes into an href, and
+		// html/template URL-escapes a value in that context ITSELF, so escaping it
+		// here too produced next=%252Fdags: the OIDC handler then saw a literal
+		// "%2Fdags", sanitizeNext refused it as not absolute, and every SSO login
+		// landed on the root instead of the page the user asked for. Pass the
+		// sanitized path through raw and let the template do the escaping once.
+		// sanitizeNext has already refused anything that is not a single-slash
+		// absolute path, so neither field can carry an off-origin redirect.
+		if err := loginPageTemplate.Execute(c.Writer, struct {
+			Next      template.JS
+			NextQuery string
+			SSO       bool
+		}{
+			Next:      template.JS("'" + template.JSEscapeString(next) + "'"),
+			NextQuery: next,
+			SSO:       sso,
 		}); err != nil {
 			AbortProblem(c, http.StatusInternalServerError, "internal error", "could not render login page")
 		}

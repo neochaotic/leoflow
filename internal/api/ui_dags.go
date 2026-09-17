@@ -127,7 +127,11 @@ func toDagWithRunsDTO(d domain.DAG, runs []domain.DagRun) dagWithRunsDTO {
 		LatestDagRuns:               latest,
 		PendingActions:              []any{},
 		FileToken:                   "",
-		Fileloc:                     "",
+		// Mirrors the details endpoint, which has carried the same derivation all
+		// along. Empty here is not fatal for OpenMetadata (its model allows it) but
+		// it lands as an empty pipelineLocation in the catalog, and the list route
+		// is the one OM reads to discover DAGs.
+		Fileloc: d.DagID + "/dag.py",
 	}
 }
 

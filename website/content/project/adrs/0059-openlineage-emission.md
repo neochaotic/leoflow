@@ -290,3 +290,63 @@ The scheduler observer seam (D1) already has the full picture.
 - Generic (non-dbt) dataset/column lineage in v1 (D2, D5).
 - Running OpenLineage's Python SQL extractors in the pod (D5, v3).
 - Any OpenMetadata-specific entity model beyond the OL wire format (D6).
+
+## Amendment A (2026-09-17): an official Go SDK exists, OpenMetadata does not take HTTP, and the design is source-agnostic
+
+Five corrections, all found while scoping the implementation. The decision this
+ADR records stands; what changes is how it is built and two factual claims it
+makes.
+
+**A1 supersedes D1's emitter implementation.** There is a first-party OpenLineage
+Go SDK, `github.com/OpenLineage/openlineage/client/go`, v1.53.0, released
+2026-09-01 from the OpenLineage monorepo alongside the Java and Python clients
+and versioned on the same release train. It targets spec 2-0-2 and already ships
+a constructor for every facet this ADR names, for both v1a and v1b. D1 reads as
+hand-rolling an HTTP client and event types; that is now the wrong default under
+the project's rule of preferring a first-party SDK. `internal/lineage` supplies
+leoflow's own implementation of the SDK's two-method transport interface, so only
+the client and facet packages are imported: the SDK's transport package pulls in
+Google Cloud Data Catalog unconditionally, with no build tag, which has no place
+in the leoflow binary. D1's scheduler observer seam is unchanged, but its cited
+line numbers have drifted post-v0.4.7 and should be refreshed when this is
+implemented.
+
+**A2 withdraws D4's OpenMetadata URL and D6's claim that it suffices.**
+OpenMetadata's OpenLineage connector is a Kafka or Kinesis **consumer**, not an
+HTTP endpoint: it is built from a broker config and a Kafka consumer, with no
+ingestion URL. The URL in D4 is Marquez's shape. So an HTTP-only emitter reaches
+Marquez and DataHub directly and reaches OpenMetadata only with a Kafka topic in
+between. That is a deployment fact an operator has to know before choosing this
+path, not a detail.
+
+**A3 replaces D3's dbt-first framing with a spine and a provider seam.** Dataset
+lineage is defined once, independent of where the datasets came from: a dataset
+reference model, a single function that builds the OpenLineage namespace and name
+from structured parts, and one optional field on the task spec that every
+provider writes into. Providers, in the order they ship: datasets declared by the
+author on the task, the dbt manifest, and the connections a DAG already declares.
+SQL parsing stays out of scope and needs its own ADR, per D5 and ADR 0048. dbt is
+the first provider, not the design. Building it dbt-first would bake dbt's shape
+into the emitter and make the second source a rewrite.
+
+**A4 adds two dbt facts D3 omits.** The manifest reader consumes only the `nodes`
+map; dbt's `manifest.json` carries a separate top-level `sources` map whose ids
+appear in `depends_on.nodes` and which are the input datasets at the ROOT of the
+lineage graph. Reading it is required, not optional, or the dbt graph has no
+roots. Physical identity should prefer a node's `relation_name` when present,
+because dbt has already applied quoting and casing there, falling back to the
+database, schema and alias parts. Every manifest fixture in the dbt package is a
+hand-written stub carrying none of these fields, so at least one real
+dbt-generated manifest has to be captured as a golden fixture from the existing
+dbt e2e runs.
+
+**A5 states the naming invariant as a hard requirement.** Consumers attach
+lineage by matching the dataset namespace and name to tables they already
+catalogue, and they fail SILENTLY when the match misses. OpenMetadata maps the
+namespace scheme through an exact-match dictionary that accepts `postgres` and
+not `postgresql`, and parses the name positionally as a lowercased dotted path.
+Namespace and name strings are therefore produced in exactly one function, from
+structured parts, covered by a per-warehouse table test. No provider builds them
+itself. This is the failure mode most likely to reach production, because
+everything upstream of it reports success.
+

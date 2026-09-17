@@ -339,9 +339,29 @@ Deployment rather than have the chart weaken the guard for everyone.
 {{- $strategy -}}
 {{- end -}}
 
-{{/* Name of the Secret holding generated/inline credentials. */}}
+{{/*
+Name of the HOOK Secret. It exists only to feed the pre-install/pre-upgrade
+migration Job, which runs before the normal manifest is applied and therefore
+cannot read a tracked resource. Nothing long-lived may reference it: under Argo
+CD a hook is deleted and recreated in separate passes of one operation, is
+excluded from the compared state, and is not restored by self-heal, so an
+interrupted sync removes it permanently while the Application still reports
+Synced (#1142).
+*/}}
 {{- define "leoflow.secretName" -}}
 {{- printf "%s-secrets" (include "leoflow.fullname" .) -}}
+{{- end -}}
+
+{{/*
+Name of the DURABLE Secret holding inline credentials. This is an ordinary
+tracked resource, which is what the control-plane Deployment reads. A new name
+rather than the hook's: Helm stamps ownership metadata only on main-manifest
+resources, so the live hook Secret carries no meta.helm.sh/release-name and
+adopting its name into the manifest would abort every `helm upgrade` from 0.4.6
+with an ownership conflict.
+*/}}
+{{- define "leoflow.credentialsSecretName" -}}
+{{- printf "%s-credentials" (include "leoflow.fullname" .) -}}
 {{- end -}}
 
 {{/*

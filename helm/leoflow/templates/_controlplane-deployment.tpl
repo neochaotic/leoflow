@@ -328,12 +328,12 @@ spec:
             - name: LEOFLOW_DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ .ctx.Values.database.existingSecret | default (include "leoflow.secretName" .ctx) }}
+                  name: {{ .ctx.Values.database.existingSecret | default (include "leoflow.credentialsSecretName" .ctx) }}
                   key: databaseUrl
             - name: LEOFLOW_REDIS_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ .ctx.Values.redis.existingSecret | default (include "leoflow.secretName" .ctx) }}
+                  name: {{ .ctx.Values.redis.existingSecret | default (include "leoflow.credentialsSecretName" .ctx) }}
                   key: redisUrl
             {{- if .ctx.Values.redis.caConfigMap }}
             # #312 — Verified TLS to managed Redis (Memorystore
@@ -347,7 +347,7 @@ spec:
             - name: LEOFLOW_AUTH_JWT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ .ctx.Values.auth.existingSecret | default (include "leoflow.secretName" .ctx) }}
+                  name: {{ .ctx.Values.auth.existingSecret | default (include "leoflow.credentialsSecretName" .ctx) }}
                   key: jwtSecret
             {{- if or .ctx.Values.secretKeyExistingSecret .ctx.Values.secretKey }}
             # LEOFLOW_SECRET_KEY (ADR 0019) — Connection password / Extra
@@ -357,14 +357,14 @@ spec:
             - name: LEOFLOW_SECRET_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ .ctx.Values.secretKeyExistingSecret | default (include "leoflow.secretName" .ctx) }}
+                  name: {{ .ctx.Values.secretKeyExistingSecret | default (include "leoflow.credentialsSecretName" .ctx) }}
                   key: secretKey
             {{- end }}
             {{- if or .ctx.Values.bootstrap.existingSecret .ctx.Values.bootstrap.password }}
             - name: LEOFLOW_BOOTSTRAP_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ .ctx.Values.bootstrap.existingSecret | default (include "leoflow.secretName" .ctx) }}
+                  name: {{ .ctx.Values.bootstrap.existingSecret | default (include "leoflow.credentialsSecretName" .ctx) }}
                   key: bootstrapPassword
             {{- end }}
             {{- if .ctx.Values.extraEnv }}

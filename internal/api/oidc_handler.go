@@ -300,9 +300,14 @@ func (d oidcDeps) rejectVerify(c *gin.Context, err error) {
 	reason := verifyReason(err)
 	// token_invalid is the catch-all arm, and it swallowed the only thing that
 	// tells a JWKS fetch failure apart from a wrong client_id: the error itself.
-	// Attach it there and ONLY there. A recognized reason is already
-	// self-describing, and the underlying error can carry claim values.
-	if reason == reasonTokenInvalid {
+	// Attach the cause there, and on the one recognized reason whose error text
+	// is the remedy rather than a restatement of the reason.
+	//
+	// Everything else verifyReason recognizes is a bare package-level sentinel
+	// with fixed text, returned unwrapped, so logging it beside its own reason
+	// adds a second copy of the same words. Withholding it there is about noise,
+	// not about secrecy: none of those sentinels is formatted from a claim.
+	if reason == reasonTokenInvalid || errors.Is(err, oidc.ErrGroupOverage) {
 		d.denyWithCause(c, action, "", "", "", reason, err)
 		return
 	}
@@ -331,6 +336,12 @@ func verifyReason(err error) string {
 		return "tenant_not_allowed"
 	case errors.Is(err, oidc.ErrEmailDomainNotAllowed):
 		return "email_domain_not_allowed"
+	case errors.Is(err, oidc.ErrMissingExpiry):
+		return "token_missing_expiry"
+	case errors.Is(err, oidc.ErrNoSubject):
+		return "token_no_subject"
+	case errors.Is(err, oidc.ErrGroupOverage):
+		return "group_claim_overage"
 	default:
 		return reasonTokenInvalid
 	}
@@ -360,6 +371,9 @@ func (d oidcDeps) denyWithCause(c *gin.Context, action, tenant, userID, email, r
 	attrs := []any{"reason", reason, "action", action}
 	if email != "" {
 		attrs = append(attrs, "email", email)
+	}
+	if userID != "" {
+		attrs = append(attrs, "user", userID)
 	}
 	if tenant != "" {
 		attrs = append(attrs, "tenant", tenant)

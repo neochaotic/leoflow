@@ -67,10 +67,12 @@ func TestTokenInvalidCarriesTheUnderlyingError(t *testing.T) {
 	}
 }
 
-// TestRecognizedReasonsDoNotLeakTokenText guards the other direction. A reason
-// verifyReason recognizes is already self-describing, and the underlying error
-// can carry claim values, so it must not be appended there.
-func TestRecognizedReasonsDoNotLeakTokenText(t *testing.T) {
+// TestRecognizedReasonsDoNotRepeatThemselves guards the other direction. Every
+// sentinel verifyReason recognizes is a bare package-level errors.New with fixed
+// text, returned unwrapped, so attaching it beside its own reason writes the same
+// words twice. The exception is ErrGroupOverage, whose text carries the remedy
+// rather than a restatement of the reason.
+func TestRecognizedReasonsDoNotRepeatThemselves(t *testing.T) {
 	out := denyLog(t, func(d oidcDeps, c *gin.Context) {
 		d.rejectVerify(c, oidc.ErrTenantNotAllowed)
 	})
@@ -79,6 +81,63 @@ func TestRecognizedReasonsDoNotLeakTokenText(t *testing.T) {
 		t.Fatalf("the reason is missing:\n%s", out)
 	}
 	if strings.Contains(out, "error=") {
-		t.Errorf("a recognized reason attached the raw error, which can carry claim values:\n%s", out)
+		t.Errorf("a recognized reason attached its own sentinel again, which says nothing the reason did not:\n%s", out)
+	}
+}
+
+// TestNamedVerificationFailuresGetTheirOwnReason is the same diagnosability
+// defect one layer down. verify.go declares ten sentinels and verifyReason maps
+// seven, so ErrMissingExpiry, ErrNoSubject and ErrGroupOverage fell into the
+// catch-all and were audited as token_invalid, the reason that means "we did not
+// recognize this". Each is recognized, each names a distinct and operator-fixable
+// condition, and the overage one is the worst to lose: Entra past ~200 group
+// memberships omits the groups claim entirely, so the most heavily grouped users
+// (usually the most privileged) are the only ones who cannot log in, and the
+// audit row says only that their token was invalid.
+func TestNamedVerificationFailuresGetTheirOwnReason(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{oidc.ErrMissingExpiry, "token_missing_expiry"},
+		{oidc.ErrNoSubject, "token_no_subject"},
+		{oidc.ErrGroupOverage, "group_claim_overage"},
+	} {
+		if got := verifyReason(tc.err); got != tc.want {
+			t.Errorf("verifyReason(%v) = %q, want %q; it is audited as the catch-all, so a condition the server recognized reads as one it did not", tc.err, got, tc.want)
+		}
+	}
+}
+
+// TestGroupOverageKeepsItsGuidance guards the one recognized sentinel whose text
+// is the fix. Giving it a reason of its own moves it off the arm that attaches
+// the cause, so the actionable half ("configure Entra app roles or the groups
+// scope") would have been dropped in the same change that made it diagnosable.
+func TestGroupOverageKeepsItsGuidance(t *testing.T) {
+	out := denyLog(t, func(d oidcDeps, c *gin.Context) {
+		d.rejectVerify(c, oidc.ErrGroupOverage)
+	})
+
+	if !strings.Contains(out, "group_claim_overage") {
+		t.Fatalf("the reason is missing:\n%s", out)
+	}
+	if !strings.Contains(out, "app roles") {
+		t.Errorf("the overage guidance never reaches the operator, so the log names the condition and not the fix:\n%s", out)
+	}
+}
+
+// TestDenyLogsTheUserItAlreadyResolved covers the three denials that happen after
+// the user row is in hand (inactive, tenant_mismatch, role_reconcile_failed).
+// deny takes a userID on every one of them and the log line dropped it, so the
+// operator saw which reason fired and not which of possibly many accounts it
+// fired for. The email is not a substitute: a JIT-provisioned duplicate is
+// exactly the case where two rows share one address.
+func TestDenyLogsTheUserItAlreadyResolved(t *testing.T) {
+	out := denyLog(t, func(d oidcDeps, c *gin.Context) {
+		d.deny(c, auditOIDCLoginFailure, "default", "usr_42", "someone@example.com", "tenant_mismatch")
+	})
+
+	if !strings.Contains(out, "usr_42") {
+		t.Errorf("the denial names no user, so the reason cannot be tied to a row:\n%s", out)
 	}
 }

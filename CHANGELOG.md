@@ -108,14 +108,24 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   operator could actually read carried nothing: a deployment rejecting 100% of
   logins looked, in the logs, exactly like a deployment nobody was using.
 
-  Denials are now logged at WARN with the audit reason, the action, and the email
-  and tenant when known.
+  Denials are now logged at WARN with the audit reason, the action, and the
+  tenant, user and email when known.
 
   **`token_invalid` carries the underlying error.** It is the catch-all arm, so a
   JWKS fetch failure, a network timeout to the IdP, an audience mismatch and a
   signature surprise all collapsed into it and the real error was discarded. The
-  cause is attached there and only there: a reason the server recognizes is
-  already self-describing, and the underlying error can carry claim values.
+  cause is attached there, and on `group_claim_overage`, whose text is the remedy.
+  Everywhere else the reason names a fixed sentinel, so repeating it would only
+  write the same words twice.
+
+  **Three recognized failures stop reporting as `token_invalid`.** `verify.go`
+  declares ten sentinels and only seven had a reason, so a token with no `exp`,
+  a token with no `sub`, and an Entra group-claim overage were all audited as the
+  reason that means "we did not recognize this". They are now
+  `token_missing_expiry`, `token_no_subject` and `group_claim_overage`. The
+  overage is the one that bites: past roughly 200 group memberships Entra omits
+  the `groups` claim entirely, so the most heavily grouped users are the only
+  ones who cannot log in.
 
 - **OpenMetadata can catalogue leoflow again: `class_ref.module_path` is no
   longer null.** A field team reported that they could not integrate leoflow with

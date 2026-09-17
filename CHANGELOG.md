@@ -150,6 +150,14 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   locked-out reader to go read the audit log, which under `provider: oidc` with
   an empty `break_glass_emails` is behind the very session they do not have.
 
+  **The three 500 paths on the same two routes got the same treatment**, with
+  their own marker and their own words: generating the login tokens, sealing the
+  state cookie, and minting the session. The last is the worst of them, being the
+  tail of a completely successful round trip through the identity provider, and
+  it too ended in raw JSON. "We refused you" and "we broke" send a user to
+  different places, so the page says which happened: a refusal needs an
+  administrator, a failure needs a retry.
+
   The tests changed shape with it. A denied login is a 302 now, so `302` alone no
   longer means a login succeeded, and every assertion that read it that way would
   have passed on a rejection. Success and denial are each asserted in one shared

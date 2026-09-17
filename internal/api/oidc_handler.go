@@ -94,7 +94,7 @@ func oidcLoginHandler(flow *oidc.Flow, logger *slog.Logger) gin.HandlerFunc {
 		state, serr := randomURLToken()
 		nonce, nerr := randomURLToken()
 		if serr != nil || nerr != nil {
-			AbortProblem(c, http.StatusInternalServerError, "internal error", "could not start login")
+			abortSSOServerFailure(c, logger, "generating login tokens", errors.Join(serr, nerr))
 			return
 		}
 		verifier := oidc.GenerateCodeVerifier()
@@ -103,8 +103,7 @@ func oidcLoginHandler(flow *oidc.Flow, logger *slog.Logger) gin.HandlerFunc {
 			State: state, Nonce: nonce, Verifier: verifier, Next: next,
 		}, oidc.StateCookieTTL)
 		if err != nil {
-			logger.Error("oidc: encoding state cookie", "error", err)
-			AbortProblem(c, http.StatusInternalServerError, "internal error", "could not start login")
+			abortSSOServerFailure(c, logger, "encoding state cookie", err)
 			return
 		}
 		c.SetSameSite(http.SameSiteLaxMode)
@@ -164,8 +163,7 @@ func oidcCallbackHandler(deps oidcDeps) gin.HandlerFunc {
 		}
 		token, terr := auth.MintUserToken(deps.jwtSecret, deps.tokenTTL, *user)
 		if terr != nil {
-			deps.logger.Error("oidc: minting session token", "error", terr)
-			AbortProblem(c, http.StatusInternalServerError, "internal error", "could not mint session")
+			abortSSOServerFailure(c, deps.logger, "minting session token", terr)
 			return
 		}
 		setSessionCookie(c, token, deps.tokenTTL)
@@ -404,7 +402,35 @@ func (d oidcDeps) denyWithCause(c *gin.Context, action, tenant, userID, email, r
 // marker carries no reason: it exists so the login page can say that sign-on
 // failed, rather than showing the same bare form the user was just redirected
 // away from, which reads as the click having done nothing.
-const loginPageWithSSOError = "/api/v2/auth/login?sso_error=1"
+const loginPageWithSSOError = "/api/v2/auth/login?" + ssoErrorParam + "=" + ssoErrorRefused
+
+// The two sso_error markers. They carry no reason, only which of the two things
+// happened, because the words the page needs are different: a refusal is the
+// deployment saying no and needs an administrator, a failure is Leoflow breaking
+// and needs a retry. Telling a user to go find an administrator for a transient
+// mint error sends them somewhere no setting will help.
+const (
+	ssoErrorParam   = "sso_error"
+	ssoErrorRefused = "1"
+	ssoErrorServer  = "server"
+)
+
+// loginPageWithSSOServerFailure is where the three 500 paths on these routes send
+// the browser. They are browser-only routes, so problem+json reached the user as
+// a page of raw JSON; the mint failure is the worst of the three, being the tail
+// of a completely successful round trip through the IdP.
+const loginPageWithSSOServerFailure = "/api/v2/auth/login?" + ssoErrorParam + "=" + ssoErrorServer
+
+// abortSSOServerFailure logs the cause and returns the browser to the login page
+// saying Leoflow broke. The cause never reaches the browser, for the same reason
+// a denial's does not, and the log line is what an operator reads.
+func abortSSOServerFailure(c *gin.Context, logger *slog.Logger, what string, cause error) {
+	if logger != nil {
+		logger.Error("oidc: "+what, "error", cause)
+	}
+	c.Redirect(http.StatusFound, loginPageWithSSOServerFailure)
+	c.Abort()
+}
 
 // record audits an event using the request context.
 func (d oidcDeps) record(c *gin.Context, action, tenant, userID, email, outcome string, extra map[string]string) {

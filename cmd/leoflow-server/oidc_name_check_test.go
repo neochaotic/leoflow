@@ -23,6 +23,10 @@ type fakeNameChecker struct {
 	// check that reports the tenant half and swallows the role half is the silence
 	// this whole check exists to remove.
 	roleErr error
+	// password maps "tenant/email" (email lowercased) to whether that address has
+	// a usable local password login, and passwordErr fails that lookup alone.
+	password    map[string]bool
+	passwordErr error
 	// calls counts every lookup, so a test can assert the query count and not just
 	// the warning count. Deduplicating the message while still asking the database
 	// once per claim value would satisfy the second and miss the first.
@@ -32,8 +36,27 @@ type fakeNameChecker struct {
 // nameCheckCalls records what was asked of the database, per argument, so a test
 // can distinguish "warned once" from "asked once".
 type nameCheckCalls struct {
-	tenants []string
-	roles   []string // "tenant/role"
+	tenants   []string
+	roles     []string // "tenant/role"
+	passwords []string // "tenant/email"
+}
+
+func (f fakeNameChecker) LocalPasswordUserExists(_ context.Context, tenant, email string) (bool, error) {
+	if f.calls != nil {
+		f.calls.passwords = append(f.calls.passwords, tenant+"/"+email)
+	}
+	if f.passwordErr != nil {
+		return false, f.passwordErr
+	}
+	if f.err != nil {
+		return false, f.err
+	}
+	// Lowercase but do NOT trim, mirroring CountLocalPasswordUser, which compares
+	// lower(email) = lower($2) and trims nothing. A fake that normalized more than
+	// the query does would hide a caller that forgets to trim, and the login path
+	// does trim (authTokenHandler), so the two would disagree in production while
+	// every test stayed green.
+	return f.password[tenant+"/"+strings.ToLower(email)], nil
 }
 
 func (f fakeNameChecker) TenantExists(_ context.Context, name string) (bool, error) {
@@ -417,7 +440,98 @@ func (blockingNameChecker) TenantExists(ctx context.Context, _ string) (bool, er
 	return false, ctx.Err()
 }
 
+func (blockingNameChecker) LocalPasswordUserExists(ctx context.Context, _, _ string) (bool, error) {
+	<-ctx.Done()
+	return false, ctx.Err()
+}
+
 func (blockingNameChecker) RoleExists(ctx context.Context, _, _ string) (bool, error) {
 	<-ctx.Done()
 	return false, ctx.Err()
+}
+
+// TestBreakGlassWarningCatchesAnAddressThatCannotSignIn covers the worse half of
+// the lock-out problem.
+//
+// The empty-allowlist warning says nobody can get in. A non-empty allowlist was
+// treated as safe, and it is not: the gate admits the address, and then
+// FindUserByLogin finds no row and answers the same "invalid credentials" a
+// wrong password gets. The only local password user that ever exists is the
+// bootstrap admin, and only when a bootstrap password was set at first install;
+// every other local user comes from the admin-authenticated user API, which is
+// exactly what cannot be reached during a lock-out.
+//
+// So an operator who writes their own work address into break_glass_emails gets
+// silence from the empty check and a hatch that does not open. That is worse
+// than the empty case, because they believe they have one.
+//
+// A row is not enough either. A user created by OIDC provisioning has a NULL
+// password, so the row exists while no password can ever verify against it.
+func TestBreakGlassWarningCatchesAnAddressThatCannotSignIn(t *testing.T) {
+	ck := fakeNameChecker{
+		tenants:  map[string]bool{"default": true},
+		roles:    map[string]bool{"default/viewer": true},
+		password: map[string]bool{"default/admin@leoflow.local": true},
+	}
+	withBreakGlass := func(emails ...string) config.AuthSection {
+		return oidcAuthFor(func(a *config.AuthSection) {
+			a.OIDC.TenantClaims = map[string]string{"corp.example": "default"}
+			a.OIDC.BreakGlassEmails = emails
+		})
+	}
+	find := func(w []configWarning, key string) *configWarning {
+		for i := range w {
+			if w[i].Key == key {
+				return &w[i]
+			}
+		}
+		return nil
+	}
+	const key = "auth.oidc.break_glass_emails"
+
+	t.Run("no listed address has a local password", func(t *testing.T) {
+		w := find(oidcNameWarnings(t.Context(), ck, withBreakGlass("ops@corp.example")), key)
+		if w == nil {
+			t.Fatal("no warning: the allowlist admits an address the credential store cannot authenticate, so the escape hatch does not open")
+		}
+		if !strings.Contains(w.Msg, "ops@corp.example") {
+			t.Errorf("the warning does not quote the address that cannot sign in: %s", w.Msg)
+		}
+	})
+
+	t.Run("one address works: silent, because one way in is enough", func(t *testing.T) {
+		if w := find(oidcNameWarnings(t.Context(), ck, withBreakGlass("ops@corp.example", "admin@leoflow.local")), key); w != nil {
+			t.Errorf("warned although one listed address can sign in: %s", w.Msg)
+		}
+	})
+
+	t.Run("an OIDC-provisioned row is not a password login", func(t *testing.T) {
+		oidcOnly := ck
+		oidcOnly.password = map[string]bool{} // the row exists, the password does not
+		if w := find(oidcNameWarnings(t.Context(), oidcOnly, withBreakGlass("admin@leoflow.local")), key); w == nil {
+			t.Fatal("a row with no password counted as a way in; nothing can ever verify against it")
+		}
+	})
+
+	t.Run("case and spacing match the way the login normalizes them", func(t *testing.T) {
+		if w := find(oidcNameWarnings(t.Context(), ck, withBreakGlass("  Admin@Leoflow.Local  ")), key); w != nil {
+			t.Errorf("warned about an address the login path would accept: %s", w.Msg)
+		}
+	})
+
+	t.Run("a failed lookup says so instead of passing quietly", func(t *testing.T) {
+		broken := ck
+		broken.passwordErr = errors.New("connection reset")
+		w := find(oidcNameWarnings(t.Context(), broken, withBreakGlass("ops@corp.example")), key)
+		if w == nil || !strings.Contains(w.Msg, "could not") {
+			t.Fatalf("a check that could not run reported nothing distinguishable from a check that found nothing: %+v", w)
+		}
+	})
+
+	t.Run("empty allowlist keeps its own warning and does not gain this one", func(t *testing.T) {
+		w := oidcNameWarnings(t.Context(), ck, withBreakGlass())
+		if got := find(w, key); got != nil && strings.Contains(got.Msg, "cannot sign in") {
+			t.Errorf("an empty list was reported as addresses that cannot sign in: %s", got.Msg)
+		}
+	})
 }

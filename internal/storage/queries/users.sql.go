@@ -11,6 +11,34 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countLocalPasswordUser = `-- name: CountLocalPasswordUser :one
+SELECT COUNT(*)
+FROM users u
+JOIN tenants t ON t.id = u.tenant_id
+WHERE t.name = $1 AND lower(u.email) = lower($2) AND u.password_hash IS NOT NULL AND u.is_active
+`
+
+type CountLocalPasswordUserParams struct {
+	Name  string `json:"name"`
+	Lower string `json:"lower"`
+}
+
+// Does this address have a usable LOCAL password login in the tenant? The boot
+// check on auth.oidc.break_glass_emails asks it: an address on that allowlist
+// with no password row is an escape hatch that does not open, which is worse
+// than an empty allowlist because the operator believes they have one.
+//
+// password_hash IS NOT NULL is the point, not merely that the row exists. A user
+// created by OIDC just-in-time provisioning has a NULL password (the table's
+// users_has_auth check permits it because the OIDC subject is the other half),
+// so the row can exist while no password can ever be verified against it.
+func (q *Queries) CountLocalPasswordUser(ctx context.Context, arg CountLocalPasswordUserParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countLocalPasswordUser, arg.Name, arg.Lower)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const deleteUserRoles = `-- name: DeleteUserRoles :exec
 DELETE FROM user_roles WHERE user_id = $1
 `

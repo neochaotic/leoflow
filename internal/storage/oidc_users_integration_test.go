@@ -5,6 +5,7 @@ package storage_test
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -251,5 +252,48 @@ func TestRoleExistsOnAMissingTenantIsAnError(t *testing.T) {
 	}
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("RoleExists on a tenant that does not exist returned err = %v; want domain.ErrNotFound, which is what makes the denial audit as role_check_failed rather than unknown_role", err)
+	}
+}
+
+// TestLocalPasswordUserExistsIntegration pins the query the break-glass boot
+// check asks, against a real database, because its whole value is the
+// distinction SQL makes and a fake cannot: a row that exists but has no password.
+//
+// A user created through OIDC provisioning has a NULL password_hash (the
+// users_has_auth constraint permits it because the OIDC subject is the other
+// half), so an address listed in break_glass_emails can have a row and still be
+// an escape hatch that does not open.
+func TestLocalPasswordUserExistsIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	stamp := time.Now().UnixNano()
+	local := fmt.Sprintf("bg-local-%d@example.com", stamp)
+	ssoOnly := fmt.Sprintf("bg-sso-%d@example.com", stamp)
+
+	if _, err := repo.CreateUser(ctx, "default", local, "s3cret-password", []string{"viewer"}); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if _, err := repo.CreateOIDCUser(ctx, "default", ssoOnly, "azure", fmt.Sprintf("sub-%d", stamp), []string{"viewer"}); err != nil {
+		t.Fatalf("CreateOIDCUser: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name, tenant, email string
+		want                bool
+	}{
+		{"a local password user is a way in", "default", local, true},
+		{"an OIDC-provisioned row is not: it has no password to verify", "default", ssoOnly, false},
+		{"an address with no row at all", "default", fmt.Sprintf("bg-absent-%d@example.com", stamp), false},
+		{"case is not significant, as it is not on the login path", "default", strings.ToUpper(local), true},
+		{"a tenant that does not exist is absent, not an error", "acme", local, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := repo.LocalPasswordUserExists(ctx, tc.tenant, tc.email)
+			if err != nil {
+				t.Fatalf("LocalPasswordUserExists: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("= %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

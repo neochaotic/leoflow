@@ -107,14 +107,42 @@ func TestClearTaskInstancesExplicitFlagsStillWin(t *testing.T) {
 		}
 	})
 
+	// dry_run=false is load-bearing, not decoration. The fake records onlyFailed
+	// only when the repository is reached, and its zero value is false, so the
+	// same assertion on a preview passes whether or not the handler ever reads
+	// only_failed: a handler that hardcoded onlyFailed=true would still be green.
 	t.Run("only_failed=false widens to every named task", func(t *testing.T) {
 		srv, tasks := clearDefaultsServer(t)
-		rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/clearTaskInstances", `{"dag_run_id":"r1","only_failed":false}`)
+		rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/clearTaskInstances", `{"dag_run_id":"r1","only_failed":false,"dry_run":false}`)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("clear = %d (%s)", rec.Code, rec.Body.String())
 		}
+		if !tasks.clearCalled {
+			t.Fatal("premise failed: the clear did not execute, so onlyFailed was never observed")
+		}
 		if tasks.gotOnlyFailed {
 			t.Error("only_failed=false was ignored; an explicit widening must still be possible")
+		}
+	})
+
+	// The preview must widen with it. The affected set is what a caller reads
+	// before confirming, so a preview that stays scoped to failures while the
+	// execute path widens would understate what the confirm is about to do.
+	t.Run("only_failed=false widens the preview too", func(t *testing.T) {
+		srv, _ := clearDefaultsServer(t)
+		rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/clearTaskInstances", `{"dag_run_id":"r1","only_failed":false}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("preview = %d (%s)", rec.Code, rec.Body.String())
+		}
+		var got struct {
+			TaskInstances []map[string]any `json:"task_instances"`
+			TotalEntries  int              `json:"total_entries"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.TotalEntries != 2 {
+			t.Errorf("affected set = %d %v, want both the failed and the successful task", got.TotalEntries, got.TaskInstances)
 		}
 	})
 }

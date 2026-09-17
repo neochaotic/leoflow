@@ -227,6 +227,13 @@ allowed" on the next `helm upgrade`, with nothing in its values changing to show
 for it. Refuse at render time: that is the one channel a GitOps sync surfaces,
 since Argo CD never renders NOTES.txt. The UI is served same-origin with the
 API, so the wildcard buys nothing an explicit origin list does not.
+
+`helm upgrade --reuse-values` reaches this with nobody having set the key:
+that flag does not merge the new chart's defaults, it rebuilds the previous
+release's COALESCED values, so the old chart's own `["*"]` default is what
+arrives here. The refusal is still the right answer, because the alternative is
+rendering a wildcard the operator never chose, but the message has to name the
+flag or it sends them looking for a value that is not in their values file.
 */ -}}
 {{- $corsOrigins := .Values.config.cors.allowedOrigins | default list -}}
 {{- /*
@@ -238,7 +245,7 @@ working wildcard while `has` on a non-slice would never see it.
 {{- $corsOrigins = list $corsOrigins -}}
 {{- end -}}
 {{- if has "*" $corsOrigins -}}
-{{- fail "config.cors.allowedOrigins must not contain \"*\": that lets a page on any origin read this API's responses cross-origin, and no template read this key before #1144, so rendering the wildcard would silently widen an install that has been running the server default (http://localhost:8080). List the exact origins the UI is served from. Leoflow serves its UI same-origin with the API, so most deployments need no entry at all and should leave the list empty. If you want the wildcard deliberately, set LEOFLOW_SERVER_CORS_ALLOWED_ORIGINS through extraEnv." -}}
+{{- fail "config.cors.allowedOrigins must not contain \"*\": that lets a page on any origin read this API's responses cross-origin, and no template read this key before #1144, so rendering the wildcard would silently widen an install that has been running the server default (http://localhost:8080). List the exact origins the UI is served from. Leoflow serves its UI same-origin with the API, so most deployments need no entry at all and should leave the list empty. If you want the wildcard deliberately, set LEOFLOW_SERVER_CORS_ALLOWED_ORIGINS through extraEnv. If you never set this key at all and are seeing this on an upgrade, you used --reuse-values: it does not merge the new chart's defaults, it rebuilds the PREVIOUS release's coalesced values, so a 0.4.6 release carries that chart's [\"*\"] default into this render even though no template ever read it. Re-run with --reset-then-reuse-values, which starts from this chart's defaults and lays your own values over them." -}}
 {{- end -}}
 
 {{- /*

@@ -90,14 +90,35 @@ newer version.
 ```sh
 # OCI chart (the primary install path — see Installation):
 helm upgrade leoflow oci://ghcr.io/neochaotic/charts/leoflow --version <VERSION> \
-  -n leoflow --reuse-values
+  -n leoflow --reset-then-reuse-values
 
 # Or pin the image tags explicitly:
 helm upgrade leoflow oci://ghcr.io/neochaotic/charts/leoflow --version <VERSION> \
-  -n leoflow --reuse-values \
+  -n leoflow --reset-then-reuse-values \
   --set image.tag=<VERSION> \
   --set migrations.image.tag=<VERSION>
 ```
+
+### Use `--reset-then-reuse-values`, not `--reuse-values`
+
+`--reuse-values` does **not** merge the new chart's defaults. Helm rebuilds the
+previous release's coalesced values and assigns them as the new chart's values,
+so every key the new chart added is absent and every default the new chart
+changed is still at its old value. The upgrade is rendered by new templates
+against an old chart's value tree, which is a shape neither version was tested
+against.
+
+That is not theoretical for this chart. Upgrading a 0.4.6 release to 0.4.7 with
+`--reuse-values` fails to render on two counts: `probes.startup` does not exist
+in a 0.4.6 value tree, and `config.server.cors.allowedOrigins` is still at
+0.4.6's documented `["*"]`, which 0.4.7 refuses at render time.
+
+`--reset-then-reuse-values` is the flag that means what most operators think
+`--reuse-values` means: start from the new chart's defaults, lay the previous
+release's *user-supplied* values over them, then apply `--set` and `-f`. New keys
+arrive with their defaults, changed defaults take effect, and anything you
+actually configured is preserved. Prefer it for every cross-version upgrade.
+Keeping a values file under version control and passing `-f` is better still.
 
 The chart runs a **pre-upgrade migrations Job** (`golang-migrate` against
 `database.url`) before the new `leoflow-server` rolls out, so the schema is

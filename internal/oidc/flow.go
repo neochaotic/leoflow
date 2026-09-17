@@ -72,10 +72,43 @@ func (f *Flow) Verifier() *Verifier { return f.verifier }
 // (never in the clear); the nonce is echoed back in the ID token and checked on
 // callback.
 func (f *Flow) AuthCodeURL(state, nonce, verifier string) string {
-	return f.oauth.AuthCodeURL(state,
+	opts := []oauth2.AuthCodeOption{
 		gooidc.Nonce(nonce),
 		oauth2.S256ChallengeOption(verifier),
-	)
+	}
+	if hd := googleHostedDomain(f.cfg); hd != "" {
+		opts = append(opts, oauth2.SetAuthURLParam("hd", hd))
+	}
+	return f.oauth.AuthCodeURL(state, opts...)
+}
+
+// googleHostedDomain returns the Google Workspace domain to narrow the account
+// chooser to, or "" when there is nothing unambiguous to send.
+//
+// Google's chooser offers every account signed in on the browser, work and
+// personal alike. A personal account produces an ID token with no hd claim, the
+// tenant pin rejects it, and the user gets the same generic 403 as every other
+// failure with no indication of which account to pick; the chooser then looks
+// identical on the retry. The hd parameter narrows it to the domain before the
+// mistake can be made.
+//
+// It is a HINT, not a control. Google's own documentation says to verify the hd
+// CLAIM on the returned ID token, which is exactly what the tenant pin does
+// (internal/oidc/verify.go) and what this must never be taken as a reason to
+// relax: a request parameter is attacker-editable and proves nothing.
+//
+// Only a tenant_claim of "hd" can carry it: on Entra the tenant claim is tid and
+// the parameter means nothing to the issuer. With several accepted domains there
+// is no single value to send, and picking one would lock out the users of the
+// others, so nothing is sent and the chooser stays as it is today.
+func googleHostedDomain(cfg config.OIDCSection) string {
+	if cfg.TenantClaim != "hd" || len(cfg.TenantClaims) != 1 {
+		return ""
+	}
+	for domain := range cfg.TenantClaims {
+		return domain
+	}
+	return ""
 }
 
 // Exchange trades the authorization code for tokens (proving possession of the

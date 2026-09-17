@@ -308,13 +308,28 @@ jobs:
           repo="oci://ghcr.io/${{ github.repository_owner }}/charts/leoflow"
           prev="$(helm show chart "$repo" | awk '/^version:/{print $2}')"
           echo "installing last released chart ${prev}, then upgrading to HEAD"
+          # Released images on purpose: the point is a realistic previous release,
+          # not HEAD's binaries wearing an old chart. Same in-cluster addresses
+          # and the same required values as the install step above.
           helm install leoflow "$repo" --version "${prev}" -n leoflow \
-            --set database.url="postgres://leoflow:leoflow@host.docker.internal:5432/leoflow?sslmode=disable" \
-            --set redis.url="redis://host.docker.internal:6379/0" \
-            --set auth.jwtSecret=ci-upgrade \
-            --wait --timeout 240s
+            --set database.url='postgres://leoflow:leoflow@postgres:5432/leoflow?sslmode=disable' \
+            --set redis.url='redis://redis:6379/0' \
+            --set auth.jwtSecret=ci-jwt-secret \
+            --set 'secretKey=leoflow-helm-ci-secret-key-32by!' \
+            --set agentTLS.enabled=true \
+            --set database.caConfigMap=leoflow-db-ca-ci \
+            --set bootstrap.password=ci-admin \
+            --wait --timeout 300s
           echo "upgrading to HEAD"
-          helm upgrade leoflow helm/leoflow -n leoflow --reuse-values --wait --timeout 240s
+          # --reuse-values keeps the released install's settings; the image
+          # overrides point at the images this job built and loaded into kind,
+          # because no registry has an image for an unreleased version.
+          helm upgrade leoflow helm/leoflow -n leoflow --reuse-values \
+            --set image.repository=leoflow-server --set image.tag=ci \
+            --set image.pullPolicy=IfNotPresent \
+            --set migrations.image.repository=leoflow-migrate --set migrations.image.tag=ci \
+            --set migrations.image.pullPolicy=IfNotPresent \
+            --wait --timeout 300s
           kubectl -n leoflow rollout status deploy/leoflow --timeout=180s
 
       - name: helm upgrade smoke (in-place)

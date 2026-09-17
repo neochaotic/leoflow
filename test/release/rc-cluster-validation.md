@@ -126,47 +126,53 @@ Record: does the control plane reach `Ready`? Is `/api/v2/` + the UI reachable
 **§3b is not** — those rows stand until the issue they name closes, and carry
 forward across RCs. Deleting a §3b row is a decision, not a refresh.
 
-### §3a — the post-0.4.5 tranche
+### §3a: the post-0.4.6 tranche
 
 ✔ = also unit/e2e-verified; ★ = **only a real cluster proves it well**.
 
-Refreshed from `[Unreleased]`. The previous tranche's rows are gone by design —
-§3a is per-RC; anything that had to outlive its release is in §3b.
+Refreshed from `[Unreleased]`. The previous tranche's rows are gone by design,
+with one exception recorded at the end of this section: rows that were never
+measured do not get to disappear just because the release they belonged to
+shipped.
 
-This tranche has a different shape from the last one. The v0.4.5 tranche was
-four defects inside one untested fixture. These are mostly **claims that were
-true of the code and false of the documentation** — a chart value that said it
-tightened something and did not, a field the schema declared and no build code
-read, a comment asserting the opposite of its own function. Several were found
-by review re-deriving a measurement rather than by a test failing, which is why
-so many rows below are ★: what a cluster settles here is whether the *new*
-statements are true, not whether the code compiles.
+This tranche has a third shape again. The v0.4.5 tranche was four defects in one
+untested fixture. The v0.4.6 tranche was mostly documentation that had gone false.
+This one is **failures that report themselves as success**: a control plane whose
+every restart exits 0, an SSO deployment that boots green and rejects every login,
+a destructive API default that looks like a preview, a chart key that accepted a
+value and read it nowhere. None of them produce a red signal on their own, which
+is why most rows below are about what an operator can *see*, not about whether
+the code runs.
 
-| # | What | How | ★/✔ |
+| # | What it proves | How to run it, and what decides it | |
 |---|---|---|---|
-| 1 | The migration Job mounts `database.caConfigMap` (#1052) | RDS, `sslmode=verify-full&sslrootcert=/etc/leoflow/db-ca/ca.crt`, CA in a ConfigMap. Install. **Decides:** the Job completes. Pre-fix the control plane came up and the Job failed — and no in-cluster Postgres can show it, because with no `sslrootcert` lib/pq silently falls back to the system store. | ★ |
-| 2 | `allowMetadataEgress` really is one host (#958) | EKS, VPC CNI **with the network-policy agent enabled** — assert the agent is running first or every check below passes vacuously. `allowMetadataEgress: [169.254.170.23/32]`. From a task pod: that address answers, `169.254.169.254` times out. **Decides:** whether `except` plus a separate `/32` allow produce the intended pair on this CNI. Repeat on GKE Dataplane V2 and Calico — this is the path CNIs diverge on. | ★ |
-| 3 | The metrics port under an enforcing CNI (#1067) | Covered on kind+Calico now (`pro-netpol-rwx.sh` asserts :9090 with `ingressFrom` narrowed). On EKS confirm the same under VPC CNI, and confirm a real Prometheus in another namespace scrapes it. | ✔★ |
-| 4 | Readiness survives a saturated pool (#1042) | EKS + RDS (not an in-cluster pod — the TLS and network cost is the point), `maxOpenConns: 20`. Drive the API to pool exhaustion. **Decides:** the ready count never drops. Pre-fix this is where the Service empties. | ★ |
-| 5 | The migration hook stays out of the Service and the PDB (#1055) | Hold the hook open (`migrations.image.repository=registry.k8s.io/pause`) during a `helm upgrade`. **Decides:** the pod's IP never enters the EndpointSlice, and a percentage PDB reports `currentHealthy` without it and never `SyncFailed`. Note the pre-fix traffic safety was **accidental** (named `targetPort` + no container port), so an ALB in IP-target mode is the case that matters and k3d cannot show it. | ★ |
-| 6 | The rendered HPA is admitted (#947) | kind dry-runs it already. On EKS confirm no admission webhook (OPA/Kyverno/Gatekeeper) rejects or mutates it, and that `HPAScaleToZero` really is off on your version — the min<1 refusal assumes it. | ✔★ |
-| 7 | `execution_timeout` kills the group (#943) | `execution-timeout-e2e.sh` now spawns a real grandchild holding stdout, **and is still not wired into any CI tier**. Run it by hand against the RC image. **Decides:** the attempt reports `execution_timeout`, and the grandchild is gone. Also check a `terminationGracePeriodSeconds` under 10s, where the kubelet can still win. | ★ |
-| 8 | No driver text reaches a task pod (#1068) | Break the DB mid-run. **Decides:** the pod's gRPC error carries an operation name and no SQLSTATE, and the control-plane log carries the cause. Then check the second-order path: the served `failure_reason` for that attempt must be clean too. | ★ |
-| 9 | Nothing secret ships in a DAG image (#995, #1013, #1064) | e2e asserts the redirection artifact (#1064) and the dbt parse artifacts (#1013). On the RC image confirm by hand: no `=<version>` file, no `.user.yml`, no `logs/dbt.log` with a build-host path. | ✔ |
-| 10 | A version floor is honoured (#1064) | Build a DAG image whose base carries an **older** version than a declared floor — the only shape where the symptom appears, and the reason the e2e asserts the artifact instead. **Decides:** the installed version satisfies the floor. | ★ |
-| 11 | Tenant-facing errors carry no schema (#961) | Force a constraint violation through the API. **Decides:** the body names the dependency and nothing else; the log line carries `cause` and correlates by `request_id`. | ✔ |
+| 1 | Boot survives a cache it cannot sync (#1083) | Remove `list`/`watch` on pods from the control plane's Role, in `executor.taskNamespace`. **Decides:** the pod reaches Ready, `/readyz` **answers** (503 or 200, never connection refused), the warn line names the namespace and the budget, and `restartCount` stays 0 across five minutes. Pre-fix it climbed by one every ~70s. | ★ |
+| 2 | The same failure under a CNI that enforces (#1083) | The trigger the local gates structurally cannot produce: kindnet accepts NetworkPolicy and ignores it. On EKS with the VPC CNI policy agent **actually enabled** (assert the agent is running first, or this passes vacuously), set `networkPolicy.egress` to Postgres and Redis only, omitting 443 to the apiserver. **Decides:** same as row 1. | ★ |
+| 3 | A slow boot is not a restart loop (#1150) | With row 1's broken RBAC still in place. **Decides:** `startupProbe` is present on the rendered pod, the container is not killed while the gate is failing, and the restart count stays 0 for longer than `10 + 3*20 = 70s`, which is where the pre-fix kill landed. | ★ |
+| 4 | An unsatisfiable SSO config fails boot, by name (#1143) | Set `auth.provider: oidc` with issuer, client id and redirect URL but **no** `tenant_claim`. **Decides:** boot fails with a message naming `auth.oidc.tenant_claim` and `auth.oidc.tenant_claims`, and saying the map loads only from the YAML file named by `LEOFLOW_CONFIG`. A green boot here is the bug: it then rejects 100% of logins with a generic 403 whose cause reaches only the audit log, which in an SSO-only deployment nobody can log in to read. | ★ |
+| 5 | A deployment with no source of roles says so (#1143) | Pin the tenant correctly, leave `role_mappings` and `default_role` empty. **Decides:** the boot WARN appears. Then the consequence it warns about, which needs a real IdP: a **pre-provisioned** user's existing role grants are cleared by their own first SSO login, because roles are IdP-authoritative. Run this against a throwaway user. | ★ |
+| 6 | The migration Job goes where the control plane goes (#1056) | Taint a node so only the control plane's `nodeSelector`/`tolerations` can land on it, then `helm upgrade`. **Decides:** the migrate pod is scheduled, not Pending. Pre-fix it ignored placement entirely and could land anywhere, or nowhere. | ★ |
+| 7 | A database outage reads as an outage (#1087, #1071) | Break the DB mid-run. **Decides:** the API answers 503 naming the dependency, never 401 or 400, and the task pod's error carries an operation name and no SQLSTATE. Check the served `failure_reason` for that attempt too, which is the second-order path. | ★ |
+| 8 | `clear` re-runs the image that produced the attempt (#1138, BREAKING) | Push a new DAG version, then clear a task from an **older** run without `run_on_latest_version`. **Decides:** the dispatched pod runs the OLD image. Then send `run_on_latest_version: true` and confirm it runs the new one. The UI's checkbox should now appear, since `bundle_version` is populated on both payloads. | ★ |
+| 9 | An unflagged `clear` cannot destroy state (#1149) | `POST .../clearTaskInstances -d '{"dag_run_id":"r"}'` with no other flags. **Decides:** the response is a preview, nothing is cleared, and the affected set contains no task instance in a `success` state. Then confirm all three UI clear dialogs still execute, since they send both flags explicitly. | ✔ |
+| 10 | The chart's CORS key reaches the server, and `*` is refused (#1144) | `helm template` with `config.cors.allowedOrigins: ["*"]`. **Decides:** the render **fails** with a message naming `extraEnv` as the deliberate route. With real origins, confirm `LEOFLOW_SERVER_CORS_ALLOWED_ORIGINS` is present in the pod and the server honours it. | ✔ |
+| 11 | A dbt-only DAG keeps its declared secrets (#997) | Run a dbt DAG that declares `connections:` and `variables:` on the cluster. **Decides:** the task receives them. Pre-fix a dbt-only DAG dropped its own declarations. | ★ |
+| 12 | Nothing secret ships in a DAG image (#995, #1013, #1064) | On the RC image, by hand: no `=<version>` file in the workdir, no `.user.yml`, no `logs/dbt.log` carrying a build-host path. Also confirm a declared version floor is honoured by building against a base that carries an older version. | ✔ |
 
-**Two process notes for this cut.**
+**Process notes, both of which have cost a cut before.**
 
-The RC image must be built from the commit under test. #1019 is open precisely
-because a published rc predated the fixes its runbook asked you to validate,
-and this tranche makes that sharper: rows 7, 8 and 10 are meaningless against
-an older image.
+Build the RC image from the commit under test (#1019). Rows 1, 3, 4, 5 and 9 say
+nothing at all about an image built from anything else.
 
-And #1079 is a known flake in `streamlogs_shutdown_test` — not reproducible in
-100 local runs, already seen reddening an unrelated PR. If it fires during the
-cut, rerun; do not treat it as a signal about the tranche.
+`#1079` is a known flake and has already reddened an unrelated PR. A rerun is a
+rerun, not a signal.
 
+**Carried forward from the v0.4.6 tranche, unmeasured.** Rows 2, 3 and 6 of that
+tranche were never proven on a cloud CNI or against a real admission controller
+(`#1089`). Row 2 there is a statement about **security posture**: if it is false,
+the documentation needs correcting whether or not a release is in flight. Those
+rows are not restated here, because `#1089` holds them; they are named so that
+replacing this section does not quietly retire work that was never done.
 
 ### §3b — standing assertions (carry forward until the issue closes)
 

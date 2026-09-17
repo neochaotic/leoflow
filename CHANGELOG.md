@@ -166,11 +166,25 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ownership conflict. That would have fixed the GitOps path by breaking the
   primary documented one.
 
-  **What to change:** nothing, on either engine. An operator with a runbook that
-  reads `<release>-secrets` for the control plane's credentials should point it
-  at `<release>-credentials`. CI now installs the last released chart and
-  upgrades it to HEAD on every run, which is the leg that would have caught the
-  adoption break.
+  **What to change on upgrade.** Nothing in the default shape: the hook copy is
+  rendered again under the old name, feeds the migration Job and is removed when
+  the hook succeeds, taking the pre-0.4.7 Secret with it. Helm deletes succeeded
+  hooks at the end of the hook phase and Argo CD at the end of the sync
+  operation, so in both cases after the Job has run.
+
+  Two shapes render no hook copy at all and therefore leave the old Secret
+  behind, still holding every credential it had: `migrations.enabled=false`, and
+  a `database.existingSecret` that supplies the DSN. Nothing will ever collect
+  it, for the same reason the new name was needed: Helm never tracked it (it came
+  from `execHook`) and Argo CD excludes hooks from the compared state. Remove it
+  by hand once the upgrade is through, with
+  `kubectl -n <namespace> delete secret <release>-secrets`.
+
+  An operator with a runbook that reads `<release>-secrets` for the control
+  plane's credentials should point it at `<release>-credentials`. CI now installs
+  the last released chart and upgrades it to HEAD on every run, then asserts the
+  durable Secret is tracked, the Deployment reads it and the hook copy is gone,
+  which is the leg that would have caught the adoption break.
 
 - **BREAKING: an unflagged `clearTaskInstances` now previews, and is scoped to
   failures (#1137).** Apache Airflow 3.2.1 declares `dry_run: bool = True` and

@@ -210,6 +210,31 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `auth.oidc.break_glass_emails` exists precisely so a named set of local logins
   still works when the IdP is down or the tenant mapping is wrong, and hiding the
   form would hide the escape hatch at the moment it is needed.
+- **Three more SSO settings that boot green and deny everything are named at
+  startup.** The first two are names that pass every configuration check and
+  refer to rows that do not exist, so the server now looks them up once at boot,
+  after the schema check and bounded like the rest of the boot path:
+
+  - **a `tenant_claims` value naming a tenant that does not exist.** Nothing in
+    Leoflow creates a tenant: `INSERT INTO tenants` appears once, in the first
+    migration, creating `default`. No API, CLI, chart setting or later migration
+    adds another, so any other name denies every login carrying that claim value
+    and no supported action makes it start working. The chart's Google example
+    suggested exactly this, mapping a second domain to a tenant named `acme`.
+  - **a `default_role` or `role_mappings` value naming a role the tenant does not
+    have.** The ladder (`viewer`, `editor`, `operator`, `admin`) is seeded for
+    `default` only. This one matters because "set `default_role` to `viewer`" is
+    the remedy the server's own warnings recommend, so it is the name most likely
+    to be typed by hand.
+  - **an empty `break_glass_emails` under `provider: oidc`.** Every password
+    login is rejected, which is correct, and is also the state in which any of
+    the failures above leaves nobody able to reach the control plane, including
+    whoever has to fix it.
+
+  A lookup that fails to run is reported as such rather than skipped: a check
+  that could not ask and a check that found nothing must not produce the same
+  silence.
+
 - **Single sign-on now says at boot why it will not work.** Four OIDC
   configurations were accepted at boot and failed at the last step of a login,
   where the callback answers a deliberately generic 403. An operator saw a

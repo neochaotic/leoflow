@@ -249,6 +249,23 @@ func (r *Repository) CreateOIDCUser(ctx context.Context, tenant, email, provider
 	return &auth.User{ID: uuidToString(row.ID), TenantID: tenant, Email: row.Email, Roles: roles}, nil
 }
 
+// TenantExists reports whether a tenant with this name exists.
+//
+// It backs the boot-time check on auth.oidc.tenant_claims: a claim value mapped
+// to a tenant that does not exist denies every login carrying it, and since the
+// only tenant anything creates is "default" (migration 001), a typo there is
+// unrecoverable without direct SQL. A lookup failure is returned rather than
+// folded into false, so the caller can tell "absent" from "could not ask".
+func (r *Repository) TenantExists(ctx context.Context, name string) (bool, error) {
+	if _, err := r.tenantID(ctx, name); err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // RoleExists reports whether a role name exists for the tenant. The OIDC login
 // path uses it to fail closed on a misconfigured default_role before minting a
 // token for a returning user (the JIT path validates roles inside CreateOIDCUser).

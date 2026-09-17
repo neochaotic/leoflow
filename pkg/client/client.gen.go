@@ -132,14 +132,18 @@ func (e ListDagRunsParamsState) Valid() bool {
 type ClearTaskInstancesRequest struct {
 	DagRunId *string `json:"dag_run_id,omitempty"`
 
-	// DryRun Return the task instances that WOULD be cleared, without clearing them. NOTE: Apache Airflow's equivalent defaults to true.
+	// DryRun Return the task instances that WOULD be cleared, without clearing them. Defaults to true, matching Apache Airflow, so a request that names no flags never destroys state. Send false to execute.
 	DryRun            *bool `json:"dry_run,omitempty"`
 	IncludeDownstream *bool `json:"include_downstream,omitempty"`
 	IncludeFuture     *bool `json:"include_future,omitempty"`
 	IncludePast       *bool `json:"include_past,omitempty"`
 	IncludeUpstream   *bool `json:"include_upstream,omitempty"`
-	OnlyFailed        *bool `json:"only_failed,omitempty"`
-	OnlyRunning       *bool `json:"only_running,omitempty"`
+
+	// OnlyFailed Restrict the clear to task instances in a failed state, matching Apache Airflow. false widens it to every task instance named by the request, including ones that succeeded.
+	OnlyFailed *bool `json:"only_failed,omitempty"`
+
+	// OnlyRunning Not supported. Sending true is refused with 400. leoflow has no path that clears a running task instance (Apache Airflow sets it to RESTARTING and kills it), and honoring the only_failed=false that Airflow requires alongside it would widen the clear to every task instance named by the request, including ones that succeeded.
+	OnlyRunning *bool `json:"only_running,omitempty"`
 
 	// ResetDagRuns Re-open the run so the scheduler looks at it again. Without it a terminal run stays terminal and the cleared task instance is never scheduled.
 	ResetDagRuns *bool `json:"reset_dag_runs,omitempty"`

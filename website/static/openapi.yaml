@@ -114,6 +114,184 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /api/v2/connections:
+    get:
+      summary: List connections
+      description: |
+        Lists the tenant's Airflow-style connections. Passwords are write-only and
+        never returned; secret-bearing keys inside `extra` are masked server-side.
+        Requires the read:connection permission.
+      operationId: listConnections
+      tags: [Connections]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: A page of connections
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConnectionCollection" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      summary: Create or replace a connection (upsert)
+      description: |
+        Upserts a connection: creates it, or replaces an existing one with the same
+        connection_id. The password is write-only and never returned. Requires the
+        write:connection permission and a configured encryption key.
+      operationId: createConnection
+      tags: [Connections]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConnectionBody" }
+      responses:
+        "201":
+          description: Connection created or replaced
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Connection" }
+        "400":
+          description: Invalid input (missing connection_id or conn_type)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/EncryptionUnavailable"
+
+  /api/v2/connections/{connection_id}:
+    parameters:
+      - $ref: "#/components/parameters/ConnectionID"
+    get:
+      summary: Get a connection
+      operationId: getConnection
+      tags: [Connections]
+      responses:
+        "200":
+          description: Connection detail (password omitted, extra masked)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Connection" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      summary: Update a connection
+      operationId: updateConnection
+      tags: [Connections]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConnectionBody" }
+      responses:
+        "200":
+          description: Updated connection
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Connection" }
+        "400":
+          description: Invalid input (missing conn_type)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/EncryptionUnavailable"
+    delete:
+      summary: Delete a connection
+      operationId: deleteConnection
+      tags: [Connections]
+      responses:
+        "204":
+          $ref: "#/components/responses/NoContent"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v2/variables:
+    get:
+      summary: List variables
+      description: |
+        Lists the tenant's Airflow-style variables. Values of secret-ish keys are
+        masked server-side. Requires the read:variable permission.
+      operationId: listVariables
+      tags: [Variables]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: A page of variables
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VariableCollection" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      summary: Create or replace a variable (upsert)
+      description: |
+        Upserts a variable: creates it, or replaces an existing one with the same
+        key. Requires the write:variable permission.
+      operationId: createVariable
+      tags: [Variables]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VariableBody" }
+      responses:
+        "201":
+          description: Variable created or replaced
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Variable" }
+        "400":
+          description: Invalid input (missing key)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v2/variables/{variable_key}:
+    parameters:
+      - $ref: "#/components/parameters/VariableKey"
+    get:
+      summary: Get a variable
+      operationId: getVariable
+      tags: [Variables]
+      responses:
+        "200":
+          description: Variable detail (value masked when the key looks sensitive)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Variable" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      summary: Delete a variable
+      operationId: deleteVariable
+      tags: [Variables]
+      responses:
+        "204":
+          $ref: "#/components/responses/NoContent"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/v2/dags:
     get:
       summary: List DAGs
@@ -481,6 +659,16 @@ components:
       in: path
       required: true
       schema: { type: string }
+    ConnectionID:
+      name: connection_id
+      in: path
+      required: true
+      schema: { type: string }
+    VariableKey:
+      name: variable_key
+      in: path
+      required: true
+      schema: { type: string }
 
   responses:
     Unauthorized:
@@ -490,6 +678,15 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     NotFound:
       description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NoContent:
+      description: Deleted (no content)
+    EncryptionUnavailable:
+      description: >-
+        No encryption key configured, so secrets cannot be stored. Set
+        LEOFLOW_SECRET_KEY on the control plane to manage connections.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -575,6 +772,93 @@ components:
         users:
           type: array
           items: { $ref: "#/components/schemas/UserListItem" }
+        total_entries: { type: integer }
+
+    Connection:
+      type: object
+      required: [connection_id, conn_type]
+      description: >-
+        An Airflow-style connection. The password is write-only and never
+        returned; secret-bearing keys inside `extra` are masked server-side.
+      properties:
+        connection_id: { type: string }
+        conn_type: { type: string }
+        description: { type: string, nullable: true }
+        host: { type: string, nullable: true }
+        login: { type: string, nullable: true }
+        schema: { type: string, nullable: true }
+        port: { type: integer, nullable: true }
+        extra: { type: string, nullable: true }
+
+    ConnectionBody:
+      type: object
+      required: [conn_type]
+      description: >-
+        Connection create/replace payload. connection_id is required on POST
+        (taken from the path on PATCH). password and extra are write-only.
+        Every optional field is tri-state: omit the key to preserve the stored
+        value (a partial write never wipes a field it does not mention, so the
+        unreadable password survives a `--host`-only edit), send an empty string
+        to clear the field, or send a value to set it. A password equal to the
+        mask `***`, and any key inside `extra` whose value is exactly `***`, is
+        treated as "unchanged" — so re-submitting a connection read back from GET
+        (whose secrets are masked) never overwrites the real secret with the mask.
+      properties:
+        connection_id: { type: string }
+        conn_type: { type: string }
+        description: { type: string }
+        host: { type: string }
+        login: { type: string }
+        password:
+          type: string
+          format: password
+          writeOnly: true
+        schema: { type: string }
+        port: { type: integer, nullable: true }
+        extra: { type: string }
+
+    ConnectionCollection:
+      type: object
+      properties:
+        connections:
+          type: array
+          items: { $ref: "#/components/schemas/Connection" }
+        total_entries: { type: integer }
+
+    Variable:
+      type: object
+      required: [key, value, is_encrypted]
+      description: >-
+        An Airflow-style variable. The value is masked server-side when the key
+        looks sensitive (secret/password/token/...).
+      properties:
+        key: { type: string }
+        value: { type: string }
+        description: { type: string, nullable: true }
+        is_encrypted: { type: boolean }
+        team_name: { type: string, nullable: true }
+
+    VariableBody:
+      type: object
+      required: [key]
+      description: >-
+        Variable create/replace payload. value and description are tri-state:
+        omit the key to preserve the stored value, send an empty string to clear
+        it, or send a value to set it. A value equal to the mask `***` for a
+        sensitive-looking key (secret/password/token/...) is treated as
+        "unchanged", so re-submitting a variable read back from GET (whose
+        sensitive value is masked) never overwrites the real value with the mask.
+      properties:
+        key: { type: string }
+        value: { type: string }
+        description: { type: string }
+
+    VariableCollection:
+      type: object
+      properties:
+        variables:
+          type: array
+          items: { $ref: "#/components/schemas/Variable" }
         total_entries: { type: integer }
 
     DAG:
@@ -761,9 +1045,50 @@ components:
           type: array
           items: { type: string }
         dag_run_id: { type: string }
-        only_failed: { type: boolean, default: false }
-        only_running: { type: boolean, default: false }
-        reset_dag_runs: { type: boolean, default: true }
+        only_failed:
+          type: boolean
+          default: true
+          description: >-
+            Restrict the clear to task instances in a failed state, matching
+            Apache Airflow. false widens it to every task instance named by the
+            request, including ones that succeeded.
+        only_running:
+          type: boolean
+          default: false
+          description: >-
+            Not supported. Sending true is refused with 400. leoflow has no path
+            that clears a running task instance (Apache Airflow sets it to
+            RESTARTING and kills it), and honoring the only_failed=false that
+            Airflow requires alongside it would widen the clear to every task
+            instance named by the request, including ones that succeeded.
+        reset_dag_runs:
+          type: boolean
+          default: true
+          description: >-
+            Re-open the run so the scheduler looks at it again. Without it a
+            terminal run stays terminal and the cleared task instance is never
+            scheduled.
+        run_on_latest_version:
+          type: boolean
+          default: false
+          description: >-
+            Which version the re-run executes. false (the default, matching Apache
+            Airflow) keeps the version the run was created with, so the re-run
+            executes the image that produced the original attempt. true re-binds
+            the run to the DAG's current registered version, so the re-run picks up
+            the newest image and config — use it to re-run a failed task against a
+            fix without creating a new run.
+        dry_run:
+          type: boolean
+          default: true
+          description: >-
+            Return the task instances that WOULD be cleared, without clearing
+            them. Defaults to true, matching Apache Airflow, so a request that
+            names no flags never destroys state. Send false to execute.
+        include_upstream: { type: boolean, default: false }
+        include_downstream: { type: boolean, default: false }
+        include_past: { type: boolean, default: false }
+        include_future: { type: boolean, default: false }
 
     XComEntry:
       type: object

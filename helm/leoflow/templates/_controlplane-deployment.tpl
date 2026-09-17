@@ -8,6 +8,12 @@ served ports, and the scheduler's health probes on the metrics port since it
 serves no HTTP API).
 */}}
 {{- define "leoflow.controlPlaneDeployment" -}}
+{{- /* One definition of where the OIDC config file lands, because three places
+     have to agree on it: the volumeMount, the volume, and the LEOFLOW_CONFIG
+     env var the server resolves. A disagreement between them is not a render
+     error — it is a boot that reads no file and then fails closed on a tenant
+     pin the operator can see configured in the ConfigMap right next to it. */ -}}
+{{- $oidcMountPath := "/etc/leoflow/oidc" -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -54,6 +60,17 @@ spec:
         # `*.existingSecret` are outside the chart's visibility and still
         # require a manual restart on rotation (callout in chart README).
         checksum/secret: {{ include (print .ctx.Template.BasePath "/secret.yaml") .ctx | sha256sum }}
+        {{- if .ctx.Values.auth.oidc.enabled }}
+        # Same reason, for the other rendered object a pod's config depends on.
+        # The OIDC tenant pin and role mappings live in a mounted ConfigMap (env
+        # vars cannot carry a map), and a ConfigMap volume's projection is NOT
+        # what the server re-reads: LoadServer parses the file once at boot, so
+        # an edited map would sit on disk unread until something restarted the
+        # pod. Tying the podTemplate hash to it makes `helm upgrade` do that.
+        # Gated on `enabled` so an install without SSO keeps the annotation set
+        # it has today rather than gaining a constant-valued one.
+        checksum/oidc-config: {{ include (print .ctx.Template.BasePath "/oidc-config.yaml") .ctx | sha256sum }}
+        {{- end }}
         {{- with .ctx.Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -349,6 +366,74 @@ spec:
                 secretKeyRef:
                   name: {{ .ctx.Values.auth.existingSecret | default (include "leoflow.credentialsSecretName" .ctx) }}
                   key: jwtSecret
+            {{- if .ctx.Values.auth.oidc.enabled }}
+            # OIDC/SSO (#1143). The scalars ride the env path the rest of this
+            # chart uses; the two MAPS (tenant_claims, role_mappings) cannot —
+            # viper binds env only for the scalar leaves in serverDefaults, and
+            # those two are deliberately unregistered because a Google `hd` key
+            # is a dotted domain its "." delimiter would split (#826). They are
+            # in the ConfigMap mounted below, and LEOFLOW_CONFIG names it.
+            #
+            # Mixing the two routes is safe in exactly one direction, which is
+            # this one: viper ranks env ABOVE the config file, so every scalar
+            # here wins over anything the file might say, and a key the file
+            # omits keeps its default. That is why the file holds only the maps.
+            #
+            # LEOFLOW_UI_EDITION is the literal "pro" above and validateOIDC
+            # requires the Pro edition, so this chart satisfies that half by
+            # construction.
+            - name: LEOFLOW_AUTH_PROVIDER
+              value: "oidc"
+            - name: LEOFLOW_CONFIG
+              value: {{ printf "%s/config.yaml" $oidcMountPath | quote }}
+            - name: LEOFLOW_AUTH_OIDC_ISSUER
+              value: {{ .ctx.Values.auth.oidc.issuer | quote }}
+            - name: LEOFLOW_AUTH_OIDC_CLIENT_ID
+              value: {{ .ctx.Values.auth.oidc.clientId | quote }}
+            - name: LEOFLOW_AUTH_OIDC_REDIRECT_URL
+              value: {{ .ctx.Values.auth.oidc.redirectUrl | quote }}
+            - name: LEOFLOW_AUTH_OIDC_TENANT_CLAIM
+              value: {{ .ctx.Values.auth.oidc.tenantClaim | quote }}
+            # Comma-joined for the same reason as config.trustedProxies: one env
+            # var, and viper's StringToSliceHookFunc(",") splits it back into the
+            # []string the server wants.
+            - name: LEOFLOW_AUTH_OIDC_SCOPES
+              value: {{ join "," .ctx.Values.auth.oidc.scopes | quote }}
+            - name: LEOFLOW_AUTH_OIDC_GROUPS_CLAIM
+              value: {{ .ctx.Values.auth.oidc.groupsClaim | quote }}
+            - name: LEOFLOW_AUTH_OIDC_JIT_PROVISIONING
+              value: {{ .ctx.Values.auth.oidc.jitProvisioning | quote }}
+            - name: LEOFLOW_AUTH_OIDC_CLOCK_SKEW_SECONDS
+              value: {{ .ctx.Values.auth.oidc.clockSkewSeconds | quote }}
+            {{- if .ctx.Values.auth.oidc.defaultRole }}
+            # The three below are omitted when empty rather than stamped with a
+            # blank: each has a meaning at its zero value that the server already
+            # implements (strict default-deny; no domain restriction; no password
+            # login at all while SSO is on), and stamping "" would only add a
+            # variable that says what the default already says.
+            - name: LEOFLOW_AUTH_OIDC_DEFAULT_ROLE
+              value: {{ .ctx.Values.auth.oidc.defaultRole | quote }}
+            {{- end }}
+            {{- if .ctx.Values.auth.oidc.allowedEmailDomains }}
+            - name: LEOFLOW_AUTH_OIDC_ALLOWED_EMAIL_DOMAINS
+              value: {{ join "," .ctx.Values.auth.oidc.allowedEmailDomains | quote }}
+            {{- end }}
+            {{- if .ctx.Values.auth.oidc.breakGlassEmails }}
+            - name: LEOFLOW_AUTH_OIDC_BREAK_GLASS_EMAILS
+              value: {{ join "," .ctx.Values.auth.oidc.breakGlassEmails | quote }}
+            {{- end }}
+            {{- if or .ctx.Values.auth.oidc.existingSecret .ctx.Values.auth.oidc.clientSecret }}
+            # Code-exchange credential only — ID-token verification is keyless
+            # against the issuer's JWKS. Delivered by secretKeyRef, never in the
+            # ConfigMap. Optional: a public client using PKCE has none, and
+            # validateOIDC does not require it.
+            - name: LEOFLOW_AUTH_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .ctx.Values.auth.oidc.existingSecret | default (include "leoflow.secretName" .ctx) }}
+                  key: oidcClientSecret
+            {{- end }}
+            {{- end }}
             {{- if or .ctx.Values.secretKeyExistingSecret .ctx.Values.secretKey }}
             # LEOFLOW_SECRET_KEY (ADR 0019) — Connection password / Extra
             # encryption-at-rest key. Without it, the API refuses Connection
@@ -478,6 +563,14 @@ spec:
               mountPath: /etc/leoflow/redis-ca
               readOnly: true
             {{- end }}
+            {{- if .ctx.Values.auth.oidc.enabled }}
+            # The only server config FILE this chart mounts, and it holds only
+            # the two OIDC maps no env var can carry (see the env block above).
+            # Read-only: the server parses it once at boot and never writes it.
+            - name: oidc-config
+              mountPath: {{ $oidcMountPath }}
+              readOnly: true
+            {{- end }}
       volumes:
         - name: logs
           {{- if .ctx.Values.logs.persistence.enabled }}
@@ -511,6 +604,17 @@ spec:
         - name: redis-ca
           configMap:
             name: {{ .ctx.Values.redis.caConfigMap }}
+        {{- end }}
+        {{- if .ctx.Values.auth.oidc.enabled }}
+        # `items` pins the projection to the single key the server is pointed at,
+        # so a future key added to this ConfigMap for some other purpose cannot
+        # appear inside the directory LEOFLOW_CONFIG resolves against.
+        - name: oidc-config
+          configMap:
+            name: {{ include "leoflow.oidcConfigMapName" .ctx }}
+            items:
+              - key: config.yaml
+                path: config.yaml
         {{- end }}
       {{- with .ctx.Values.nodeSelector }}
       nodeSelector:

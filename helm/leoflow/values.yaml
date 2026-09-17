@@ -255,6 +255,70 @@ auth:
   # -- Scope-by-declaration policy for secret delivery: `permissive` (default) delivers the WHOLE tenant vault to every task regardless of what its `leoflow.yaml` declares, and only logs + audits a warning when a task declared a narrower non-empty set; `enforce` delivers only the declared subset; `off` disables scoping and its warning entirely. `enforce` denies secrets to a DAG that declares NONE, which — the declaration schema being new — is most DAGs, so run `permissive` first and read the scope-warning trail before flipping. A clean trail proves only that no DAG whose declarations still RESOLVE is over-served: the warning counts only declared names that actually resolve, so it says nothing about a DAG that declares nothing, nor about one whose declared names were since deleted from the vault (an all-stale declaration counts as zero) (#800). Operator-scoped, never DAG-author-settable.
   secretScoping: permissive
 
+  # OIDC / SSO login (server `auth.provider: oidc`). OFF by default, and off means
+  # absent: with `enabled: false` not one of the keys below reaches the pod, so an
+  # install that does not use SSO renders exactly the spec it renders today.
+  #
+  # SSO was unreachable from this chart until now, and the reason is worth stating
+  # because it shapes everything below. Two of the server's OIDC settings are MAPS
+  # — `tenantClaims` and `roleMappings` — and a map has no environment-variable
+  # route at all: viper binds env only for the scalar leaves registered in
+  # `serverDefaults`, and these two are deliberately not registered (a Google `hd`
+  # key is a dotted domain, and viper's "." delimiter would split it into nested
+  # maps and fail to decode — internal/config/server.go, #826). The server reads
+  # them straight from the YAML file named by `LEOFLOW_CONFIG`. The chart had no
+  # such file and no volume to put one in, so `auth.provider: oidc` could only ever
+  # fail boot closed on the missing tenant pin (#1143).
+  #
+  # So the two maps — and ONLY the two maps — travel in a ConfigMap that the chart
+  # mounts read-only at /etc/leoflow/oidc and points `LEOFLOW_CONFIG` at. Every
+  # other key travels as an env var, the way the rest of this chart delivers server
+  # settings. That the file is PARTIAL is the point, not an omission: viper ranks
+  # env above file, and a key absent from a config file keeps the value it already
+  # had, so nothing in the ConfigMap can override, blank or resurrect a setting
+  # made anywhere else — including a `helm upgrade` that changes only the maps.
+  #
+  # `clientSecret` is the one key that must not go there. A ConfigMap is readable by
+  # anything with get on the namespace and is not encrypted at rest, so the secret
+  # takes the same route `jwtSecret` takes: inline into the chart-managed Secret, or
+  # `oidc.existingSecret` for an out-of-band one, delivered by secretKeyRef.
+  oidc:
+    # -- Turn on the OIDC/SSO login flow (sets `auth.provider: oidc`). While off, none of the keys below render at all — no env vars, no ConfigMap, no volume — so a non-SSO install is unaffected by this block existing. Turning it on makes SSO the login path for everyone except `breakGlassEmails`, so configure those before you flip it or an IdP misconfiguration locks every operator out of the UI.
+    enabled: false
+    # -- The IdP's issuer URL, `https://` only (the ID token's `iss` is pinned to it — a token from any other issuer is rejected). Entra: `https://login.microsoftonline.com/<tenant-id>/v2.0`. Google Workspace: `https://accounts.google.com`. Okta: `https://<org>.okta.com`.
+    issuer: ""
+    # -- The registered application (client) id. It is also the expected `aud` of every ID token, so it must be the client the redirect URL below is registered against.
+    clientId: ""
+    # -- The client secret, used ONLY for the authorization-code exchange (ID-token verification is keyless, against the issuer's published JWKS). Set inline OR reference an existing Secret via `oidc.existingSecret`. Never goes into the ConfigMap.
+    clientSecret: ""
+    # -- Name of a Secret with key `oidcClientSecret` (takes precedence over `clientSecret`). Separate from `auth.existingSecret` on purpose: the JWT signing key and the IdP client secret rotate on different schedules and are usually owned by different people. Like every `existingSecret` in this chart it is outside the `checksum/secret` annotation's visibility, so rotating it needs a manual `kubectl rollout restart`.
+    existingSecret: ""
+    # -- This server's callback URL as registered with the IdP; it must end in `/api/v2/auth/oidc/callback` and be reachable from the browser, not from inside the cluster. `https://` is required except on loopback hosts, so this is the ingress hostname, never the Service name.
+    redirectUrl: ""
+    # -- OAuth scopes requested at login. The shipped three are what the flow needs; add the IdP's groups scope (Okta `groups`, Entra exposes groups without one) when `roleMappings` is used, or the `groupsClaim` arrives empty and every user resolves to zero roles. Rendered comma-joined into one env var — viper's decode hook splits it back into a list, the same mechanism `config.trustedProxies` uses.
+    scopes:
+      - openid
+      - email
+      - profile
+    # -- ID-token claim carrying the user's IdP groups; its values are what `roleMappings` matches on. Entra emits `groups` (object ids unless the app registration is configured to emit names); Okta emits whatever the groups claim is named in the authorization server.
+    groupsClaim: groups
+    # -- Maps an IdP group value → an existing Leoflow role name. Default-DENY: a group with no entry here grants nothing. This is one of the two keys that CANNOT travel as an env var, so the chart writes it into the mounted `config.yaml`. Keys are quoted on render, which is what lets a dotted group name (`app.admins`) survive (#826). Optional — leave empty and every user falls back to `defaultRole`.
+    roleMappings: {}
+    # -- Single role granted to an authenticated user who resolves to ZERO mapped roles. Empty (the default) keeps strict default-deny, which with an empty `roleMappings` means a successful SSO login that can see nothing — correct, and a confusing first experience. Set a read-only role such as `viewer` while you work the group mapping out. It must name a role that already exists for the resolved tenant; an unknown name fails the login closed.
+    defaultRole: ""
+    # -- Which claim identifies the tenant: `tid` on Entra, `hd` on Google Workspace. REQUIRED with `enabled: true` — together with `tenantClaims` it is the tenant pin, and the chart refuses to render without both.
+    tenantClaim: ""
+    # -- Maps each accepted `tenantClaim` VALUE → a Leoflow tenant name. REQUIRED and non-empty with `enabled: true`. A claim value that is not a key here is rejected with a generic 403 whose cause reaches only the audit log — which, in an SSO-only deployment, nobody can log in to read (#1143) — and it never falls back to the `default` tenant. This is the second key that cannot travel as an env var, so it too is written into the mounted `config.yaml` with its keys quoted: a Google `hd` value is always a dotted domain. Example: `{"example.com": "default"}`.
+    tenantClaims: {}
+    # -- Login-level email-domain allowlist layered ON TOP of the tenant pin, not a replacement for it. Checked only after the pin and `email_verified` have passed, so the domain is trustworthy by then. Empty (the default) imposes no extra restriction. It gates EVERY OIDC login, not only JIT-provisioned ones. Rendered comma-joined, omitted when empty.
+    allowedEmailDomains: []
+    # -- Local password logins still accepted while SSO is on; every other password login is rejected. This is the lock-out escape hatch: with the list empty, an IdP outage or a wrong `tenantClaims` entry leaves nobody able to reach the UI, including the operator who has to fix it. Put at least one break-glass admin here before enabling SSO. Rendered comma-joined, omitted when empty.
+    breakGlassEmails: []
+    # -- Create a user row on first successful OIDC login instead of requiring one to be pre-provisioned. OFF by default. With it on, the new user is granted the roles `roleMappings` resolves (or `defaultRole`), so turn it on only once one of those two actually grants something.
+    jitProvisioning: false
+    # -- Tolerance in seconds applied to the ID token's `exp`/`iat`/`nbf` checks, to absorb clock drift between the IdP and this server. The shipped 60 is the server's own default; raise it only if boot-time clock sync is genuinely unreliable, since it widens the window a replayed token stays valid.
+    clockSkewSeconds: 60
+
 # Warm worker pools (ADR 0058) — reuse one task pod across many attempts of the
 # SAME dag_version, instead of one pod per attempt. OFF by default: every attempt
 # gets its own dedicated pod, byte-for-byte today's behavior, and none of the

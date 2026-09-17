@@ -217,3 +217,42 @@ matching comment in `internal/config/server.go`, as the explanation for a proble
 it does not explain. Both the comment and the configuration reference are
 corrected; this note keeps the record honest about where the belief came from.
 
+
+## Amendment (2026-09-17): D4's "pre-existing user row" has no way to exist
+
+D4 says JIT provisioning is off by default and that the default
+
+> requires a pre-existing user row (no accidental over-privilege).
+
+The decision stands: creating users implicitly on a first login should be opt-in.
+What is withdrawn is the sentence describing what the OFF state leaves an
+operator with. It reads as a supported alternative and there is none.
+
+**Nothing an operator can run creates a row that a login would match.** D3 makes
+the identity match `(oidc_provider, oidc_subject)` and `FindUserByOIDCSubject` is
+the only lookup on the login path, so only a row carrying both columns can ever
+resolve. The only statement that writes them is `CreateOIDCUser`
+(`internal/storage/queries/users.sql`), reached only from `jitProvision`, which
+runs only when the flag is on. No API endpoint, CLI command, admin UI or
+migration writes either column. The user-creation API writes a password user,
+which leaves both NULL.
+
+So with `jit_provisioning: false` every first login is denied with
+`no_user_jit_off`, and the remedy the sentence implies does not exist. The
+deployment boots green, the IdP redirect works, the token verifies, the tenant
+pin passes, and the login is refused at the last step with a generic 403. That is
+the shape a field report hit on Google Workspace.
+
+**What ships now:** the Helm chart defaults `auth.oidc.jitProvisioning` to `true`,
+so a chart install is not in this state, and the server logs a boot WARN naming
+`auth.oidc.jit_provisioning` whenever it is off. It is a warning and not a boot
+failure because an operator who wrote the two columns directly with SQL has a
+working deployment, and a hard gate would break it.
+
+**What is left open:** D3 already names email as a "verified link key", but no
+code links an existing user by verified email today. Implementing that link is
+the honest way to make the OFF state mean what D4 says it means: an administrator
+pre-creates the user with the roles they intend, and the first SSO login binds
+the subject to it. That is a behavior change with its own security argument to
+make (it lets an IdP account claim an existing account by email), so it is
+tracked separately rather than folded into a patch release.

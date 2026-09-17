@@ -4,22 +4,27 @@
 #
 #   internal/storage/postgres.go   pgStartupBudget        how long the connect retry may spend
 #   cmd/leoflow-server/main.go     podInformerSyncTimeout how long the informer warm-up may spend
+#   cmd/leoflow-server/main.go     oidcDiscoveryTimeout   how long IdP discovery may spend
 #   helm/leoflow/values.yaml       probes.startup.*       what the kubelet actually allows
 #
-# The invariant is  startup budget >= (2 * pgStartupBudget) + podInformerSyncTimeout + headroom.
+# The invariant is
+#   startup budget >= (2 * pgStartupBudget) + podInformerSyncTimeout + oidcDiscoveryTimeout + headroom.
 # Twice the Postgres budget because NewPostgres runs the retry loop once for the
 # request pool and once for the dedicated probe pool, so a slow-to-accept
-# Postgres can spend both. The headroom covers the boot work that carries no
-# bound of its own: credential detection for an object-store log sink, OIDC
-# discovery, and process start.
+# Postgres can spend both. OIDC discovery counts unconditionally even though it
+# only runs under auth.provider: oidc, because the floor has to cover the worst
+# boot the chart can be configured into, not the common one. The headroom covers
+# what is left with no bound of its own: credential detection for an object-store
+# log sink, and process start.
 #
 # It matters because a startup budget under the boot it is gating kills a pod
 # that was about to come up, which is the restart loop the gate exists to end
 # (#1083). Nothing reconciles a Go constant with a Helm value: raising
 # pgStartupBudget to 60s "so a failover blip cannot fail boot" would put the
-# code-defined floor at 130s under a 180s gate with 50s of headroom gone and the
-# whole test suite green. The same drift shape this repo already gates for the
-# readiness timeout, the Lite pre-pull tag and the Task SDK pin.
+# code-defined floor at 145s under a 180s gate, leaving 35s of slack where the
+# gate requires 60s, and the whole test suite green. The same drift shape this
+# repo already gates for the readiness timeout, the Lite pre-pull tag and the
+# Task SDK pin.
 #
 # The gate also re-asserts, on the shipped defaults, the relation the chart
 # enforces per-render: the startup budget must EXCEED the liveness budget it
@@ -63,10 +68,18 @@ if not m:
 	fail(f"{pg_path} has no `const pgStartupBudget = N * time.Second`: renamed, or no longer a whole number of seconds")
 pg_budget = int(m.group(1))
 
-m = re.search(r"^var\s+podInformerSyncTimeout\s*=\s*(\d+)\s*\*\s*time\.Second\s*$", read(main_path), re.M)
-if not m:
-	fail(f"{main_path} has no `var podInformerSyncTimeout = N * time.Second`: renamed, or no longer a whole number of seconds")
-informer = int(m.group(1))
+main_src = read(main_path)
+
+
+def boot_bound(name):
+	m = re.search(r"^var\s+" + name + r"\s*=\s*(\d+)\s*\*\s*time\.Second\s*$", main_src, re.M)
+	if not m:
+		fail(f"{main_path} has no `var {name} = N * time.Second`: renamed, or no longer a whole number of seconds")
+	return int(m.group(1))
+
+
+informer = boot_bound("podInformerSyncTimeout")
+discovery = boot_bound("oidcDiscoveryTimeout")
 
 try:
 	import yaml
@@ -87,13 +100,13 @@ liveness = probe_int("liveness", "initialDelaySeconds") + probe_int("liveness", 
 
 # NewPostgres runs connectWithRetry twice: once for the request pool, once for
 # the dedicated probe pool. A Postgres slow to accept connections can spend both.
-code_floor = 2 * pg_budget + informer
+code_floor = 2 * pg_budget + informer + discovery
 if startup < code_floor + headroom:
 	fail(
 		f"probes.startup allows boot {startup}s, but the server's own bounds already reserve {code_floor}s "
-		f"(2 * pgStartupBudget {pg_budget}s for the request and probe pools, plus podInformerSyncTimeout {informer}s) "
-		f"and boot does work no constant covers on top of that: cloud credential detection for an object-store log "
-		f"sink, OIDC discovery, process start. A gate tighter than the boot restarts a pod that was about to come up, "
+		f"(2 * pgStartupBudget {pg_budget}s for the request and probe pools, plus podInformerSyncTimeout {informer}s "
+		f"and oidcDiscoveryTimeout {discovery}s) and boot does work no constant covers on top of that: cloud credential "
+		f"detection for an object-store log sink, process start. A gate tighter than the boot restarts a pod that was about to come up, "
 		f"which is the loop the gate exists to end. Raise probes.startup.failureThreshold in {values_path} to at "
 		f"least {-(-(code_floor + headroom) // probe_int('startup', 'periodSeconds'))}, or lower the bound in the Go "
 		f"source that moved."
@@ -115,13 +128,13 @@ self_test() {
 
 	_write() { # <pg-seconds> <informer-seconds> <startup-period> <startup-threshold>
 		printf 'package storage\n\nconst pgStartupBudget = %s * time.Second\n' "$1" > "$tmp/postgres.go"
-		printf 'package main\n\nvar podInformerSyncTimeout = %s * time.Second\n' "$2" > "$tmp/main.go"
+		printf 'package main\n\nvar podInformerSyncTimeout = %s * time.Second\nvar oidcDiscoveryTimeout = %s * time.Second\n' "$2" "${5:-15}" > "$tmp/main.go"
 		printf 'probes:\n  startup:\n    periodSeconds: %s\n    failureThreshold: %s\n  liveness:\n    initialDelaySeconds: 10\n    periodSeconds: 20\n    failureThreshold: 3\n' "$3" "$4" > "$tmp/values.yaml"
 	}
 
-	_case() { # <name> <want-exit> <want-substr> <pg> <informer> <period> <threshold>
+	_case() { # <name> <want-exit> <want-substr> <pg> <informer> <period> <threshold> [discovery]
 		local name=$1 want=$2 substr=$3
-		_write "$4" "$5" "$6" "$7"
+		_write "$4" "$5" "$6" "$7" "${8:-15}"
 		local out rc
 		out=$(check "$tmp/postgres.go" "$tmp/main.go" "$tmp/values.yaml" 2>&1) && rc=0 || rc=$?
 		if [ "$rc" -ne "$want" ]; then
@@ -134,8 +147,9 @@ self_test() {
 	_case "a budget under the code floor is caught"   1 "tighter than the boot"      30 10 5 20
 	_case "a raised pgStartupBudget is caught"        1 "tighter than the boot"      60 10 5 36
 	_case "a raised informer timeout is caught"       1 "tighter than the boot"      30 70 5 36
-	_case "a budget at the liveness budget is caught" 1 "not more than the"           2  5 5 14
-	_case "exactly floor plus headroom passes"        0 "startup probe budget: 130s" 30 10 5 26
+	_case "a raised discovery timeout is caught"      1 "tighter than the boot"      30 10 5 36 120
+	_case "a budget at the liveness budget is caught" 1 "not more than the"           2  5 5 14  1
+	_case "exactly floor plus headroom passes"        0 "startup probe budget: 145s" 30 10 5 29
 
 	# Either side renamed away must fail loudly rather than pass by not matching.
 	_write 30 10 5 36
@@ -144,9 +158,14 @@ self_test() {
 		echo "self-test FAIL: a renamed pgStartupBudget passes silently"; fail=1
 	fi
 	_write 30 10 5 36
-	printf 'package main\n\nvar podInformerWarmup = 10 * time.Second\n' > "$tmp/main.go"
+	printf 'package main\n\nvar podInformerWarmup = 10 * time.Second\nvar oidcDiscoveryTimeout = 15 * time.Second\n' > "$tmp/main.go"
 	if check "$tmp/postgres.go" "$tmp/main.go" "$tmp/values.yaml" >/dev/null 2>&1; then
 		echo "self-test FAIL: a renamed podInformerSyncTimeout passes silently"; fail=1
+	fi
+	_write 30 10 5 36
+	printf 'package main\n\nvar podInformerSyncTimeout = 10 * time.Second\nvar oidcDiscoveryBudget = 15 * time.Second\n' > "$tmp/main.go"
+	if check "$tmp/postgres.go" "$tmp/main.go" "$tmp/values.yaml" >/dev/null 2>&1; then
+		echo "self-test FAIL: a renamed oidcDiscoveryTimeout passes silently"; fail=1
 	fi
 
 	if [ "$fail" -eq 0 ]; then echo "check-startup-probe-budget self-test: ok"; return 0; fi

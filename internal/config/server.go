@@ -523,8 +523,13 @@ type OIDCSection struct {
 	// provider is "oidc"; every other password login is rejected (SSO-only).
 	BreakGlassEmails []string `mapstructure:"break_glass_emails"`
 	// JITProvisioning creates a user row on first OIDC login when no matching one
-	// exists. OFF by default (a pre-provisioned user is required); when ON, the new
-	// row is granted the roles from RoleMappings.
+	// exists; the new row is granted the roles from RoleMappings. OFF by default.
+	//
+	// OFF denies every first login. A login matches a user only by
+	// (oidc_provider, oidc_subject) and CreateOIDCUser, reached only from this
+	// path, is the sole statement that writes those columns, so no API, CLI or
+	// migration can pre-create an OIDC identity (ADR 0057, amendment on D4).
+	// cmd/leoflow-server warns about this at boot.
 	JITProvisioning bool `mapstructure:"jit_provisioning"`
 	// ClockSkewSeconds is the tolerance applied to the ID token's exp/iat/nbf
 	// checks to absorb small clock differences between the IdP and this server.

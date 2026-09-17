@@ -176,6 +176,44 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `auth.oidc.break_glass_emails` exists precisely so a named set of local logins
   still works when the IdP is down or the tenant mapping is wrong, and hiding the
   form would hide the escape hatch at the moment it is needed.
+- **Single sign-on now says at boot why it will not work.** Four OIDC
+  configurations were accepted at boot and failed at the last step of a login,
+  where the callback answers a deliberately generic 403. An operator saw a
+  deployment that boots green, an IdP redirect that works, a token that verifies,
+  and a refusal that names nothing. Each now logs a WARN at startup naming the
+  setting and what it does:
+
+  - **`jit_provisioning: false` denies every first login.** A login matches a user
+    only by `(oidc_provider, oidc_subject)`, and just-in-time provisioning is the
+    only code path that writes those columns. No API, CLI or migration can
+    pre-create an OIDC identity, so the documented alternative ("a pre-provisioned
+    user is required") never existed. The chart already defaults
+    `auth.oidc.jitProvisioning` to `true`; this covers the deployments that set it
+    from elsewhere or turned it off. ADR 0057 carries an amendment on D4.
+  - **`role_mappings` set with `default_role` empty clears grants.** Roles are
+    reconciled to exactly the resolved set, so a login whose group claim matches
+    nothing resolves to zero roles and strips the user's existing grants. Google
+    Workspace emits no `groups` claim at all unless Directory API group sync is
+    configured, so on that IdP every login takes this path. The warning fired
+    before only when both keys were empty, which is the shape a Google deployment
+    is least likely to be in. Boot cannot tell that from a deliberately strict
+    deployment on an IdP that does emit the claim, so the warning names both and
+    can be dismissed on purpose: `default_role` is not free, it grants that role
+    to every login the tenant pin admits.
+  - **An empty `client_secret` breaks the code exchange.** Google Workspace and
+    Entra always register a server-side application as confidential, and a
+    confidential client rejects an exchange with no secret. It stays optional at
+    boot because a public client is a valid registration.
+  - **An IdP that never answers parked boot forever.** Discovery runs before the
+    HTTP listener binds, on a client with no timeout, so a request that waits
+    instead of failing meant the probe endpoint never came up and the kubelet
+    restarted the pod on a probe failure that named nothing. It is bounded at 15s,
+    and the failure names the issuer, the bound, and the causes that wait rather
+    than refuse: a NetworkPolicy or firewall that DROPs egress instead of
+    REJECTing it, a name that never resolves, an egress proxy or intercepting TLS
+    middlebox, or an issuer that accepts the connection and goes silent. The
+    underlying transport error is wrapped, not replaced, so the detail that
+    separates them survives. The startup-probe budget gate counts the new bound.
 
 - **OpenMetadata can catalogue leoflow again: `class_ref.module_path` is no
   longer null.** A field team reported that they could not integrate leoflow with

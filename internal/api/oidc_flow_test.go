@@ -315,8 +315,15 @@ func startLogin(t *testing.T, srv *gin.Engine) loginState {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v2/auth/oidc/login?next=/dags", http.NoBody)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
+	// Not assertLoginSucceeded: this is the START of the flow, a redirect OUT to
+	// the IdP, so there is no session yet. What has to hold here is that it is a
+	// redirect and that it is not the bounce back to the login page a refused
+	// login now produces.
 	if rec.Code != http.StatusFound {
-		t.Fatalf("login = %d, want 302", rec.Code)
+		t.Fatalf("login = %d, want a %d redirect to the IdP", rec.Code, http.StatusFound)
+	}
+	if strings.Contains(rec.Header().Get("Location"), "sso_error") {
+		t.Fatalf("the login route refused before reaching the IdP: %q", rec.Header().Get("Location"))
 	}
 	loc, err := url.Parse(rec.Header().Get("Location"))
 	if err != nil {
@@ -421,9 +428,7 @@ func TestOIDCHappyPathResolvesUserAndMintsSession(t *testing.T) {
 
 	rec := driveCallback(t, srv, f, cfg, nil)
 
-	if rec.Code != http.StatusFound {
-		t.Fatalf("callback = %d, want 302", rec.Code)
-	}
+	assertLoginSucceeded(t, rec, "callback")
 	if loc := rec.Header().Get("Location"); loc != "/dags" {
 		t.Errorf("redirect = %q, want /dags (sanitized next)", loc)
 	}
@@ -458,12 +463,9 @@ func TestOIDCReturningUserTenantMismatchRejected(t *testing.T) {
 
 	rec := driveCallback(t, srv, f, cfg, nil)
 
-	if rec.Code == http.StatusFound {
-		t.Fatal("callback minted a session for a tenant-mismatched returning user; want rejection")
-	}
-	if sessionCookie(rec) != nil {
-		t.Error("no session cookie must be set on tenant mismatch")
-	}
+	// This read a bare 302 as "a session was minted". A refused login is a 302
+	// too now, so the inference no longer holds and the helper states the shape.
+	assertLoginDenied(t, rec, "tenant-mismatched returning user")
 	if !audit.hasReason(auditOIDCLoginFailure, "tenant_mismatch") {
 		t.Error("tenant mismatch was not audited with reason=tenant_mismatch")
 	}
@@ -512,9 +514,7 @@ func TestOIDCTenantPinFailsClosed(t *testing.T) {
 
 			rec := driveCallback(t, srv, f, cfg, tc.mutate)
 
-			if rec.Code != http.StatusForbidden {
-				t.Fatalf("%s = %d, want 403 (fail closed)", tc.name, rec.Code)
-			}
+			assertLoginDenied(t, rec, tc.name)
 			if sessionCookie(rec) != nil {
 				t.Error("a rejected login must NOT mint a session cookie")
 			}
@@ -561,9 +561,7 @@ func TestOIDCTokenVerificationFailsClosed(t *testing.T) {
 
 			rec := driveCallback(t, srv, f, cfg, tc.mutate)
 
-			if rec.Code != http.StatusForbidden {
-				t.Fatalf("%s = %d, want 403", tc.name, rec.Code)
-			}
+			assertLoginDenied(t, rec, tc.name)
 			if sessionCookie(rec) != nil {
 				t.Errorf("%s: a rejected token must NOT mint a session", tc.name)
 			}
@@ -591,9 +589,7 @@ func TestOIDCTamperedSignatureRejected(t *testing.T) {
 	parts[2] = string(sig)
 	rec := completeCallback(srv, f, st, strings.Join(parts, "."))
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("tampered signature = %d, want 403", rec.Code)
-	}
+	assertLoginDenied(t, rec, "tampered signature")
 	if sessionCookie(rec) != nil {
 		t.Error("a tampered token must NOT mint a session")
 	}
@@ -625,9 +621,7 @@ func TestOIDCCallbackRejectsMissingStateCookie(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v2/auth/oidc/callback?code=x&state=y", http.NoBody)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("missing state cookie = %d, want 403", rec.Code)
-	}
+	assertLoginDenied(t, rec, "missing state cookie")
 }
 
 func TestOIDCCallbackRejectsStateMismatch(t *testing.T) {
@@ -641,9 +635,7 @@ func TestOIDCCallbackRejectsStateMismatch(t *testing.T) {
 	req.AddCookie(st.cookie)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("state mismatch = %d, want 403", rec.Code)
-	}
+	assertLoginDenied(t, rec, "state mismatch")
 }
 
 func TestOIDCCallbackRejectsIssParamMismatch(t *testing.T) {
@@ -657,9 +649,7 @@ func TestOIDCCallbackRejectsIssParamMismatch(t *testing.T) {
 	req.AddCookie(st.cookie)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("RFC 9207 iss mismatch = %d, want 403", rec.Code)
-	}
+	assertLoginDenied(t, rec, "RFC 9207 iss mismatch")
 }
 
 // ─────────────────────────── D4: JIT provisioning ───────────────────────────
@@ -673,9 +663,7 @@ func TestOIDCJITOffRejectsUnknownSubject(t *testing.T) {
 
 	rec := driveCallback(t, srv, f, cfg, nil)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("JIT-off unknown subject = %d, want 403", rec.Code)
-	}
+	assertLoginDenied(t, rec, "JIT-off unknown subject")
 	if len(store.created) != 0 {
 		t.Error("JIT off must not create a user")
 	}
@@ -691,9 +679,7 @@ func TestOIDCJITOnCreatesUserWithMappedRoles(t *testing.T) {
 
 	rec := driveCallback(t, srv, f, cfg, nil)
 
-	if rec.Code != http.StatusFound {
-		t.Fatalf("JIT-on = %d, want 302", rec.Code)
-	}
+	assertLoginSucceeded(t, rec, "JIT-on")
 	if len(store.created) != 1 {
 		t.Fatalf("JIT on created %d users, want 1", len(store.created))
 	}
@@ -719,9 +705,7 @@ func TestOIDCUnmappedGroupGrantsNoRole(t *testing.T) {
 	srv := oidcServer(t, f, cfg, store, &fakeAuthAudit{}, nil)
 
 	rec := driveCallback(t, srv, f, cfg, func(c jwt.MapClaims) { c["groups"] = []string{"unmapped-group"} })
-	if rec.Code != http.StatusFound {
-		t.Fatalf("unmapped-group login = %d, want 302", rec.Code)
-	}
+	assertLoginSucceeded(t, rec, "unmapped-group login")
 	if len(store.created) != 1 || len(store.created[0].roles) != 0 {
 		t.Errorf("unmapped group should grant no role (default-deny); created = %+v", store.created)
 	}
@@ -736,9 +720,7 @@ func TestOIDCDefaultRoleFallback(t *testing.T) {
 	srv := oidcServer(t, f, cfg, store, &fakeAuthAudit{}, nil)
 
 	rec := driveCallback(t, srv, f, cfg, func(c jwt.MapClaims) { c["groups"] = []string{"unmapped-group"} })
-	if rec.Code != http.StatusFound {
-		t.Fatalf("default_role login = %d, want 302", rec.Code)
-	}
+	assertLoginSucceeded(t, rec, "default_role login")
 	if len(store.created) != 1 || len(store.created[0].roles) != 1 || store.created[0].roles[0] != "viewer" {
 		t.Errorf("unmapped + default_role=viewer should grant [viewer]; created = %+v", store.created)
 	}
@@ -768,9 +750,7 @@ func TestOIDCDefaultRoleNonexistentRejected(t *testing.T) {
 	srv := oidcServer(t, f, cfg, store, audit, nil)
 
 	rec := driveCallback(t, srv, f, cfg, func(c jwt.MapClaims) { c["groups"] = []string{"unmapped-group"} })
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("nonexistent default_role = %d, want 403 (fail closed)", rec.Code)
-	}
+	assertLoginDenied(t, rec, "nonexistent default_role")
 	if len(store.created) != 0 {
 		t.Error("a login with an unknown default_role must not create a user")
 	}
@@ -805,9 +785,7 @@ func TestOIDCEmailDomainAllowlist(t *testing.T) {
 		store := seededUser(cfg)
 		srv := oidcServer(t, f, cfg, store, &fakeAuthAudit{}, nil)
 		rec := driveCallback(t, srv, f, cfg, nil) // email alice@corp.example
-		if rec.Code != http.StatusForbidden {
-			t.Fatalf("out-of-allowlist pre-existing user = %d, want 403", rec.Code)
-		}
+		assertLoginDenied(t, rec, "out-of-allowlist pre-existing user")
 		if sessionCookie(rec) != nil {
 			t.Error("out-of-allowlist login must not mint a session")
 		}
@@ -821,9 +799,7 @@ func TestOIDCEmailDomainAllowlist(t *testing.T) {
 		store := newFakeOIDCStore()
 		srv := oidcServer(t, f, cfg, store, &fakeAuthAudit{}, nil)
 		rec := driveCallback(t, srv, f, cfg, nil)
-		if rec.Code != http.StatusForbidden {
-			t.Fatalf("out-of-allowlist JIT = %d, want 403", rec.Code)
-		}
+		assertLoginDenied(t, rec, "out-of-allowlist JIT")
 		if len(store.created) != 0 {
 			t.Error("out-of-allowlist login must not provision a user")
 		}
@@ -844,8 +820,6 @@ func TestOIDCEmailDomainAllowlist(t *testing.T) {
 		cfg.AllowedEmailDomains = []string{"corp.example"} // domain WOULD pass
 		srv := oidcServer(t, f, cfg, seededUser(cfg), &fakeAuthAudit{}, nil)
 		rec := driveCallback(t, srv, f, cfg, func(c jwt.MapClaims) { c["email_verified"] = false })
-		if rec.Code != http.StatusForbidden {
-			t.Fatalf("unverified email = %d, want 403 (fails at email_verified, before the domain check)", rec.Code)
-		}
+		assertLoginDenied(t, rec, "unverified email fails at email_verified, before the domain check")
 	})
 }

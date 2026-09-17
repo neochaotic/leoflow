@@ -112,9 +112,12 @@ the addresses your users sign in with.
 
 ## When a login is denied
 
-The callback answers a generic 403 on purpose. Telling a browser why a login was
-refused tells an attacker the same thing, so the cause goes to two places the
-operator can read and the browser cannot: the **audit log** and the server log.
+The user is returned to the sign-in page, which says that single sign-on did not
+complete and nothing more. That is on purpose: telling a browser why a login was
+refused tells whoever is probing the deployment the same thing. So the cause goes
+to two places the operator can read and the browser cannot, the **audit log** and
+the server log, and the user has no way to tell a wrong domain from a missing
+role. Expect to be asked, and read the audit log rather than the screenshot.
 
 Read the audit log directly, since an SSO-only deployment may have nobody able to
 log in to read it through the UI:
@@ -144,6 +147,10 @@ LIMIT 20;
 | `token_no_subject` | the ID token carries no `sub` | as above: there is no stable identity to match a user on |
 | `group_claim_overage` | the IdP returned a pointer instead of the groups | Entra only, past roughly 200 group memberships. It hits the most heavily grouped, usually most privileged, users and nobody else. Configure app roles or the groups scope |
 | `token_invalid` | verification failed for any other reason | the server log carries the underlying error |
+
+If the page instead says Leoflow could not complete the sign-in *on its side*,
+the failure is ours and not a configuration problem: the error is in the server
+log, and a retry may well work.
 
 ## When no login is even attempted
 

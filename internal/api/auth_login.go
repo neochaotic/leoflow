@@ -36,13 +36,20 @@ var loginPageTemplate = template.Must(template.New("login").Parse(`<!doctype htm
  .or{display:flex;align-items:center;gap:.6rem;margin:1.1rem 0 .2rem;color:#64748b;font-size:.75rem}
  .or::before,.or::after{content:"";flex:1;height:1px;background:#334155}
  .hint{color:#94a3b8;font-size:.75rem;line-height:1.35;margin:.4rem 0 0}
+ .ssoerr{background:#7f1d1d;color:#fecaca;border-radius:6px;padding:.6rem .7rem;font-size:.78rem;line-height:1.35;margin:.9rem 0 0}
  details{margin-top:1.1rem}
  summary{color:#94a3b8;font-size:.8rem;cursor:pointer}
  code{font-size:.72rem;color:#cbd5e1}
 </style></head><body>
 <form id="f" autocomplete="on">
  <h1>Sign in to Leoflow</h1>
-{{ if .SSO }} <a class="sso" href="/api/v2/auth/oidc/login?next={{ .NextQuery }}">Sign in with single sign-on</a>
+{{ if .SSOFailed }} <p class="ssoerr" role="alert">Leoflow could not complete the sign-in on its side, so you are
+ not signed in. Nothing you did is wrong and nothing is misconfigured for you: try again. If it keeps
+ happening, tell whoever administers this Leoflow, the error is in the control plane's server log.</p>
+{{ end }}{{ if .SSORefused }} <p class="ssoerr" role="alert">Single sign-on did not complete, so you are not signed in.
+ Try again. If it keeps failing, ask whoever administers this Leoflow: the reason is recorded in
+ the control plane's server log and audit trail, and is deliberately not shown here.</p>
+{{ end }}{{ if .SSO }} <a class="sso" href="/api/v2/auth/oidc/login?next={{ .NextQuery }}">Sign in with single sign-on</a>
 {{ end }}
 {{ if .Collapse }} <details>
  <summary>Break-glass sign-in</summary>
@@ -135,16 +142,26 @@ func loginPageHandler(sso, breakGlass bool) gin.HandlerFunc {
 			Next      template.JS
 			NextQuery string
 			SSO       bool
+			// SSORefused says the user arrived from a single sign-on this
+			// deployment refused, and SSOFailed from one that broke on our side.
+			// They are separate because they send the user to different places:
+			// a refusal needs an administrator to change something, a failure
+			// needs a retry. Both are gated on SSO, so nobody can make a
+			// deployment without a flow claim a sign-on happened at all.
+			SSORefused bool
+			SSOFailed  bool
 			// Collapse hides a form that cannot succeed; Focus puts the cursor in
 			// the form only when it is a way in.
 			Collapse bool
 			Focus    bool
 		}{
-			Next:      template.JS("'" + template.JSEscapeString(next) + "'"),
-			NextQuery: next,
-			SSO:       sso,
-			Collapse:  sso && !breakGlass,
-			Focus:     !sso || breakGlass,
+			Next:       template.JS("'" + template.JSEscapeString(next) + "'"),
+			NextQuery:  next,
+			SSO:        sso,
+			SSORefused: sso && c.Query("sso_error") == ssoErrorRefused,
+			SSOFailed:  sso && c.Query("sso_error") == ssoErrorServer,
+			Collapse:   sso && !breakGlass,
+			Focus:      !sso || breakGlass,
 		}); err != nil {
 			AbortProblem(c, http.StatusInternalServerError, "internal error", "could not render login page")
 		}

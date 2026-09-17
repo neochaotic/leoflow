@@ -1,6 +1,9 @@
 package api
 
 import (
+	"bytes"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,11 +23,16 @@ func loginPage(t *testing.T, sso bool) string {
 
 func loginPageWith(t *testing.T, sso, breakGlass bool) string {
 	t.Helper()
+	return loginPageQuery(t, sso, breakGlass, "?next=/dags")
+}
+
+func loginPageQuery(t *testing.T, sso, breakGlass bool, query string) string {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.GET("/api/v2/auth/login", loginPageHandler(sso, breakGlass))
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v2/auth/login?next=/dags", http.NoBody))
+	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v2/auth/login"+query, http.NoBody))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("login page = %d", rec.Code)
 	}
@@ -133,5 +141,153 @@ func TestLoginPageKeepsTheFormWhenBreakGlassAccountsExist(t *testing.T) {
 func TestLoginPageFocusesTheFormWhenItIsTheOnlyWayIn(t *testing.T) {
 	if !strings.Contains(loginPageWith(t, false, false), "autofocus") {
 		t.Error("a JWT-only login page no longer focuses its username field")
+	}
+}
+
+// TestLoginPageExplainsARefusedSingleSignOn covers what the user sees when SSO
+// is denied.
+//
+// Every fail-closed path answered problem+json with 403. That is the right
+// answer to an API client and the wrong one to a browser, and both OIDC routes
+// are reached only by a top-level browser navigation: the user clicks the
+// sign-in control, or the IdP redirects them back. So a denied login rendered a
+// page of raw JSON with no way back to the sign-in page.
+//
+// The redirect carries no reason. The cause is withheld from the browser on
+// purpose, because it is the same information an attacker probing the deployment
+// would be after; it goes to the audit row and the server log instead.
+func TestLoginPageExplainsARefusedSingleSignOn(t *testing.T) {
+	body := loginPageQuery(t, true, true, "?sso_error=1&next=/dags")
+
+	if !strings.Contains(body, "Single sign-on did not complete") {
+		t.Fatal("the page says nothing about the failed sign-on, so the button looks like it did nothing")
+	}
+	// The person reading this banner is locked out, and under provider: oidc with
+	// an empty break_glass_emails that is everyone. So the remedy cannot be "read
+	// the audit log": the audit UI is behind /ui/, which needs the session they do
+	// not have, and the server log needs cluster access. The banner has to name
+	// the human who can look, not just the place.
+	if !strings.Contains(body, "administers this Leoflow") {
+		t.Error("the banner tells a locked-out user to consult records they cannot reach, and names nobody who can")
+	}
+	if !strings.Contains(body, "server log") {
+		t.Error("the banner does not say where the reason is recorded, so the ask to an administrator is not actionable")
+	}
+	if !strings.Contains(body, "/api/v2/auth/oidc/login") {
+		t.Error("the sign-in control is gone from the page the user was sent back to, so there is no way to retry")
+	}
+}
+
+// TestLoginPageSaysNothingAboutSSOWithoutTheMarker keeps the banner off a normal
+// visit: a login page that always says sign-on failed is a page that says
+// nothing.
+func TestLoginPageSaysNothingAboutSSOWithoutTheMarker(t *testing.T) {
+	if strings.Contains(loginPage(t, true), "Single sign-on did not complete") {
+		t.Error("the failure banner renders on a plain visit to the login page")
+	}
+	// A JWT-only deployment has no SSO at all, so the marker must mean nothing
+	// there: otherwise anyone can make the page claim a sign-on failed.
+	if strings.Contains(loginPageQuery(t, false, false, "?sso_error=1"), "Single sign-on did not complete") {
+		t.Error("a jwt-only deployment renders an SSO failure banner for anyone who appends the parameter")
+	}
+}
+
+// TestRefusedSingleSignOnLandsOnAPageThatSaysSo walks the two ends of the fix
+// across the real router, because each end is otherwise tested against its own
+// idea of the contract.
+//
+// oidc_flow_test.go asserts that a denial redirects to loginPageWithSSOError.
+// The tests above assert that the login page renders a banner when it sees
+// sso_error. Nothing asserted that the target of the first is served by the
+// second: renaming the parameter on one side only would leave every test green
+// and every refused user back on a bare form that looks like the button did
+// nothing.
+func TestRefusedSingleSignOnLandsOnAPageThatSaysSo(t *testing.T) {
+	f := newFakeIDP(t)
+	cfg := baseOIDCConfig(f)
+	srv := oidcServer(t, f, cfg, newFakeOIDCStore(), &fakeAuthAudit{}, nil)
+
+	// A callback with no state cookie is a real rejection through the real
+	// fail-closed path (missing_state), not a hand-built response.
+	denial := httptest.NewRecorder()
+	srv.ServeHTTP(denial, httptest.NewRequestWithContext(t.Context(),
+		http.MethodGet, "/api/v2/auth/oidc/callback?code=x&state=y", http.NoBody))
+	assertLoginDenied(t, denial, "callback with no state cookie")
+
+	landing := httptest.NewRecorder()
+	srv.ServeHTTP(landing, httptest.NewRequestWithContext(t.Context(),
+		http.MethodGet, denial.Header().Get("Location"), http.NoBody))
+	if landing.Code != http.StatusOK {
+		t.Fatalf("the page a refused login is sent to answered %d", landing.Code)
+	}
+	if !strings.Contains(landing.Body.String(), "Single sign-on did not complete") {
+		t.Errorf("a refused login lands on a page that says nothing about it:\n%s", landing.Body.String())
+	}
+	if !strings.Contains(landing.Body.String(), "/api/v2/auth/oidc/login") {
+		t.Error("the page a refused login lands on offers no way to retry")
+	}
+}
+
+// TestServerSideSSOFailureIsNotShownAsARefusal covers the half of the browser
+// problem the first pass left behind.
+//
+// Three paths on these two browser-only routes answer 500 rather than deny:
+// token generation failing at the start of the flow, the state cookie failing to
+// seal, and the session failing to mint. The last is the worst of them, because
+// it is the tail of a completely successful round trip through the IdP: the user
+// authenticated, was accepted, and then got a page of raw JSON.
+//
+// It needs its own marker and its own words. "We refused you" and "we broke"
+// send the user to different places: the first to an administrator who has to
+// change a setting, the second to a retry that may well work.
+func TestServerSideSSOFailureIsNotShownAsARefusal(t *testing.T) {
+	refused := loginPageQuery(t, true, true, "?sso_error=1")
+	broke := loginPageQuery(t, true, true, "?sso_error=server")
+
+	if !strings.Contains(broke, "on its side") {
+		t.Fatalf("a server-side failure is described as a refusal, which sends the user to an administrator for a problem no setting fixes:\n%s", broke)
+	}
+	if refused == broke {
+		t.Error("both markers render the same page, so the distinction exists only in the URL")
+	}
+	if !strings.Contains(broke, "/api/v2/auth/oidc/login") {
+		t.Error("no way to retry, which is the one thing that may work for a transient failure")
+	}
+}
+
+// TestServerFailureLandsOnThePageThatDescribesIt ties the two ends together, the
+// way TestRefusedSingleSignOnLandsOnAPageThatSaysSo does for a refusal.
+//
+// The three 500 paths are hard to drive from outside: HMAC signing does not fail
+// on any input the handler can produce, and neither does sealing the state
+// cookie. So this drives the exit itself and then serves its target on the real
+// route. Without it, renaming one side of the marker leaves every test green,
+// which is exactly the gap this file already found once.
+func TestServerFailureLandsOnThePageThatDescribesIt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var buf bytes.Buffer
+	r := gin.New()
+	r.GET("/boom", func(c *gin.Context) {
+		abortSSOServerFailure(c, slog.New(slog.NewTextHandler(&buf, nil)), "minting session token", errors.New("hsm unreachable at 10.0.0.9"))
+	})
+	r.GET("/api/v2/auth/login", loginPageHandler(true, true))
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/boom", http.NoBody))
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("server failure = %d, want a redirect; problem+json renders as raw JSON on a browser-only route", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "hsm unreachable") || strings.Contains(rec.Header().Get("Location"), "hsm") {
+		t.Errorf("the cause reached the browser:\n%s\n%s", rec.Header().Get("Location"), rec.Body.String())
+	}
+	if !strings.Contains(buf.String(), "hsm unreachable at 10.0.0.9") {
+		t.Errorf("the cause reached nobody at all, which is worse than showing it:\n%s", buf.String())
+	}
+
+	landed := httptest.NewRecorder()
+	r.ServeHTTP(landed, httptest.NewRequestWithContext(t.Context(), http.MethodGet, rec.Header().Get("Location"), http.NoBody))
+	if !strings.Contains(landed.Body.String(), "on its side") {
+		t.Errorf("the page the failure redirects to does not describe a failure:\n%s", landed.Body.String())
 	}
 }

@@ -94,7 +94,7 @@ func oidcLoginHandler(flow *oidc.Flow, logger *slog.Logger) gin.HandlerFunc {
 		state, serr := randomURLToken()
 		nonce, nerr := randomURLToken()
 		if serr != nil || nerr != nil {
-			AbortProblem(c, http.StatusInternalServerError, "internal error", "could not start login")
+			abortSSOServerFailure(c, logger, "generating login tokens", errors.Join(serr, nerr))
 			return
 		}
 		verifier := oidc.GenerateCodeVerifier()
@@ -103,8 +103,7 @@ func oidcLoginHandler(flow *oidc.Flow, logger *slog.Logger) gin.HandlerFunc {
 			State: state, Nonce: nonce, Verifier: verifier, Next: next,
 		}, oidc.StateCookieTTL)
 		if err != nil {
-			logger.Error("oidc: encoding state cookie", "error", err)
-			AbortProblem(c, http.StatusInternalServerError, "internal error", "could not start login")
+			abortSSOServerFailure(c, logger, "encoding state cookie", err)
 			return
 		}
 		c.SetSameSite(http.SameSiteLaxMode)
@@ -118,7 +117,8 @@ func oidcLoginHandler(flow *oidc.Flow, logger *slog.Logger) gin.HandlerFunc {
 // (issuer pin, audience, nonce, azp, clock skew, email_verified, tenant pin,
 // email-domain allowlist), resolves or JIT-provisions the user, mints the app's
 // _token session cookie, and redirects. Every terminal path is audited; a
-// verification failure is a 403 that never falls back to a default identity.
+// verification failure fails closed (see denyWithCause) and never falls back to
+// a default identity.
 func oidcCallbackHandler(deps oidcDeps) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		payload, ok := deps.readState(c)
@@ -159,12 +159,11 @@ func oidcCallbackHandler(deps oidcDeps) gin.HandlerFunc {
 		}
 		user, err := deps.resolveUser(c, identity)
 		if err != nil {
-			return // resolveUser already audited + wrote the 403
+			return // resolveUser already audited + answered the rejection
 		}
 		token, terr := auth.MintUserToken(deps.jwtSecret, deps.tokenTTL, *user)
 		if terr != nil {
-			deps.logger.Error("oidc: minting session token", "error", terr)
-			AbortProblem(c, http.StatusInternalServerError, "internal error", "could not mint session")
+			abortSSOServerFailure(c, deps.logger, "minting session token", terr)
 			return
 		}
 		setSessionCookie(c, token, deps.tokenTTL)
@@ -175,7 +174,7 @@ func oidcCallbackHandler(deps oidcDeps) gin.HandlerFunc {
 }
 
 // readState reads and verifies the signed state cookie. A missing or invalid
-// cookie is a 403 (CSRF/replay), audited.
+// cookie is a rejection (CSRF/replay), audited.
 func (d oidcDeps) readState(c *gin.Context) (oidc.StatePayload, bool) {
 	cookie, err := c.Request.Cookie(oidcStateCookie)
 	if err != nil || cookie.Value == "" {
@@ -195,8 +194,8 @@ func (d oidcDeps) readState(c *gin.Context) (oidc.StatePayload, bool) {
 
 // resolveUser turns a verified identity into a Leoflow user, applying the
 // group→role mapping (with the default_role fallback), the JIT policy, and
-// fail-closed role validation. On any rejection it audits and writes the 403,
-// returning errRejected so the caller stops.
+// fail-closed role validation. On any rejection it audits and answers through
+// denyWithCause, returning errRejected so the caller stops.
 func (d oidcDeps) resolveUser(c *gin.Context, id *oidc.VerifiedIdentity) (*auth.User, error) {
 	ctx := c.Request.Context()
 	loginRoles := oidc.ApplyDefaultRole(oidc.MapRoles(id.Groups, d.cfg.RoleMappings), d.cfg.DefaultRole)
@@ -236,7 +235,7 @@ func (d oidcDeps) resolveUser(c *gin.Context, id *oidc.VerifiedIdentity) (*auth.
 	case errors.Is(err, auth.ErrUserNotFound):
 		resolved, err = d.jitProvision(c, id, loginRoles)
 		if err != nil {
-			return nil, err // jitProvision already audited + wrote the 403
+			return nil, err // jitProvision already audited + answered the rejection
 		}
 	default:
 		d.logger.Error("oidc: resolving user", "error", err)
@@ -286,12 +285,13 @@ func (d oidcDeps) jitProvision(c *gin.Context, id *oidc.VerifiedIdentity, loginR
 	return &auth.User{ID: created.ID, TenantID: id.Tenant, Email: id.Email, Roles: loginRoles}, nil
 }
 
-// errRejected is a sentinel signaling that a helper already wrote the 403 and
-// audited; the caller must simply stop.
+// errRejected is a sentinel signaling that a helper already answered the
+// rejection and audited it; the caller must simply stop.
 var errRejected = errors.New("oidc: request already rejected")
 
-// rejectVerify maps a verification error to a 403, choosing the audit action so
-// tenant-pin rejections are distinguishable from other verification failures.
+// rejectVerify maps a verification error to a rejection, choosing the audit
+// action so tenant-pin rejections are distinguishable from other verification
+// failures.
 func (d oidcDeps) rejectVerify(c *gin.Context, err error) {
 	action := auditOIDCLoginFailure
 	if errors.Is(err, oidc.ErrTenantNotAllowed) || errors.Is(err, oidc.ErrEmailNotVerified) || errors.Is(err, oidc.ErrEmailDomainNotAllowed) {
@@ -348,8 +348,8 @@ func verifyReason(err error) string {
 }
 
 // deny audits a failed login (outcome "denied", with a non-secret reason) and
-// writes the 403. Every fail-closed path funnels through here so a rejection is
-// always both recorded and answered — never a silent fall-through.
+// answers it. Every fail-closed path funnels through here so a rejection is
+// always both recorded and answered, never a silent fall-through.
 func (d oidcDeps) deny(c *gin.Context, action, tenant, userID, email, reason string) {
 	d.denyWithCause(c, action, tenant, userID, email, reason, nil)
 }
@@ -384,7 +384,52 @@ func (d oidcDeps) denyWithCause(c *gin.Context, action, tenant, userID, email, r
 	if d.logger != nil {
 		d.logger.Warn("oidc: login denied", attrs...)
 	}
-	AbortProblem(c, http.StatusForbidden, "forbidden", "single sign-on was rejected")
+	// Both OIDC routes are reached only by a top-level browser navigation: the
+	// user clicks the sign-in control, or the IdP redirects them back. problem+json
+	// is the right answer to an API client and the wrong one to a browser, which
+	// renders it as a page of raw JSON with no way back to the sign-in page.
+	//
+	// The target carries no reason, only that one attempt failed. Withholding the
+	// cause from the browser is the whole posture of this path (it is the same
+	// information an attacker probing the deployment is after), and the cause is
+	// already in the audit row and the WARN above, which is where an operator
+	// reads it.
+	c.Redirect(http.StatusFound, loginPageWithSSOError)
+	c.Abort()
+}
+
+// loginPageWithSSOError is where a refused single sign-on sends the browser. The
+// marker carries no reason: it exists so the login page can say that sign-on
+// failed, rather than showing the same bare form the user was just redirected
+// away from, which reads as the click having done nothing.
+const loginPageWithSSOError = "/api/v2/auth/login?" + ssoErrorParam + "=" + ssoErrorRefused
+
+// The two sso_error markers. They carry no reason, only which of the two things
+// happened, because the words the page needs are different: a refusal is the
+// deployment saying no and needs an administrator, a failure is Leoflow breaking
+// and needs a retry. Telling a user to go find an administrator for a transient
+// mint error sends them somewhere no setting will help.
+const (
+	ssoErrorParam   = "sso_error"
+	ssoErrorRefused = "1"
+	ssoErrorServer  = "server"
+)
+
+// loginPageWithSSOServerFailure is where the three 500 paths on these routes send
+// the browser. They are browser-only routes, so problem+json reached the user as
+// a page of raw JSON; the mint failure is the worst of the three, being the tail
+// of a completely successful round trip through the IdP.
+const loginPageWithSSOServerFailure = "/api/v2/auth/login?" + ssoErrorParam + "=" + ssoErrorServer
+
+// abortSSOServerFailure logs the cause and returns the browser to the login page
+// saying Leoflow broke. The cause never reaches the browser, for the same reason
+// a denial's does not, and the log line is what an operator reads.
+func abortSSOServerFailure(c *gin.Context, logger *slog.Logger, what string, cause error) {
+	if logger != nil {
+		logger.Error("oidc: "+what, "error", cause)
+	}
+	c.Redirect(http.StatusFound, loginPageWithSSOServerFailure)
+	c.Abort()
 }
 
 // record audits an event using the request context.

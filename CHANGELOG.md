@@ -134,6 +134,40 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A refused single sign-on no longer answers the browser with raw JSON.** Every
+  fail-closed path wrote problem+json with 403. That is the right answer to an
+  API client and the wrong one to a browser, and both OIDC routes are reached
+  only by a top-level browser navigation: the user clicks the sign-in control, or
+  the identity provider redirects them back. So a denied login rendered a page of
+  JSON with no way back to the sign-in page, which is also where the retry lives.
+
+  The browser is now returned to the login page, which says that sign-on did not
+  complete and points at the person who can look up why. **The redirect carries
+  no reason.** Withholding the cause from the browser is the posture of this
+  whole path, since it is the same information someone probing the deployment is
+  after; the cause is in the audit row and, since the previous release, in a WARN
+  on the server log. The banner names an administrator rather than telling the
+  locked-out reader to go read the audit log, which under `provider: oidc` with
+  an empty `break_glass_emails` is behind the very session they do not have.
+
+  **The three 500 paths on the same two routes got the same treatment**, with
+  their own marker and their own words: generating the login tokens, sealing the
+  state cookie, and minting the session. The last is the worst of them, being the
+  tail of a completely successful round trip through the identity provider, and
+  it too ended in raw JSON. "We refused you" and "we broke" send a user to
+  different places, so the page says which happened: a refusal needs an
+  administrator, a failure needs a retry.
+
+  The tests changed shape with it. A denied login is a 302 now, so `302` alone no
+  longer means a login succeeded, and every assertion that read it that way would
+  have passed on a rejection. Success and denial are each asserted in one shared
+  place, and those two assertions are themselves tested: denial requires that no
+  session was minted, that the target is exactly the login page on this origin,
+  and that neither the body nor any response header carries the cause; success
+  requires a session cookie and a target that is not the bounce back to the login
+  page. The pair is also pinned as mutually exclusive, so one response can never
+  satisfy both.
+
 - **Every rejected SSO login now says why, in the logs.** Each fail-closed path
   recorded an audit row, wrote a 403, and logged nothing. The audit row is the
   record of truth, but it lives in a Postgres table reachable only through an API

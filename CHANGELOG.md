@@ -29,6 +29,14 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pin, a non-`https` issuer, and an `extraEnv` that hijacks `LEOFLOW_CONFIG`),
   because a chart error is visible to an Argo CD sync and `NOTES.txt` is not.
 
+  `auth.oidc.jitProvisioning` defaults to `true` in the chart, unlike the
+  server's own default, because `false` denies every first SSO login: a login is
+  matched by `(oidc_provider, oidc_subject)` and just-in-time provisioning is the
+  only path that ever writes those columns, so there is no account to match. The
+  tenant pin, `email_verified` and `allowedEmailDomains` still decide who may be
+  created, and a created row carries only the roles `roleMappings`/`defaultRole`
+  resolve, which is none by default.
+
   **What to change:** nothing, unless you want SSO. With `auth.oidc.enabled`
   false, the render is byte-identical to before. See
   `helm/leoflow/examples/values-oidc-google.yaml` for a Google Workspace setup

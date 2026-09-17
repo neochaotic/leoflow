@@ -374,8 +374,22 @@ GitOps sync never shows, since Argo CD does not render `NOTES.txt`:
 - an `extraEnv` entry setting `LEOFLOW_CONFIG` while SSO is on, which would repoint
   the server away from the mounted file and take the tenant pin with it.
 
+`auth.oidc.jitProvisioning` defaults to `true` here, unlike the server's own
+default, because `false` means no SSO login can succeed at all: a login is matched
+to a user by `(oidc_provider, oidc_subject)`, and just-in-time provisioning is the
+only code path that ever writes those two columns, so there is nothing to match
+and every first login is denied (audited `no_user_jit_off`) behind a generic 403.
+It is not a widening of who may log in: the tenant pin, `email_verified` and
+`allowedEmailDomains` decide that, and a JIT-created row carries only the roles
+`roleMappings`/`defaultRole` resolve, which is none by default. One address it
+cannot serve either way is one that already has a LOCAL password account in the
+same tenant: it collides on the users table's unique `(tenant, email)` and the
+login is denied `jit_failed`, so keep `breakGlassEmails` off the domain your
+users sign in with.
+
 Two more it only warns about, in `NOTES.txt`, because both are legitimate
-configurations that are almost always mistakes: an empty `breakGlassEmails` (SSO
+configurations that are almost always mistakes: `jitProvisioning: false` (no
+login can succeed), an empty `breakGlassEmails` (SSO
 becomes the only way in, so an IdP outage or one wrong `tenantClaims` key locks out
 everybody, including whoever has to fix it), and neither `roleMappings` nor
 `defaultRole` set (role resolution is default-deny, so logins succeed into a UI
@@ -452,7 +466,7 @@ differ from what's committed.
 | auth.oidc.existingSecret | string | `""` | Name of a Secret with key `oidcClientSecret` (takes precedence over `clientSecret`). Separate from `auth.existingSecret` on purpose: the JWT signing key and the IdP client secret rotate on different schedules and are usually owned by different people. Like every `existingSecret` in this chart it is outside the `checksum/secret` annotation's visibility, so rotating it needs a manual `kubectl rollout restart`. |
 | auth.oidc.groupsClaim | string | `"groups"` | ID-token claim carrying the user's IdP groups; its values are what `roleMappings` matches on. Entra emits `groups` (object ids unless the app registration is configured to emit names); Okta emits whatever the groups claim is named in the authorization server. |
 | auth.oidc.issuer | string | `""` | The IdP's issuer URL, `https://` only (the ID token's `iss` is pinned to it, a token from any other issuer is rejected). Entra: `https://login.microsoftonline.com/<tenant-id>/v2.0`. Google Workspace: `https://accounts.google.com`. Okta: `https://<org>.okta.com`. |
-| auth.oidc.jitProvisioning | bool | `false` | Create a user row on first successful OIDC login instead of requiring one to be pre-provisioned. OFF by default. With it on, the new user is granted the roles `roleMappings` resolves (or `defaultRole`), so turn it on only once one of those two actually grants something. |
+| auth.oidc.jitProvisioning | bool | `true` | Create the Leoflow user row on first successful OIDC login. ON here, unlike the server default, because OFF means no SSO login can succeed at all: a login resolves its user by `(provider, subject)` alone and the only code path that ever writes those two columns is this one, so there is no supported way to pre-provision an account an SSO login will match, and every first login is denied with a generic 403 whose reason (`no_user_jit_off`) reaches only the audit log. Turning it on is not a widening of who may log in: the tenant pin, `email_verified` and `allowedEmailDomains` decide that, and the created row carries only the roles `roleMappings`/`defaultRole` resolve, which is none by default. One case it cannot serve either way: an address that already has a LOCAL password account in the same tenant collides on the users table's unique (tenant, email) and is denied `jit_failed`, so do not create local accounts for the addresses your users sign in with. |
 | auth.oidc.redirectUrl | string | `""` | This server's callback URL as registered with the IdP; it must end in `/api/v2/auth/oidc/callback` and be reachable from the browser, not from inside the cluster. `https://` is required except on loopback hosts, so this is the ingress hostname, never the Service name. |
 | auth.oidc.roleMappings | object | `{}` | Maps an IdP group value → an existing Leoflow role name. Default-DENY: a group with no entry here grants nothing. This is one of the two keys that CANNOT travel as an env var, so the chart writes it into the mounted `config.yaml`. Keys are quoted on render, which is what lets a dotted group name (`app.admins`) survive (#826). Optional, leave empty and every user falls back to `defaultRole`. |
 | auth.oidc.scopes | list | `["openid","email","profile"]` | OAuth scopes requested at login. The shipped three are what the flow needs; add the IdP's groups scope (Okta `groups`, Entra exposes groups without one) when `roleMappings` is used, or the `groupsClaim` arrives empty and every user resolves to zero roles. Rendered comma-joined into one env var, viper's decode hook splits it back into a list, the same mechanism `config.trustedProxies` uses. |

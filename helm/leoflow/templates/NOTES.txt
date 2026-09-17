@@ -117,6 +117,16 @@ audit log that would have said why (every rejection is a generic 403). Add at
 least one address you control:
      --set auth.oidc.breakGlassEmails[0]=admin@example.com
 {{- end }}
+{{- if and .Values.auth.oidc.enabled (not .Values.auth.oidc.jitProvisioning) }}
+
+WARNING: auth.oidc.enabled with auth.oidc.jitProvisioning=false. No SSO login
+can succeed in this configuration. A login is matched to a user by the IdP's
+(provider, subject) pair, and the only code path that ever writes those two
+columns is the JIT one, so there is no account to match and every first login is
+denied with a generic 403 whose reason (no_user_jit_off) reaches only the audit
+log. Set auth.oidc.jitProvisioning=true (the chart default) unless you have
+linked the identities yourself in the database.
+{{- end }}
 {{- if and .Values.auth.oidc.enabled (not .Values.auth.oidc.roleMappings) (not .Values.auth.oidc.defaultRole) }}
 
 NOTE: auth.oidc has neither roleMappings nor defaultRole. Role resolution is

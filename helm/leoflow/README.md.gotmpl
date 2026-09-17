@@ -374,8 +374,22 @@ GitOps sync never shows, since Argo CD does not render `NOTES.txt`:
 - an `extraEnv` entry setting `LEOFLOW_CONFIG` while SSO is on, which would repoint
   the server away from the mounted file and take the tenant pin with it.
 
+`auth.oidc.jitProvisioning` defaults to `true` here, unlike the server's own
+default, because `false` means no SSO login can succeed at all: a login is matched
+to a user by `(oidc_provider, oidc_subject)`, and just-in-time provisioning is the
+only code path that ever writes those two columns, so there is nothing to match
+and every first login is denied (audited `no_user_jit_off`) behind a generic 403.
+It is not a widening of who may log in: the tenant pin, `email_verified` and
+`allowedEmailDomains` decide that, and a JIT-created row carries only the roles
+`roleMappings`/`defaultRole` resolve, which is none by default. One address it
+cannot serve either way is one that already has a LOCAL password account in the
+same tenant: it collides on the users table's unique `(tenant, email)` and the
+login is denied `jit_failed`, so keep `breakGlassEmails` off the domain your
+users sign in with.
+
 Two more it only warns about, in `NOTES.txt`, because both are legitimate
-configurations that are almost always mistakes: an empty `breakGlassEmails` (SSO
+configurations that are almost always mistakes: `jitProvisioning: false` (no
+login can succeed), an empty `breakGlassEmails` (SSO
 becomes the only way in, so an IdP outage or one wrong `tenantClaims` key locks out
 everybody, including whoever has to fix it), and neither `roleMappings` nor
 `defaultRole` set (role resolution is default-deny, so logins succeed into a UI

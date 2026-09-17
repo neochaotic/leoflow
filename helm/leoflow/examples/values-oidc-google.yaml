@@ -74,10 +74,21 @@ auth:
     # THE LOCK-OUT ESCAPE HATCH. With SSO on, every local password login is
     # rejected except the addresses listed here. Leave it empty and a Google
     # outage, an expired client secret, or one wrong key above locks out
-    # everybody, including whoever has to fix it. Use an address that already has
-    # an admin user row and a password set.
+    # everybody, including whoever has to fix it.
+    #
+    # The address must belong to an account that ALREADY EXISTS with a password:
+    # the list is an allowlist, not an account. On a fresh install the only such
+    # account is the bootstrap admin, whose address is admin@leoflow.local (the
+    # chart does not set LEOFLOW_BOOTSTRAP_EMAIL), created by the bootstrap
+    # password at the bottom of this file. Listing an address with no user row
+    # leaves the escape hatch pointing at nothing while looking configured.
+    #
+    # Keep it OFF the domain your users sign in with: an address that has a local
+    # password account cannot also be JIT-provisioned from Google. It collides on
+    # the users table's unique (tenant, email) and the SSO login is denied
+    # jit_failed.
     breakGlassEmails:
-      - "admin@example.com"
+      - "admin@leoflow.local"
 
     # Google emits no groups claim by default, so roleMappings would match nothing
     # and every user would resolve to zero roles, a successful login into a UI
@@ -85,11 +96,19 @@ auth:
     defaultRole: "viewer"
     roleMappings: {}
 
-    # Create the Leoflow user row on first login rather than pre-provisioning one
-    # per person. Safe here BECAUSE the two gates above are narrow: only a
-    # verified example.com Workspace account reaches this point, and it gets
-    # `viewer`, nothing more.
+    # Create the Leoflow user row on first login. There is no alternative today:
+    # a login is matched by (provider, subject) and nothing else writes those
+    # columns, so with this off every first SSO login is denied no_user_jit_off.
+    # Safe here BECAUSE the two gates above are narrow: only a verified
+    # example.com Workspace account reaches this point, and it gets `viewer`,
+    # nothing more.
     jitProvisioning: true
+
+# The break-glass account above has to exist before SSO becomes the only other
+# way in. On a first install this is what creates it, as admin@leoflow.local; on
+# an install that already has an admin, leave it empty.
+bootstrap:
+  password: "CHANGEME-break-glass-admin-password"
 
 # The redirectUrl above has to resolve from a browser, which means an Ingress (or
 # an equivalent LoadBalancer/Gateway in front of the Service) terminating TLS on

@@ -314,8 +314,8 @@ auth:
     allowedEmailDomains: []
     # -- Local password logins still accepted while SSO is on; every other password login is rejected. This is the lock-out escape hatch: with the list empty, an IdP outage or a wrong `tenantClaims` entry leaves nobody able to reach the UI, including the operator who has to fix it. Put at least one break-glass admin here before enabling SSO. Rendered comma-joined, omitted when empty.
     breakGlassEmails: []
-    # -- Create a user row on first successful OIDC login instead of requiring one to be pre-provisioned. OFF by default. With it on, the new user is granted the roles `roleMappings` resolves (or `defaultRole`), so turn it on only once one of those two actually grants something.
-    jitProvisioning: false
+    # -- Create the Leoflow user row on first successful OIDC login. ON here, unlike the server default, because OFF means no SSO login can succeed at all: a login resolves its user by `(provider, subject)` alone and the only code path that ever writes those two columns is this one, so there is no supported way to pre-provision an account an SSO login will match, and every first login is denied with a generic 403 whose reason (`no_user_jit_off`) reaches only the audit log. Turning it on is not a widening of who may log in: the tenant pin, `email_verified` and `allowedEmailDomains` decide that, and the created row carries only the roles `roleMappings`/`defaultRole` resolve, which is none by default. One case it cannot serve either way: an address that already has a LOCAL password account in the same tenant collides on the users table's unique (tenant, email) and is denied `jit_failed`, so do not create local accounts for the addresses your users sign in with.
+    jitProvisioning: true
     # -- Tolerance in seconds applied to the ID token's `exp`/`iat`/`nbf` checks, to absorb clock drift between the IdP and this server. The shipped 60 is the server's own default; raise it only if boot-time clock sync is genuinely unreliable, since it widens the window a replayed token stays valid.
     clockSkewSeconds: 60
 

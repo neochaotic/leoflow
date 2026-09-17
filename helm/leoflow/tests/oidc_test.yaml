@@ -140,6 +140,60 @@ tests:
             name: LEOFLOW_AUTH_OIDC_SCOPES
             value: openid,email,profile
 
+  # The flag that decides whether ANY login can complete. A login is matched to a
+  # user by (provider, subject), and JIT is the only code path that ever writes
+  # those two columns, so with it off there is no account to match and every first
+  # login is denied (audited no_user_jit_off) with a generic 403. The chart
+  # therefore ships it ON, unlike the server default, and pins the value here
+  # because a silent flip back to false takes SSO with it.
+  - it: enables JIT provisioning, without which no first login can succeed
+    template: deployment.yaml
+    set:
+      auth.oidc.enabled: true
+      auth.oidc.issuer: https://accounts.google.com
+      auth.oidc.clientId: cid.apps.googleusercontent.com
+      auth.oidc.redirectUrl: https://leoflow.example.com/api/v2/auth/oidc/callback
+      auth.oidc.tenantClaim: hd
+      auth.oidc.tenantClaims:
+        example.com: default
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_AUTH_OIDC_JIT_PROVISIONING
+            value: "true"
+
+  # The three optional list/scalar keys are OMITTED when empty rather than stamped
+  # with a blank, because each has a meaning at its zero value that the server
+  # already implements. Stamping "" would say nothing the default does not, and
+  # this is the assertion that keeps that decision from eroding.
+  - it: omits the optional keys instead of stamping them empty
+    template: deployment.yaml
+    set:
+      auth.oidc.enabled: true
+      auth.oidc.issuer: https://accounts.google.com
+      auth.oidc.clientId: cid.apps.googleusercontent.com
+      auth.oidc.redirectUrl: https://leoflow.example.com/api/v2/auth/oidc/callback
+      auth.oidc.tenantClaim: hd
+      auth.oidc.tenantClaims:
+        example.com: default
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_AUTH_OIDC_DEFAULT_ROLE
+            value: ""
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_AUTH_OIDC_ALLOWED_EMAIL_DOMAINS
+            value: ""
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_AUTH_OIDC_BREAK_GLASS_EMAILS
+            value: ""
+
   # Property 3. A ConfigMap is readable by anything with `get` on the namespace and
   # is not encrypted at rest, so the code-exchange credential takes the jwtSecret
   # route instead: the chart-managed Secret, delivered by secretKeyRef.
@@ -201,6 +255,29 @@ tests:
             valueFrom:
               secretKeyRef:
                 name: my-idp-secret
+                key: oidcClientSecret
+
+  # A public client using PKCE has no client secret, and validateOIDC does not
+  # require one. Rendering the secretKeyRef anyway would point at a Secret key
+  # nothing writes, and the pod would sit in CreateContainerConfigError.
+  - it: renders no client-secret reference for a public (PKCE-only) client
+    template: deployment.yaml
+    set:
+      auth.oidc.enabled: true
+      auth.oidc.issuer: https://accounts.google.com
+      auth.oidc.clientId: cid.apps.googleusercontent.com
+      auth.oidc.redirectUrl: https://leoflow.example.com/api/v2/auth/oidc/callback
+      auth.oidc.tenantClaim: hd
+      auth.oidc.tenantClaims:
+        example.com: default
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LEOFLOW_AUTH_OIDC_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: leoflow-secrets
                 key: oidcClientSecret
 
   # Property 4, and the whole reason these two keys need a file. viper's key

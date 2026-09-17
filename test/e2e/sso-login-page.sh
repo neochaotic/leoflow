@@ -10,8 +10,8 @@
 # SSL_CERT_FILE, which the Linux build of Go's crypto/x509 reads. Nothing here
 # touches the system trust store.
 #
-# Requirements: openssl, python3, node with playwright-core, a built
-# bin/leoflow-server, and a reachable dev Postgres.
+# Requirements: openssl, python3, node with playwright-core, the golang-migrate
+# CLI (`migrate`), a built bin/leoflow-server, and a reachable dev Postgres.
 #
 # Usage: test/e2e/sso-login-page.sh
 set -euo pipefail
@@ -128,6 +128,22 @@ auth:
     tenant_claims:
       "example.com": "default"
 CFGEOF
+
+# Migrate BEFORE either server boots. The server refuses to serve anything at all
+# against an unmigrated schema (it says so and exits), so without this the login
+# page is never served and the failure reads as a boot timeout. Doing it up front
+# also removes the race the two servers would otherwise run: both migrate the same
+# database at boot, and golang-migrate's advisory lock serializes them only if
+# both get that far.
+#
+# `leoflow db migrate` is NOT the tool here: it is hardcoded to the Lite dev
+# database (schema leoflow_dev). The server's own schema is owned by migrations/
+# and golang-migrate, the same way every k3d job in CI applies it.
+command -v migrate >/dev/null 2>&1 \
+  || { echo "FAIL: the golang-migrate CLI is not on PATH (go install -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate@latest)" >&2; exit 1; }
+log "Migrating $(echo "$DB" | sed 's#://[^@]*@#://#')"
+migrate -path "$ROOT/migrations" -database "$DB" up 2>&1 | tail -3 \
+  || { echo "FAIL: migrations did not apply" >&2; exit 1; }
 
 log "Booting the control plane WITH sso on :${SSO_PORT}"
 env LEOFLOW_UI_EDITION=pro \

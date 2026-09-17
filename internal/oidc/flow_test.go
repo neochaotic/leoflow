@@ -167,3 +167,53 @@ func TestExchange(t *testing.T) {
 		}
 	})
 }
+
+// TestAuthCodeURLSendsGoogleHostedDomain covers the account-picker problem a
+// Google Workspace deployment hits.
+//
+// Google's chooser lists every account signed in on that browser, work and
+// personal. Picking a personal one produces an ID token with no hd claim, which
+// the tenant pin rejects with the same generic 403 every other failure gets, so
+// the user is told nothing about which account to use and the picker looks the
+// same on the retry. Sending hd narrows the chooser to the domain up front.
+//
+// hd on the request is a hint and nothing else: Google's own documentation says
+// to verify the hd CLAIM on the returned token, which is what the tenant pin
+// already does. This must never be read as a reason to relax that check.
+func TestAuthCodeURLSendsGoogleHostedDomain(t *testing.T) {
+	f := newFakeIDP(t)
+
+	t.Run("tenant_claim hd with one domain: sent", func(t *testing.T) {
+		cfg := baseOIDCConfig(f)
+		cfg.TenantClaim = "hd"
+		cfg.TenantClaims = map[string]string{"corp.example": "default"}
+		q := authQuery(t, newTestFlow(t, cfg))
+		if got := q.Get("hd"); got != "corp.example" {
+			t.Errorf("hd = %q, want corp.example: without it the chooser offers personal accounts that the tenant pin then rejects with a 403 naming nothing", got)
+		}
+	})
+
+	t.Run("two domains: not sent, because neither one is the answer", func(t *testing.T) {
+		cfg := baseOIDCConfig(f)
+		cfg.TenantClaim = "hd"
+		cfg.TenantClaims = map[string]string{"a.example": "a", "b.example": "b"}
+		if got := authQuery(t, newTestFlow(t, cfg)).Get("hd"); got != "" {
+			t.Errorf("hd = %q: sending one of several accepted domains would lock out the users of the others", got)
+		}
+	})
+
+	t.Run("tenant_claim tid: not sent, hd is Google-only", func(t *testing.T) {
+		if got := authQuery(t, newTestFlow(t, baseOIDCConfig(f))).Get("hd"); got != "" {
+			t.Errorf("hd = %q on an Entra deployment, where the parameter means nothing", got)
+		}
+	})
+}
+
+func authQuery(t *testing.T, flow *Flow) url.Values {
+	t.Helper()
+	u, err := url.Parse(flow.AuthCodeURL("state", "nonce", GenerateCodeVerifier()))
+	if err != nil {
+		t.Fatalf("parse AuthCodeURL: %v", err)
+	}
+	return u.Query()
+}

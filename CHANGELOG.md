@@ -214,6 +214,21 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     middlebox, or an issuer that accepts the connection and goes silent. The
     underlying transport error is wrapped, not replaced, so the detail that
     separates them survives. The startup-probe budget gate counts the new bound.
+- **Google Workspace sign-in no longer offers accounts it will then reject.**
+  Google's account chooser lists every account signed in on the browser, work and
+  personal. A personal one produces a token with no `hd` claim, the tenant pin
+  refuses it, and the user gets the same generic 403 as every other failure with
+  nothing saying which account to use. The chooser then looks identical on the
+  retry.
+
+  With `tenant_claim: hd` and exactly one accepted domain, the authorization
+  redirect now carries Google's `hd` parameter and the chooser is narrowed to
+  that domain. With several accepted domains nothing is sent, because picking one
+  would lock out the users of the others.
+
+  It is a hint and not a boundary. Google's own documentation says to verify the
+  `hd` **claim** on the returned token, which is what the tenant pin already
+  does, and this must never be read as a reason to relax that check.
 
 - **OpenMetadata can catalogue leoflow again: `class_ref.module_path` is no
   longer null.** A field team reported that they could not integrate leoflow with

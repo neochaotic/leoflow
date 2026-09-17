@@ -266,6 +266,25 @@ func (r *Repository) TenantExists(ctx context.Context, name string) (bool, error
 	return true, nil
 }
 
+// LocalPasswordUserExists reports whether an address has a usable LOCAL password
+// login in the tenant: an active user row with a password hash.
+//
+// It backs the boot-time check on auth.oidc.break_glass_emails. An address on
+// that allowlist with no password row is an escape hatch that does not open: the
+// gate admits it and the credential lookup then fails like a wrong password.
+//
+// The hash matters, not just the row. A user created by OIDC just-in-time
+// provisioning has a NULL password_hash (the users_has_auth constraint permits
+// it because the OIDC subject is the other half), so the row can exist while no
+// password can ever verify against it.
+func (r *Repository) LocalPasswordUserExists(ctx context.Context, tenant, email string) (bool, error) {
+	n, err := r.q.CountLocalPasswordUser(ctx, queries.CountLocalPasswordUserParams{Name: tenant, Lower: email})
+	if err != nil {
+		return false, fmt.Errorf("checking local password login: %w", err)
+	}
+	return n > 0, nil
+}
+
 // RoleExists reports whether a role name exists for the tenant. The OIDC login
 // path uses it to fail closed on a misconfigured default_role before minting a
 // token for a returning user (the JIT path validates roles inside CreateOIDCUser).

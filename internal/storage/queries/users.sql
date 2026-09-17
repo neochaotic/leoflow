@@ -92,3 +92,18 @@ FROM user_roles ur
 JOIN role_permissions rp ON rp.role_id = ur.role_id
 JOIN permissions p ON p.id = rp.permission_id
 WHERE ur.user_id = $1;
+
+-- name: CountLocalPasswordUser :one
+-- Does this address have a usable LOCAL password login in the tenant? The boot
+-- check on auth.oidc.break_glass_emails asks it: an address on that allowlist
+-- with no password row is an escape hatch that does not open, which is worse
+-- than an empty allowlist because the operator believes they have one.
+--
+-- password_hash IS NOT NULL is the point, not merely that the row exists. A user
+-- created by OIDC just-in-time provisioning has a NULL password (the table's
+-- users_has_auth check permits it because the OIDC subject is the other half),
+-- so the row can exist while no password can ever be verified against it.
+SELECT COUNT(*)
+FROM users u
+JOIN tenants t ON t.id = u.tenant_id
+WHERE t.name = $1 AND lower(u.email) = lower($2) AND u.password_hash IS NOT NULL AND u.is_active;

@@ -573,6 +573,7 @@ func warnOIDCNames(ctx context.Context, ck oidcNameChecker, cfg *config.ServerCo
 type oidcNameChecker interface {
 	TenantExists(ctx context.Context, name string) (bool, error)
 	RoleExists(ctx context.Context, tenant, role string) (bool, error)
+	LocalPasswordUserExists(ctx context.Context, tenant, email string) (bool, error)
 }
 
 // oidcNameWarnings reports OIDC settings that name rows which do not exist.
@@ -607,7 +608,7 @@ func oidcNameWarnings(ctx context.Context, ck oidcNameChecker, c config.AuthSect
 		return nil
 	}
 	const tenantsKey = "auth.oidc.tenant_claims"
-	var out []configWarning
+	out := breakGlassAddressWarnings(ctx, ck, c.OIDC.BreakGlassEmails)
 	// Walked per distinct TENANT, not per claim value: several domains commonly
 	// map to the same tenant, and asking the same question once per domain is a
 	// repeated round trip on the boot path and a warning repeated until operators
@@ -641,6 +642,76 @@ func oidcNameWarnings(ctx context.Context, ck oidcNameChecker, c config.AuthSect
 	}
 	return out
 }
+
+// breakGlassAddressWarnings reports a break-glass allowlist whose addresses
+// cannot actually sign in.
+//
+// The empty-list warning says nobody can get in. A non-empty list looks safe and
+// is not. The gate admits the address (internal/api/auth_handler.go) and then
+// FindUserByLogin finds no row and answers the same "invalid credentials" a
+// wrong password gets, so the hatch does not open and nothing says why. That is
+// worse than the empty case, because the operator believes they have one.
+//
+// The only local password user that ever exists is the bootstrap admin, and only
+// when a bootstrap password was set at first install. Every other local user
+// comes from the admin-authenticated user API, which is exactly what cannot be
+// reached during a lock-out, so writing your own address into this list and
+// expecting it to work is the natural mistake.
+//
+// A row is not enough. A user created by OIDC provisioning has a NULL password
+// (the users_has_auth check permits it because the OIDC subject is the other
+// half), so the row can exist while no password can ever verify against it.
+//
+// The tenant is "default" and not a configured one: the login page sends no
+// tenant, and authTokenHandler defaults an empty one to "default", so that is
+// the only tenant a break-glass login can ever land in.
+//
+// One working address is enough to get back in, so this warns only when NONE of
+// them does, and then names all of them.
+func breakGlassAddressWarnings(ctx context.Context, ck oidcNameChecker, emails []string) []configWarning {
+	const key = "auth.oidc.break_glass_emails"
+	if len(emails) == 0 {
+		return nil // the empty case is oidcBreakGlassWarnings, with its own message
+	}
+	var failures []string
+	for _, raw := range emails {
+		email := strings.ToLower(strings.TrimSpace(raw))
+		if email == "" {
+			continue
+		}
+		ok, err := ck.LocalPasswordUserExists(ctx, breakGlassTenant, email)
+		if err != nil {
+			return []configWarning{{
+				Msg: "could not check whether the addresses in " + key + " have a local password login: " + err.Error() +
+					". An address listed there with no password row is an escape hatch that does not open, so this is " +
+					"worth re-running by hand",
+				Key:   key,
+				Value: email,
+			}}
+		}
+		if ok {
+			return nil
+		}
+		failures = append(failures, email)
+	}
+	if len(failures) == 0 {
+		return nil
+	}
+	return []configWarning{{
+		Msg: key + " lists " + quotedList(failures) + ", and none of them has a local password login in the " +
+			quoted(breakGlassTenant) + " tenant, so none of them can sign in. The allowlist admits the address and " +
+			"the credential store then answers the same " + quoted("invalid credentials") + " a wrong password gets. " +
+			"A user provisioned through single sign-on does not count: it has no password for anything to verify " +
+			"against. Create the local account BEFORE you need it, while an admin session still exists",
+		Key:        key,
+		Value:      strings.Join(failures, ","),
+		MissingKey: key,
+	}}
+}
+
+// breakGlassTenant is the tenant a break-glass login always lands in: the login
+// page sends no tenant and authTokenHandler defaults an empty one to this.
+const breakGlassTenant = "default"
 
 // missingRoleWarnings reports the role names configured for one existing tenant
 // that the tenant does not have.

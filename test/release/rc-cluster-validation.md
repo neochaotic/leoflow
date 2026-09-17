@@ -131,7 +131,7 @@ forward across RCs. Deleting a §3b row is a decision, not a refresh.
 ✔ = also unit/e2e-verified; ★ = **only a real cluster proves it well**.
 
 Refreshed from `[Unreleased]`. The previous tranche's rows are gone by design,
-with one exception recorded at the end of this section: rows that were never
+with one exception, noted below and carried into §3b: rows that were never
 measured do not get to disappear just because the release they belonged to
 shipped.
 
@@ -144,7 +144,7 @@ value and read it nowhere. None of them produce a red signal on their own, which
 is why most rows below are about what an operator can *see*, not about whether
 the code runs.
 
-| # | What it proves | How to run it, and what decides it | |
+| # | What it proves | How to run it, and what decides it | ★/✔ |
 |---|---|---|---|
 | 1 | Boot survives a cache it cannot sync (#1083) | Remove `list`/`watch` on pods from the control plane's Role, in `executor.taskNamespace`. **Decides:** the pod reaches Ready, `/readyz` **answers** (503 or 200, never connection refused), the warn line names the namespace and the budget, and `restartCount` stays 0 across five minutes. Pre-fix it climbed by one every ~70s. | ★ |
 | 2 | The same failure under a CNI that enforces (#1083) | The trigger the local gates structurally cannot produce: kindnet accepts NetworkPolicy and ignores it. On EKS with the VPC CNI policy agent **actually enabled** (assert the agent is running first, or this passes vacuously), set `networkPolicy.egress` to Postgres and Redis only, omitting 443 to the apiserver. **Decides:** same as row 1. | ★ |
@@ -152,31 +152,55 @@ the code runs.
 | 4 | An unsatisfiable SSO config fails boot, by name (#1143) | Set `auth.provider: oidc` with issuer, client id and redirect URL but **no** `tenant_claim`. **Decides:** boot fails with a message naming `auth.oidc.tenant_claim` and `auth.oidc.tenant_claims`, and saying the map loads only from the YAML file named by `LEOFLOW_CONFIG`. A green boot here is the bug: it then rejects 100% of logins with a generic 403 whose cause reaches only the audit log, which in an SSO-only deployment nobody can log in to read. | ★ |
 | 5 | A deployment with no source of roles says so (#1143) | Pin the tenant correctly, leave `role_mappings` and `default_role` empty. **Decides:** the boot WARN appears. Then the consequence it warns about, which needs a real IdP: a **pre-provisioned** user's existing role grants are cleared by their own first SSO login, because roles are IdP-authoritative. Run this against a throwaway user. | ★ |
 | 6 | The migration Job goes where the control plane goes (#1056) | Taint a node so only the control plane's `nodeSelector`/`tolerations` can land on it, then `helm upgrade`. **Decides:** the migrate pod is scheduled, not Pending. Pre-fix it ignored placement entirely and could land anywhere, or nowhere. | ★ |
-| 7 | A database outage reads as an outage (#1087, #1071) | Break the DB mid-run. **Decides:** the API answers 503 naming the dependency, never 401 or 400, and the task pod's error carries an operation name and no SQLSTATE. Check the served `failure_reason` for that attempt too, which is the second-order path. | ★ |
+| 7 | A database outage reads as an outage, not the caller's fault (#1087, #1071) | Break the DB mid-run. **Decides, for an authenticated request (#1087):** the API answers 503, detail `authentication temporarily unavailable`, never 401, and the driver detail reaches only the server log, never the response body (the body is fixed text; do not expect it to name Postgres). Same for `POST /api/v2/auth/token/renew`. **Decides, for a `ti_summaries`-style read under a genuine outage (#1071):** the response is 500, not 499; then cancel the client connection mid-request against a healthy DB and confirm that case still reports 499, so the fix did not just move the misclassification the other way. (The task pod's own error surface, no SQLSTATE reaching the caller, is #1068, already cluster-validated and closed; it is not part of this tranche and does not need re-proving here.) | ★ |
 | 8 | `clear` re-runs the image that produced the attempt (#1138, BREAKING) | Push a new DAG version, then clear a task from an **older** run without `run_on_latest_version`. **Decides:** the dispatched pod runs the OLD image. Then send `run_on_latest_version: true` and confirm it runs the new one. The UI's checkbox should now appear, since `bundle_version` is populated on both payloads. | ★ |
 | 9 | An unflagged `clear` cannot destroy state (#1149) | `POST .../clearTaskInstances -d '{"dag_run_id":"r"}'` with no other flags. **Decides:** the response is a preview, nothing is cleared, and the affected set contains no task instance in a `success` state. Then confirm all three UI clear dialogs still execute, since they send both flags explicitly. | ✔ |
 | 10 | The chart's CORS key reaches the server, and `*` is refused (#1144) | `helm template` with `config.cors.allowedOrigins: ["*"]`. **Decides:** the render **fails** with a message naming `extraEnv` as the deliberate route. With real origins, confirm `LEOFLOW_SERVER_CORS_ALLOWED_ORIGINS` is present in the pod and the server honours it. | ✔ |
 | 11 | A dbt-only DAG keeps its declared secrets (#997) | Run a dbt DAG that declares `connections:` and `variables:` on the cluster. **Decides:** the task receives them. Pre-fix a dbt-only DAG dropped its own declarations. | ★ |
-| 12 | Nothing secret ships in a DAG image (#995, #1013, #1064) | On the RC image, by hand: no `=<version>` file in the workdir, no `.user.yml`, no `logs/dbt.log` carrying a build-host path. Also confirm a declared version floor is honoured by building against a base that carries an older version. | ✔ |
+| 12 | The DAG-image build pipeline still ships nothing secret (#1062, #1081, #1114) | This tranche changed the Dockerfile/`.dockerignore` generation itself (`include_paths`, `exclude_paths` negation handling, dbt folder grouping); this is the regression check that none of those reopened #995/#1013/#1064, which are closed and were already cluster-validated as passing on the v0.4.6 RC. On the RC image, by hand: no `=<version>` file in the workdir, no `.user.yml`, no `logs/dbt.log` carrying a build-host path, and a declared version floor is honoured against an older base. | ✔ |
 
 **Process notes, both of which have cost a cut before.**
 
-Build the RC image from the commit under test (#1019). Rows 1, 3, 4, 5 and 9 say
-nothing at all about an image built from anything else.
+Build the RC image from the commit under test (#1019). Rows 1, 2, 3, 4, 5, 8 and
+9 say nothing at all about an image built from anything else.
 
 `#1079` is a known flake and has already reddened an unrelated PR. A rerun is a
 rerun, not a signal.
 
-**Carried forward from the v0.4.6 tranche, unmeasured.** Rows 2, 3 and 6 of that
-tranche were never proven on a cloud CNI or against a real admission controller
-(`#1089`). Row 2 there is a statement about **security posture**: if it is false,
-the documentation needs correcting whether or not a release is in flight. Those
-rows are not restated here, because `#1089` holds them; they are named so that
-replacing this section does not quietly retire work that was never done.
+Three rows of the v0.4.6 tranche were never measured on a cloud CNI or a real
+admission controller (`#1089`) and do not get to disappear just because the
+release they belonged to shipped. Unlike this tranche's rows, they name an issue
+that is still open, which is what earns a row the carry-forward below instead of
+retirement; see §3b.
 
 ### §3b — standing assertions (carry forward until the issue closes)
 
-- **#800 zero-declaration blind spot** — the row above validates the population
+**Carried from the v0.4.6 tranche, pending #1089** (never proven on a cloud CNI
+or a real admission controller; not standing by original design, but they earn
+the same carry-forward treatment for as long as #1089 stays open):
+
+- **#958 `allowMetadataEgress` really is one host, on a CNI that enforces.**
+  This is a **security posture claim**: if it is false, the documentation needs
+  correcting whether or not a release is in flight. On EKS with the VPC CNI
+  network-policy agent **enabled** (assert the agent is running first, or this
+  passes vacuously), set `allowMetadataEgress: [169.254.170.23/32]`. **PASS:**
+  from a task pod, `169.254.170.23` answers and `169.254.169.254` times out.
+  Repeat on GKE Dataplane V2 and Calico; this is the path CNIs diverge on.
+  Retire this row when #1089 closes.
+- **#1067 the metrics port under a CNI that enforces ✔ (kind+Calico only).**
+  `pro-netpol-rwx.sh` already asserts `:9090` with `ingressFrom` narrowed on
+  kind+Calico. **PASS on a cloud cluster:** the same holds under EKS's VPC CNI,
+  and a real Prometheus in another namespace can scrape it. Retire this row when
+  #1089 closes.
+- **#947 the rendered HPA is admitted ✔ (kind dry-run only).** kind dry-runs the
+  rendered HPA already. **PASS on a cloud cluster:** no admission webhook
+  (OPA/Kyverno/Gatekeeper) rejects or mutates it, and `HPAScaleToZero` is
+  confirmed off on the cluster's Kubernetes version; the `min<1` refusal
+  assumes it. Retire this row when #1089 closes.
+
+**Standing checks (no expiry):**
+
+- **#800 zero-declaration blind spot.** The #722 row below validates the population
   that *does* warn, so a green RC has been certifying past the one that does not.
   With `secretScoping=permissive` (default), run a DAG declaring **no** variables
   and **no** connections against a tenant that has several connections defined.

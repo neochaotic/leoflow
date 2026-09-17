@@ -140,7 +140,9 @@ type ClearTaskInstancesRequest struct {
 	IncludeUpstream   *bool `json:"include_upstream,omitempty"`
 
 	// OnlyFailed Restrict the clear to task instances in a failed state, matching Apache Airflow. false widens it to every task instance named by the request, including ones that succeeded.
-	OnlyFailed  *bool `json:"only_failed,omitempty"`
+	OnlyFailed *bool `json:"only_failed,omitempty"`
+
+	// OnlyRunning Not supported. Sending true is refused with 400. leoflow has no path that clears a running task instance (Apache Airflow sets it to RESTARTING and kills it), and honoring the only_failed=false that Airflow requires alongside it would widen the clear to every task instance named by the request, including ones that succeeded.
 	OnlyRunning *bool `json:"only_running,omitempty"`
 
 	// ResetDagRuns Re-open the run so the scheduler looks at it again. Without it a terminal run stays terminal and the cleared task instance is never scheduled.

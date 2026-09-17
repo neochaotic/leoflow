@@ -122,6 +122,15 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   clear to failed task instances. Both explicit values still win, so
   `"dry_run": false` executes and `"only_failed": false` widens exactly as before.
 
+  **`only_running` is now refused with 400 instead of being ignored.** It was
+  declared in the request and in the spec and read by no code. That was harmless
+  while `only_failed` defaulted to false, and stops being harmless now: Airflow
+  rejects both flags being true and defaults `only_failed` to true, so
+  `{"only_failed": false, "only_running": true}` is the only way to ask Airflow
+  for the narrowest possible clear. Read here with `only_running` discarded, that
+  same body meant the widest one. leoflow has no path that clears a running task
+  instance, so it says so.
+
   **What to change:** an API client that relied on an unflagged call executing
   must send `"dry_run": false`, and one that relied on clearing successful task
   instances must send `"only_failed": false`. The embedded UI is unaffected: all

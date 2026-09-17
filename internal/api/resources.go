@@ -661,6 +661,27 @@ func clearTaskInstancesHandler(repo TaskInstanceRepository, runs DagRunRepositor
 			AbortProblem(c, http.StatusBadRequest, "bad request", err.Error())
 			return
 		}
+		// only_running is declared here and in the spec and is read by nothing, so
+		// it has always been accepted and discarded. Refuse it rather than keep
+		// discarding it, because the default change below makes silence dangerous:
+		// Airflow rejects only_failed and only_running both true and defaults
+		// only_failed to true, so `{"only_failed": false, "only_running": true}` is
+		// the ONLY way to ask Airflow for "clear the running ones". Read here with
+		// only_running dropped, that same body means "clear every task instance
+		// named, successes included" - the narrowest request in the compatibility
+		// target becoming the widest one here.
+		//
+		// Refusing is honest. Implementing it is a feature: Airflow sets RESTARTING
+		// and kills the running task, so it needs a running-only reset and pod
+		// termination, not a predicate change.
+		if body.OnlyRunning != nil && *body.OnlyRunning {
+			AbortProblem(c, http.StatusBadRequest, "bad request",
+				"only_running is not supported: leoflow cannot clear a running task instance. "+
+					"Airflow's equivalent sets the task to RESTARTING and kills it; this server has no such path, "+
+					"and honoring only_failed=false alone would clear every task instance named by the request, "+
+					"including ones that succeeded. Wait for the task to settle, or name the task instances explicitly.")
+			return
+		}
 		// Airflow 3.2.1 declares only_failed=True and dry_run=True on
 		// ClearTaskInstancesBody. leoflow defaulted both the other way, so the same
 		// unflagged request that previews on Airflow executed here, over every named

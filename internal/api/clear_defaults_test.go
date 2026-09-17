@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,4 +146,37 @@ func TestClearTaskInstancesExplicitFlagsStillWin(t *testing.T) {
 			t.Errorf("affected set = %d %v, want both the failed and the successful task", got.TotalEntries, got.TaskInstances)
 		}
 	})
+}
+
+// TestClearTaskInstancesRejectsOnlyRunning closes a hazard this change sharpens.
+//
+// only_running is declared in the request struct and in the spec and is read by
+// no code, so it has always been accepted and discarded. That was noise while
+// only_failed defaulted to false. It stops being noise now.
+//
+// In Airflow the model validator rejects only_failed and only_running both true,
+// and only_failed defaults true, so the ONLY way to express "clear the running
+// ones" is `{"only_failed": false, "only_running": true}`. leoflow reads that
+// exact body as onlyFailed=false with only_running discarded, which means "clear
+// every task instance named by the request, successes included". The Airflow
+// idiom for the narrowest possible clear would become leoflow's widest one.
+//
+// Refusing is honest and cheap. Implementing it is a feature: it needs a
+// running-only reset and pod termination, because Airflow sets RESTARTING and
+// kills the running task.
+func TestClearTaskInstancesRejectsOnlyRunning(t *testing.T) {
+	srv, tasks := clearDefaultsServer(t)
+
+	rec := authGet(srv, http.MethodPost, "/api/v2/dags/etl/clearTaskInstances",
+		`{"dag_run_id":"r1","only_failed":false,"only_running":true,"dry_run":false}`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("only_running=true = %d, want 400; silently ignoring it turns Airflow's narrowest clear into the widest one (body: %s)", rec.Code, rec.Body.String())
+	}
+	if tasks.clearCalled {
+		t.Error("the clear executed anyway; a refused request must not touch state")
+	}
+	if !strings.Contains(rec.Body.String(), "only_running") {
+		t.Errorf("the refusal does not name only_running, so a caller cannot tell which field it was: %s", rec.Body.String())
+	}
 }

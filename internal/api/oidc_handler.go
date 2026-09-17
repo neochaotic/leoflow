@@ -384,8 +384,25 @@ func (d oidcDeps) denyWithCause(c *gin.Context, action, tenant, userID, email, r
 	if d.logger != nil {
 		d.logger.Warn("oidc: login denied", attrs...)
 	}
-	AbortProblem(c, http.StatusForbidden, "forbidden", "single sign-on was rejected")
+	// Both OIDC routes are reached only by a top-level browser navigation: the
+	// user clicks the sign-in control, or the IdP redirects them back. problem+json
+	// is the right answer to an API client and the wrong one to a browser, which
+	// renders it as a page of raw JSON with no way back to the sign-in page.
+	//
+	// The target carries no reason, only that one attempt failed. Withholding the
+	// cause from the browser is the whole posture of this path (it is the same
+	// information an attacker probing the deployment is after), and the cause is
+	// already in the audit row and the WARN above, which is where an operator
+	// reads it.
+	c.Redirect(http.StatusFound, loginPageWithSSOError)
+	c.Abort()
 }
+
+// loginPageWithSSOError is where a refused single sign-on sends the browser. The
+// marker carries no reason: it exists so the login page can say that sign-on
+// failed, rather than showing the same bare form the user was just redirected
+// away from, which reads as the click having done nothing.
+const loginPageWithSSOError = "/api/v2/auth/login?sso_error=1"
 
 // record audits an event using the request context.
 func (d oidcDeps) record(c *gin.Context, action, tenant, userID, email, outcome string, extra map[string]string) {

@@ -315,8 +315,15 @@ func startLogin(t *testing.T, srv *gin.Engine) loginState {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v2/auth/oidc/login?next=/dags", http.NoBody)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
+	// Not assertLoginSucceeded: this is the START of the flow, a redirect OUT to
+	// the IdP, so there is no session yet. What has to hold here is that it is a
+	// redirect and that it is not the bounce back to the login page a refused
+	// login now produces.
 	if rec.Code != http.StatusFound {
-		t.Fatalf("login = %d, want 302", rec.Code)
+		t.Fatalf("login = %d, want a %d redirect to the IdP", rec.Code, http.StatusFound)
+	}
+	if strings.Contains(rec.Header().Get("Location"), "sso_error") {
+		t.Fatalf("the login route refused before reaching the IdP: %q", rec.Header().Get("Location"))
 	}
 	loc, err := url.Parse(rec.Header().Get("Location"))
 	if err != nil {
@@ -421,9 +428,7 @@ func TestOIDCHappyPathResolvesUserAndMintsSession(t *testing.T) {
 
 	rec := driveCallback(t, srv, f, cfg, nil)
 
-	if rec.Code != http.StatusFound {
-		t.Fatalf("callback = %d, want 302", rec.Code)
-	}
+	assertLoginSucceeded(t, rec, "callback")
 	if loc := rec.Header().Get("Location"); loc != "/dags" {
 		t.Errorf("redirect = %q, want /dags (sanitized next)", loc)
 	}
@@ -458,12 +463,9 @@ func TestOIDCReturningUserTenantMismatchRejected(t *testing.T) {
 
 	rec := driveCallback(t, srv, f, cfg, nil)
 
-	if rec.Code == http.StatusFound {
-		t.Fatal("callback minted a session for a tenant-mismatched returning user; want rejection")
-	}
-	if sessionCookie(rec) != nil {
-		t.Error("no session cookie must be set on tenant mismatch")
-	}
+	// This read a bare 302 as "a session was minted". A refused login is a 302
+	// too now, so the inference no longer holds and the helper states the shape.
+	assertLoginDenied(t, rec, "tenant-mismatched returning user")
 	if !audit.hasReason(auditOIDCLoginFailure, "tenant_mismatch") {
 		t.Error("tenant mismatch was not audited with reason=tenant_mismatch")
 	}
@@ -512,9 +514,7 @@ func TestOIDCTenantPinFailsClosed(t *testing.T) {
 
 			rec := driveCallback(t, srv, f, cfg, tc.mutate)
 
-			if rec.Code != http.StatusForbidden {
-				t.Fatalf("%s = %d, want 403 (fail closed)", tc.name, rec.Code)
-			}
+			assertLoginDenied(t, rec, tc.name)
 			if sessionCookie(rec) != nil {
 				t.Error("a rejected login must NOT mint a session cookie")
 			}
@@ -561,9 +561,7 @@ func TestOIDCTokenVerificationFailsClosed(t *testing.T) {
 
 			rec := driveCallback(t, srv, f, cfg, tc.mutate)
 
-			if rec.Code != http.StatusForbidden {
-				t.Fatalf("%s = %d, want 403", tc.name, rec.Code)
-			}
+			assertLoginDenied(t, rec, tc.name)
 			if sessionCookie(rec) != nil {
 				t.Errorf("%s: a rejected token must NOT mint a session", tc.name)
 			}
@@ -591,9 +589,7 @@ func TestOIDCTamperedSignatureRejected(t *testing.T) {
 	parts[2] = string(sig)
 	rec := completeCallback(srv, f, st, strings.Join(parts, "."))
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("tampered signature = %d, want 403", rec.Code)
-	}
+	assertLoginDenied(t, rec, "tampered signature")
 	if sessionCookie(rec) != nil {
 		t.Error("a tampered token must NOT mint a session")
 	}
@@ -625,9 +621,7 @@ func TestOIDCCallbackRejectsMissingStateCookie(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v2/auth/oidc/callback?code=x&state=y", http.NoBody)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("missing state cookie = %d, want 403", rec.Code)
-	}
+	assertLoginDenied(t, rec, "missing state cookie")
 }
 
 func TestOIDCCallbackRejectsStateMismatch(t *testing.T) {
@@ -641,9 +635,7 @@ func TestOIDCCallbackRejectsStateMismatch(t *testing.T) {
 	req.AddCookie(st.cookie)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("state mismatch = %d, want 403", rec.Code)
-	}
+	assertLoginDenied(t, rec, "state mismatch")
 }
 
 func TestOIDCCallbackRejectsIssParamMismatch(t *testing.T) {
@@ -657,9 +649,7 @@ func TestOIDCCallbackRejectsIssParamMismatch(t *testing.T) {
 	req.AddCookie(st.cookie)
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("RFC 9207 iss mismatch = %d, want 403", rec.Code)
-	}
+	assertLoginDenied(t, rec, "RFC 9207 iss mismatch")
 }
 
 // ─────────────────────────── D4: JIT provisioning ───────────────────────────
@@ -673,9 +663,7 @@ func TestOIDCJITOffRejectsUnknownSubject(t *testing.T) {
 
 	rec := driveCallback(t, srv, f, cfg, nil)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("JIT-off unknown subject = %d, want 403", rec.Code)
-	}
+	assertLoginDenied(t, rec, "JIT-off unknown subject")
 	if len(store.created) != 0 {
 		t.Error("JIT off must not create a user")
 	}
@@ -691,9 +679,7 @@ func TestOIDCJITOnCreatesUserWithMappedRoles(t *testing.T) {
 
 	rec := driveCallback(t, srv, f, cfg, nil)
 
-	if rec.Code != http.StatusFound {
-		t.Fatalf("JIT-on = %d, want 302", rec.Code)
-	}
+	assertLoginSucceeded(t, rec, "JIT-on")
 	if len(store.created) != 1 {
 		t.Fatalf("JIT on created %d users, want 1", len(store.created))
 	}
@@ -719,9 +705,7 @@ func TestOIDCUnmappedGroupGrantsNoRole(t *testing.T) {
 	srv := oidcServer(t, f, cfg, store, &fakeAuthAudit{}, nil)
 
 	rec := driveCallback(t, srv, f, cfg, func(c jwt.MapClaims) { c["groups"] = []string{"unmapped-group"} })
-	if rec.Code != http.StatusFound {
-		t.Fatalf("unmapped-group login = %d, want 302", rec.Code)
-	}
+	assertLoginSucceeded(t, rec, "unmapped-group login")
 	if len(store.created) != 1 || len(store.created[0].roles) != 0 {
 		t.Errorf("unmapped group should grant no role (default-deny); created = %+v", store.created)
 	}
@@ -736,9 +720,7 @@ func TestOIDCDefaultRoleFallback(t *testing.T) {
 	srv := oidcServer(t, f, cfg, store, &fakeAuthAudit{}, nil)
 
 	rec := driveCallback(t, srv, f, cfg, func(c jwt.MapClaims) { c["groups"] = []string{"unmapped-group"} })
-	if rec.Code != http.StatusFound {
-		t.Fatalf("default_role login = %d, want 302", rec.Code)
-	}
+	assertLoginSucceeded(t, rec, "default_role login")
 	if len(store.created) != 1 || len(store.created[0].roles) != 1 || store.created[0].roles[0] != "viewer" {
 		t.Errorf("unmapped + default_role=viewer should grant [viewer]; created = %+v", store.created)
 	}
@@ -768,9 +750,7 @@ func TestOIDCDefaultRoleNonexistentRejected(t *testing.T) {
 	srv := oidcServer(t, f, cfg, store, audit, nil)
 
 	rec := driveCallback(t, srv, f, cfg, func(c jwt.MapClaims) { c["groups"] = []string{"unmapped-group"} })
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("nonexistent default_role = %d, want 403 (fail closed)", rec.Code)
-	}
+	assertLoginDenied(t, rec, "nonexistent default_role")
 	if len(store.created) != 0 {
 		t.Error("a login with an unknown default_role must not create a user")
 	}
@@ -805,9 +785,7 @@ func TestOIDCEmailDomainAllowlist(t *testing.T) {
 		store := seededUser(cfg)
 		srv := oidcServer(t, f, cfg, store, &fakeAuthAudit{}, nil)
 		rec := driveCallback(t, srv, f, cfg, nil) // email alice@corp.example
-		if rec.Code != http.StatusForbidden {
-			t.Fatalf("out-of-allowlist pre-existing user = %d, want 403", rec.Code)
-		}
+		assertLoginDenied(t, rec, "out-of-allowlist pre-existing user")
 		if sessionCookie(rec) != nil {
 			t.Error("out-of-allowlist login must not mint a session")
 		}
@@ -821,9 +799,7 @@ func TestOIDCEmailDomainAllowlist(t *testing.T) {
 		store := newFakeOIDCStore()
 		srv := oidcServer(t, f, cfg, store, &fakeAuthAudit{}, nil)
 		rec := driveCallback(t, srv, f, cfg, nil)
-		if rec.Code != http.StatusForbidden {
-			t.Fatalf("out-of-allowlist JIT = %d, want 403", rec.Code)
-		}
+		assertLoginDenied(t, rec, "out-of-allowlist JIT")
 		if len(store.created) != 0 {
 			t.Error("out-of-allowlist login must not provision a user")
 		}
@@ -844,8 +820,65 @@ func TestOIDCEmailDomainAllowlist(t *testing.T) {
 		cfg.AllowedEmailDomains = []string{"corp.example"} // domain WOULD pass
 		srv := oidcServer(t, f, cfg, seededUser(cfg), &fakeAuthAudit{}, nil)
 		rec := driveCallback(t, srv, f, cfg, func(c jwt.MapClaims) { c["email_verified"] = false })
-		if rec.Code != http.StatusForbidden {
-			t.Fatalf("unverified email = %d, want 403 (fails at email_verified, before the domain check)", rec.Code)
-		}
+		assertLoginDenied(t, rec, "unverified email fails at email_verified, before the domain check")
 	})
+}
+
+// assertLoginDenied is the one place that states what a refused single sign-on
+// looks like on the wire, so all eleven fail-closed cases assert the same shape
+// instead of each checking a status code and nothing else.
+//
+// The shape is a redirect to the login page, not problem+json. Both OIDC routes
+// are reached only by a top-level browser navigation, so JSON reached the user
+// as a page of raw text with no way back. What has to hold in every case:
+//
+//   - no session is minted. This is the security property; the rest is UX.
+//   - the browser is sent to the login page, and to this origin. A deny that
+//     could be steered off-origin would be an open redirect on the one path
+//     that runs before anything is authenticated.
+//   - the response body carries no reason. The cause goes to the audit row and
+//     the server log; telling the browser why a login was refused tells whoever
+//     is probing the deployment the same thing.
+func assertLoginDenied(t *testing.T, rec *httptest.ResponseRecorder, what string) {
+	t.Helper()
+	if rec.Code != http.StatusFound {
+		t.Fatalf("%s = %d, want a %d redirect back to the login page", what, rec.Code, http.StatusFound)
+	}
+	loc := rec.Header().Get("Location")
+	if loc != "/api/v2/auth/login?sso_error=1" {
+		t.Errorf("%s redirected to %q, want the login page carrying the failure marker", what, loc)
+	}
+	if !strings.HasPrefix(loc, "/") || strings.HasPrefix(loc, "//") {
+		t.Errorf("%s redirected off-origin (%q): a deny runs before anything is authenticated", what, loc)
+	}
+	if sessionCookie(rec) != nil {
+		t.Errorf("%s minted a session", what)
+	}
+	for _, leak := range []string{"reason", "tenant", "token", "role", "subject"} {
+		if strings.Contains(strings.ToLower(rec.Body.String()), leak) {
+			t.Errorf("%s leaked %q to the browser; the cause belongs in the audit row and the log:\n%s", what, leak, rec.Body.String())
+		}
+	}
+}
+
+// assertLoginSucceeded is the counterpart to assertLoginDenied, and it exists
+// because of it.
+//
+// A denied single sign-on now answers 302 as well, so `rec.Code ==
+// http.StatusFound` no longer means the login worked: every assertion that read
+// a 302 as success would pass on a rejection. This states what success actually
+// is, in the same place, so the two can never drift back together: a session
+// cookie was minted, and the browser was sent somewhere other than back to the
+// login page.
+func assertLoginSucceeded(t *testing.T, rec *httptest.ResponseRecorder, what string) {
+	t.Helper()
+	if rec.Code != http.StatusFound {
+		t.Fatalf("%s = %d, want a %d redirect", what, rec.Code, http.StatusFound)
+	}
+	if loc := rec.Header().Get("Location"); strings.Contains(loc, "sso_error") {
+		t.Fatalf("%s was refused and sent back to the login page (%q); a 302 alone no longer distinguishes the two", what, loc)
+	}
+	if sessionCookie(rec) == nil {
+		t.Fatalf("%s set no session cookie, so nothing was actually signed in", what)
+	}
 }

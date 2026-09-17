@@ -36,13 +36,17 @@ var loginPageTemplate = template.Must(template.New("login").Parse(`<!doctype htm
  .or{display:flex;align-items:center;gap:.6rem;margin:1.1rem 0 .2rem;color:#64748b;font-size:.75rem}
  .or::before,.or::after{content:"";flex:1;height:1px;background:#334155}
  .hint{color:#94a3b8;font-size:.75rem;line-height:1.35;margin:.4rem 0 0}
+ .ssoerr{background:#7f1d1d;color:#fecaca;border-radius:6px;padding:.6rem .7rem;font-size:.78rem;line-height:1.35;margin:.9rem 0 0}
  details{margin-top:1.1rem}
  summary{color:#94a3b8;font-size:.8rem;cursor:pointer}
  code{font-size:.72rem;color:#cbd5e1}
 </style></head><body>
 <form id="f" autocomplete="on">
  <h1>Sign in to Leoflow</h1>
-{{ if .SSO }} <a class="sso" href="/api/v2/auth/oidc/login?next={{ .NextQuery }}">Sign in with single sign-on</a>
+{{ if .SSOError }} <p class="ssoerr" role="alert">Single sign-on did not complete, so you are not signed in.
+ Try again. If it keeps failing, the reason is in the control plane's audit log and server log:
+ it is deliberately not shown here.</p>
+{{ end }}{{ if .SSO }} <a class="sso" href="/api/v2/auth/oidc/login?next={{ .NextQuery }}">Sign in with single sign-on</a>
 {{ end }}
 {{ if .Collapse }} <details>
  <summary>Break-glass sign-in</summary>
@@ -135,6 +139,12 @@ func loginPageHandler(sso, breakGlass bool) gin.HandlerFunc {
 			Next      template.JS
 			NextQuery string
 			SSO       bool
+			// SSOError says the user arrived from a single sign-on that was
+			// refused, so the page explains it instead of looking like the
+			// button did nothing. It is gated on SSO: without a flow there is
+			// nothing that could have failed, and anyone could otherwise make
+			// the page claim a sign-on was rejected by appending the parameter.
+			SSOError bool
 			// Collapse hides a form that cannot succeed; Focus puts the cursor in
 			// the form only when it is a way in.
 			Collapse bool
@@ -143,6 +153,7 @@ func loginPageHandler(sso, breakGlass bool) gin.HandlerFunc {
 			Next:      template.JS("'" + template.JSEscapeString(next) + "'"),
 			NextQuery: next,
 			SSO:       sso,
+			SSOError:  sso && c.Query("sso_error") != "",
 			Collapse:  sso && !breakGlass,
 			Focus:     !sso || breakGlass,
 		}); err != nil {

@@ -134,6 +134,27 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A refused single sign-on no longer answers the browser with raw JSON.** Every
+  fail-closed path wrote problem+json with 403. That is the right answer to an
+  API client and the wrong one to a browser, and both OIDC routes are reached
+  only by a top-level browser navigation: the user clicks the sign-in control, or
+  the identity provider redirects them back. So a denied login rendered a page of
+  JSON with no way back to the sign-in page, which is also where the retry lives.
+
+  The browser is now returned to the login page, which says that sign-on did not
+  complete and where the reason is recorded. **The redirect carries no reason.**
+  Withholding the cause from the browser is the posture of this whole path, since
+  it is the same information someone probing the deployment is after; the cause
+  is in the audit row and, since the previous release, in a WARN on the server
+  log.
+
+  The tests changed shape with it. A denied login is a 302 now, so `302` alone no
+  longer means a login succeeded, and every assertion that read it that way would
+  have passed on a rejection. Success and denial are each asserted in one shared
+  place: denial checks that no session was minted, that the redirect stays on
+  this origin, and that the body carries no reason; success checks that a session
+  cookie exists and that the redirect is not the bounce back to the login page.
+
 - **Every rejected SSO login now says why, in the logs.** Each fail-closed path
   recorded an audit row, wrote a 403, and logged nothing. The audit row is the
   record of truth, but it lives in a Postgres table reachable only through an API

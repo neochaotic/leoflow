@@ -36,19 +36,29 @@ var loginPageTemplate = template.Must(template.New("login").Parse(`<!doctype htm
  .or{display:flex;align-items:center;gap:.6rem;margin:1.1rem 0 .2rem;color:#64748b;font-size:.75rem}
  .or::before,.or::after{content:"";flex:1;height:1px;background:#334155}
  .hint{color:#94a3b8;font-size:.75rem;line-height:1.35;margin:.4rem 0 0}
+ details{margin-top:1.1rem}
+ summary{color:#94a3b8;font-size:.8rem;cursor:pointer}
+ code{font-size:.72rem;color:#cbd5e1}
 </style></head><body>
 <form id="f" autocomplete="on">
  <h1>Sign in to Leoflow</h1>
 {{ if .SSO }} <a class="sso" href="/api/v2/auth/oidc/login?next={{ .NextQuery }}">Sign in with single sign-on</a>
- <div class="or"><span>or</span></div>
- <p class="hint">The form below is for break-glass accounts. If your organization uses
- single sign-on, use the button above: a password here will not be accepted.</p>
 {{ end }}
- <label for="u">Username</label><input id="u" name="username" autocomplete="username" autofocus>
+{{ if .Collapse }} <details>
+ <summary>Break-glass sign-in</summary>
+ <p class="hint">No break-glass accounts are configured, so no password is accepted here.
+ An operator can allow one by adding its address to <code>auth.oidc.break_glass_emails</code>
+ (Helm: <code>auth.oidc.breakGlassEmails</code>) and restarting the control plane.</p>
+{{ else }}{{ if .SSO }} <div class="or"><span>or</span></div>
+ <p class="hint">The form below is for break-glass accounts. If your organization uses
+ single sign-on, use the button above.</p>
+{{ end }}{{ end }}
+ <label for="u">Username</label><input id="u" name="username" autocomplete="username"{{ if .Focus }} autofocus{{ end }}>
  <label for="p">Password</label><input id="p" name="password" type="password" autocomplete="current-password">
  <button type="submit">Sign in</button>
  <div class="err" id="e"></div>
-</form>
+{{ if .Collapse }} </details>
+{{ end }}</form>
 <script>
  const next = {{ .Next }};
  document.getElementById('f').addEventListener('submit', async (ev) => {
@@ -61,7 +71,7 @@ var loginPageTemplate = template.Must(template.New("login").Parse(`<!doctype htm
      });
      if (!r.ok) {
        document.getElementById('e').textContent = r.status === 429
-         ? 'Too many attempts — wait about a minute, then try again.'
+         ? 'Too many attempts. Wait about a minute, then try again.'
          : 'Invalid credentials';
        return;
      }
@@ -94,11 +104,20 @@ func sanitizeNext(next string) string {
 }
 
 // loginPageHandler implements GET /api/v2/auth/login: it serves the login page
-// (the Airflow UI redirects here when unauthenticated). sso says whether an OIDC
-// flow was discovered at boot, which is the same condition the router uses to
-// register /api/v2/auth/oidc/login: advertising the link without it would 404 the
-// user (#1160).
-func loginPageHandler(sso bool) gin.HandlerFunc {
+// (the Airflow UI redirects here when unauthenticated).
+//
+// sso says whether an OIDC flow was discovered at boot, which is the same
+// condition the router uses to register /api/v2/auth/oidc/login: advertising the
+// link without it would 404 the user (#1160).
+//
+// breakGlass says whether any address is allowed to use the password form while
+// SSO is on. Under provider: oidc with an empty allowlist the gate admits NOBODY
+// (newBreakGlass), so presenting the form as the primary control, with the focus
+// in it, offers a way in that cannot work and answers every attempt with
+// "Invalid credentials" - the same answer a wrong password gets. The form stays
+// in the page, so adding an account needs no release, but it collapses and says
+// which setting turns it on.
+func loginPageHandler(sso, breakGlass bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Status(http.StatusOK)
 		c.Header("Content-Type", "text/html; charset=utf-8")
@@ -116,10 +135,16 @@ func loginPageHandler(sso bool) gin.HandlerFunc {
 			Next      template.JS
 			NextQuery string
 			SSO       bool
+			// Collapse hides a form that cannot succeed; Focus puts the cursor in
+			// the form only when it is a way in.
+			Collapse bool
+			Focus    bool
 		}{
 			Next:      template.JS("'" + template.JSEscapeString(next) + "'"),
 			NextQuery: next,
 			SSO:       sso,
+			Collapse:  sso && !breakGlass,
+			Focus:     !sso || breakGlass,
 		}); err != nil {
 			AbortProblem(c, http.StatusInternalServerError, "internal error", "could not render login page")
 		}

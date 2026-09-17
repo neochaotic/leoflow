@@ -213,3 +213,43 @@ func TestRoleExistsIntegration(t *testing.T) {
 		t.Errorf("RoleExists(wizard) = %v, %v; want false, nil", ok, err)
 	}
 }
+
+// TestTenantExistsIntegration proves the tenant existence check the boot-time
+// OIDC name warning uses, against the real schema: the tenant the first
+// migration creates is found, a name nothing creates is not, and neither is an
+// error. The second half is the whole point of the warning: an absent tenant has
+// to be distinguishable from a lookup that could not run, or a degraded database
+// and a typo produce the same boot log.
+//
+// That "default" is the ONLY tenant a fresh schema has is pinned separately, in
+// the migrations package, where the claim actually lives.
+func TestTenantExistsIntegration(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	if ok, err := repo.TenantExists(ctx, "default"); err != nil || !ok {
+		t.Errorf("TenantExists(default) = %v, %v; want true, nil", ok, err)
+	}
+	if ok, err := repo.TenantExists(ctx, "acme"); err != nil || ok {
+		t.Errorf("TenantExists(acme) = %v, %v; want false, nil (absent, not a failure)", ok, err)
+	}
+}
+
+// TestRoleExistsOnAMissingTenantIsAnError pins the branch that decides which
+// reason a denied login is audited under, and therefore what the boot warnings
+// are allowed to say.
+//
+// RoleExists resolves the tenant before the role, so a tenant that does not
+// exist comes back as an ERROR, not (false, nil). resolveUser turns that into
+// role_check_failed, and a role that is merely missing from a tenant that does
+// exist into unknown_role:<role>. Folding the missing tenant into (false, nil)
+// would silently swap the two, and every operator sent to grep the audit log by
+// a boot warning would find nothing.
+func TestRoleExistsOnAMissingTenantIsAnError(t *testing.T) {
+	repo, _, ctx := openRepo(t)
+	ok, err := repo.RoleExists(ctx, "acme", "viewer")
+	if ok {
+		t.Errorf("RoleExists on a tenant that does not exist = true")
+	}
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("RoleExists on a tenant that does not exist returned err = %v; want domain.ErrNotFound, which is what makes the denial audit as role_check_failed rather than unknown_role", err)
+	}
+}

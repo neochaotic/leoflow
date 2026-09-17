@@ -197,9 +197,15 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the failures above leaves nobody able to reach the control plane, including
     whoever has to fix it.
 
-  A lookup that fails to run is reported as such rather than skipped: a check
-  that could not ask and a check that found nothing must not produce the same
-  silence.
+  A lookup that fails to run is reported as such rather than skipped, on both
+  halves of the check: a check that could not ask and a check that found nothing
+  must not produce the same silence. Each name is looked up once however many
+  settings point at it, and the warning names every claim value or IdP group that
+  named it, so one line points at every line that has to be edited. An empty
+  value counts as a name that does not exist rather than as an absent setting:
+  `corp.example:` with nothing after it is valid YAML, nothing rejects it, and it
+  denies every login it touches. An unset `default_role` is still the supported
+  strict default-deny and is not reported here.
 
 - **Single sign-on now says at boot why it will not work.** Four OIDC
   configurations were accepted at boot and failed at the last step of a login,

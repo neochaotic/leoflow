@@ -311,13 +311,30 @@ in the leoflow binary. D1's scheduler observer seam is unchanged, but its cited
 line numbers have drifted post-v0.4.7 and should be refreshed when this is
 implemented.
 
-**A2 withdraws D4's OpenMetadata URL and D6's claim that it suffices.**
-OpenMetadata's OpenLineage connector is a Kafka or Kinesis **consumer**, not an
-HTTP endpoint: it is built from a broker config and a Kafka consumer, with no
-ingestion URL. The URL in D4 is Marquez's shape. So an HTTP-only emitter reaches
-Marquez and DataHub directly and reaches OpenMetadata only with a Kafka topic in
-between. That is a deployment fact an operator has to know before choosing this
-path, not a detail.
+**A2 corrects D4's OpenMetadata URL, and does NOT withdraw D6.** An earlier
+draft of this amendment withdrew both, on evidence that OpenMetadata's
+OpenLineage connector is a Kafka or Kinesis consumer. That evidence is real but
+it describes OM's ingestion-side PULL connector. OM also ships a first-party HTTP
+PUSH receiver in the server itself: `OpenLineageResource` at `@Path("/v1/openlineage")`
+with `POST /lineage` and `POST /lineage/batch`, whose settings schema is titled
+"Configuration for OpenLineage HTTP API integration" and whose `enabled` default
+is true. So D6 stands as written: an HTTP emitter reaches OpenMetadata directly,
+with no broker in between. What was wrong in D4 is only the path and the port.
+The endpoint is `POST http://<om>:8585/api/v1/openlineage/lineage`.
+
+Two operational facts that path forces, which neither D4 nor the original
+Alternatives section carries, and which decide whether v1a is visible at all:
+
+- OM's `eventTypeFilter` defaults to `["COMPLETE"]`, so START, RUNNING, FAIL and
+  ABORT are dropped unless an operator widens it. This ADR's v1a slice is exactly
+  lifecycle events, so under default settings the v1a deliverable produces nothing
+  an OM user can see. That has to be stated in the operator documentation, and it
+  argues for shipping v1b closer to v1a than the original sequencing implied.
+- Authorisation is `EDIT_LINEAGE` on Table, so D4's api_key must be an OM bot
+  token carrying that policy, not an arbitrary token.
+
+OM's Kafka connector remains a second, pull-shaped path. It is an option, not the
+requirement an earlier reading of this made it.
 
 **A3 replaces D3's dbt-first framing with a spine and a provider seam.** Dataset
 lineage is defined once, independent of where the datasets came from: a dataset
@@ -340,13 +357,20 @@ hand-written stub carrying none of these fields, so at least one real
 dbt-generated manifest has to be captured as a golden fixture from the existing
 dbt e2e runs.
 
-**A5 states the naming invariant as a hard requirement.** Consumers attach
-lineage by matching the dataset namespace and name to tables they already
-catalogue, and they fail SILENTLY when the match misses. OpenMetadata maps the
-namespace scheme through an exact-match dictionary that accepts `postgres` and
-not `postgresql`, and parses the name positionally as a lowercased dotted path.
+**A5 states the naming invariant as a hard requirement, and corrects its own
+evidence.** Consumers attach lineage by matching the dataset namespace and name
+to tables they already catalogue, and they fail SILENTLY when the match misses.
 Namespace and name strings are therefore produced in exactly one function, from
 structured parts, covered by a per-warehouse table test. No provider builds them
 itself. This is the failure mode most likely to reach production, because
 everything upstream of it reports success.
+
+An earlier draft cited OpenMetadata's exact-match scheme dictionary, which
+accepts `postgres` and not `postgresql`, as the mechanism. That dictionary
+governs the **Kafka** connector. On the HTTP path this ADR actually uses,
+resolution is operator-configured through `namespaceToServiceMapping` (exact
+match, then prefix) plus OM's own dataset-name normaliser, and OM's own code
+comments use `postgresql://host:5432/db` as the example namespace. The
+prescription above is unchanged and still correct. The specific scheme claim is
+withdrawn, because it would have sent us to normalise against the wrong rule.
 

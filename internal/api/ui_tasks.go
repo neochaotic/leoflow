@@ -87,7 +87,7 @@ func classRef(t domain.TaskSpec) classRefDTO {
 			mod := t.OperatorClass[:i]
 			return classRefDTO{ModulePath: &mod, ClassName: t.OperatorClass[i+1:]}
 		}
-		return classRefDTO{ModulePath: strPtr("airflow.providers"), ClassName: t.OperatorClass}
+		return classRefDTO{ModulePath: strPtr("leoflow.tasks"), ClassName: t.OperatorClass}
 	}
 	switch t.Type {
 	case domain.TaskTypePython:
@@ -95,7 +95,15 @@ func classRef(t domain.TaskSpec) classRefDTO {
 	case domain.TaskTypeBash:
 		return classRefDTO{ModulePath: strPtr("airflow.providers.standard.operators.bash"), ClassName: "BashOperator"}
 	default:
-		return classRefDTO{ModulePath: strPtr("airflow.providers.standard.operators.empty"), ClassName: operatorName(t.Type)}
+		// A leoflow-owned module rather than an Airflow one. The pair means "this
+		// class, in this module", so naming a real Airflow module that does not
+		// contain the class produces a reference that resolves to nothing: a
+		// consumer treating it as an import gets an error, and a human reading the
+		// catalog is told something false. leoflow.tasks is a non-empty string, so
+		// OpenMetadata is satisfied, it cannot be mistaken for an importable path,
+		// and it says the true thing: a leoflow task type with no Airflow class
+		// behind it.
+		return classRefDTO{ModulePath: strPtr("leoflow.tasks"), ClassName: operatorName(t.Type)}
 	}
 }
 

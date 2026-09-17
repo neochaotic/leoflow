@@ -204,6 +204,15 @@ func (d oidcDeps) resolveUser(c *gin.Context, id *oidc.VerifiedIdentity) (*auth.
 	for _, role := range loginRoles {
 		exists, err := d.users.RoleExists(ctx, id.Tenant, role)
 		if err != nil {
+			// RoleExists resolves the tenant before the role, so ErrNotFound here is
+			// a tenant that does not exist and not a lookup that failed. They used to
+			// share role_check_failed, which left the audit row unable to tell a
+			// one-character typo in tenant_claims from a database outage. Boot names
+			// the typo precisely now; login has to agree with it.
+			if errors.Is(err, domain.ErrNotFound) {
+				d.denyWithCause(c, auditOIDCLoginFailure, id.Tenant, "", id.Email, "unknown_tenant", err)
+				return nil, errRejected
+			}
 			d.logger.Error("oidc: checking role", "error", err)
 			d.deny(c, auditOIDCLoginFailure, id.Tenant, "", id.Email, "role_check_failed")
 			return nil, errRejected

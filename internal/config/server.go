@@ -1038,10 +1038,60 @@ func (c *ServerConfig) validateOIDC() error {
 	if len(missing) > 0 {
 		return fmt.Errorf("auth.provider: oidc requires %s to be set%s", strings.Join(missing, ", "), tenantPinHint(c))
 	}
+	if err := validateOIDCNames(c.Auth.OIDC); err != nil {
+		return err
+	}
 	if !strings.HasPrefix(c.Auth.OIDC.Issuer, "https://") {
 		return fmt.Errorf("auth.oidc.issuer must be an https:// URL (got %q)", c.Auth.OIDC.Issuer)
 	}
 	return validateRedirectURL(c.Auth.OIDC.RedirectURL)
+}
+
+// validateOIDCNames rejects a name that is present but blank.
+//
+// "corp.example:" with nothing after it is valid YAML binding to the empty
+// string, and the checks above only ask whether the map is non-empty. A blank
+// tenant name resolves a login to a tenant that cannot exist. A blank role name
+// is copied straight into the resolved role set by oidc.MapRoles and then fails
+// the existence check. Both deny the login behind the same generic answer as
+// every other failure, and the operator sees a key they did fill in.
+//
+// This fails boot where its neighbors only warn, and the difference is that it
+// cannot be a transient. The tenant and role existence checks ask a live
+// database, where "absent" and "could not ask" are the same answer during a
+// blip, so a hard gate there turns a lagging replica into a restart loop. This
+// is a string in a file: a blank name is never correct, no deployment can be
+// working with one, and the answer is identical on every boot.
+//
+// Keys are checked too. A claim value or an IdP group that is blank can never be
+// what an IdP sends, so the entry is unreachable rather than wrong, which is the
+// same defect wearing the other hat.
+func validateOIDCNames(o OIDCSection) error {
+	for _, m := range []struct {
+		key     string
+		entries map[string]string
+		keyWhat string
+		valWhat string
+	}{
+		{"auth.oidc.tenant_claims", o.TenantClaims, "claim value", "tenant name"},
+		{"auth.oidc.role_mappings", o.RoleMappings, "IdP group", "role name"},
+	} {
+		for k, v := range m.entries {
+			if strings.TrimSpace(k) == "" {
+				return fmt.Errorf("%s has an entry whose %s is blank; nothing an IdP sends can match it, so the entry is unreachable", m.key, m.keyWhat)
+			}
+			if strings.TrimSpace(v) == "" {
+				return fmt.Errorf("%s maps %q to a blank %s; every login it governs is denied, because no %s resolves. Give it a value, or remove the entry",
+					m.key, k, m.valWhat, m.valWhat)
+			}
+		}
+	}
+	// An ABSENT default_role is the documented strict posture. A blank one is a
+	// typo that reads as set and grants nothing.
+	if o.DefaultRole != "" && strings.TrimSpace(o.DefaultRole) == "" {
+		return errors.New("auth.oidc.default_role is set to whitespace; leave it unset for strict default-deny, or name a role that exists")
+	}
+	return nil
 }
 
 // tenantPinHint explains the tenant pin when one of its two keys is missing, and

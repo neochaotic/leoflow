@@ -220,7 +220,10 @@ that set because every login resolves a tenant from it and an absent or unmapped
 claim value fails the login closed, never falling back to `default`, so a
 deployment without it boots green and rejects 100% of logins ([#1143](https://github.com/neochaotic/leoflow/issues/1143)).
 `tenant_claims` is a map, so it loads only from the YAML config file named by
-`LEOFLOW_CONFIG`; no env var can carry it. Verification is keyless (the ID
+`LEOFLOW_CONFIG`; no env var can carry it. A blank name on either side of an
+entry in `tenant_claims` or `role_mappings` fails boot: `corp.example:` with
+nothing after it is valid YAML that binds to the empty string, and it would deny
+every login it governs while looking like a key you had filled in. Verification is keyless (the ID
 token is validated against the issuer's public JWKS), so no secret is stored for
 the verify path.
 

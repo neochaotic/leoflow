@@ -134,6 +134,28 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A blank name in an OIDC map is a boot failure, not a silent denial.**
+  `corp.example:` with nothing after it is valid YAML that binds to the empty
+  string, and the boot checks only ever asked whether the map was non-empty. A
+  blank tenant name resolves a login to a tenant that cannot exist; a blank role
+  name is copied straight into the resolved role set and then fails the existence
+  check. Both denied the login behind the same generic answer as everything else,
+  while the operator looked at a key they had filled in.
+
+  This one fails boot where its neighbors only warn, and the difference is that
+  it cannot be a transient. The tenant and role existence checks ask a live
+  database, where "absent" and "could not ask" are the same answer during a blip,
+  so a hard gate there would turn a lagging replica into a restart loop. A blank
+  name is a string in a file: never correct, identical on every boot, and no
+  deployment can be working with one.
+
+- **A denied login no longer reports an unknown tenant as a database failure.**
+  The role lookup resolves the tenant first, so a tenant that does not exist
+  comes back as an error exactly like a database that is down, and both were
+  audited `role_check_failed`. The audit row could not tell a one-character typo
+  in `tenant_claims` from an outage. The typo is now `unknown_tenant`, carrying
+  its cause, and `role_check_failed` keeps the meaning it should have had.
+
 - **A refused single sign-on no longer answers the browser with raw JSON.** Every
   fail-closed path wrote problem+json with 403. That is the right answer to an
   API client and the wrong one to a browser, and both OIDC routes are reached

@@ -500,6 +500,66 @@ jobs:
   # keys the SPA reads) and only a browser caught it. This guards that whole class
   # plus the logs render contract. ~4 min (chromium + relocatable PG download).
   # ─────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────
+  # SSO login page (#1160): the sign-in page against a real IdP handshake.
+  #
+  # Separate from ui-smoke on purpose. That job boots Lite with managed
+  # Postgres and one server; this needs TWO servers with their own config (an
+  # SSO arm and a JWT arm) plus a Postgres the Pro edition can reach, and
+  # folding it in would double a job whose own step budget is already tight
+  # (see the timeout notes there).
+  #
+  # It reuses that job's pinned Playwright version and cache key verbatim, so a
+  # browser bump moves both together.
+  # ─────────────────────────────────────────────────────────────────────
+  e2e-sso-login:
+    name: SSO login page (real IdP handshake)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PLAYWRIGHT_VERSION: "1.63.0"
+      LEOFLOW_E2E_DATABASE_URL: postgres://leoflow:leoflow@localhost:5432/leoflow_sso?sslmode=disable
+    services:
+      postgres:
+        image: mirror.gcr.io/library/postgres:16
+        env:
+          POSTGRES_USER: leoflow
+          POSTGRES_PASSWORD: leoflow
+          POSTGRES_DB: leoflow_sso
+        ports: [5432:5432]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+      - name: Build binaries
+        run: make build
+      - name: Install golang-migrate
+        run: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+      - name: Cache the Playwright browser
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.cache/ms-playwright
+          key: ms-playwright-${{ runner.os }}-${{ env.PLAYWRIGHT_VERSION }}
+      - name: Install Playwright + Chromium
+        timeout-minutes: 6
+        run: |
+          npm init -y >/dev/null 2>&1
+          npm i --no-save playwright-core@"$PLAYWRIGHT_VERSION" playwright@"$PLAYWRIGHT_VERSION"
+          npx playwright install --with-deps chromium
+      # A step timeout so a hang fails as exit 124 naming the command, rather
+      # than running the job out of budget into a `cancelled` that says nothing
+      # about why (#975).
+      - name: Run the SSO login-page e2e
+        timeout-minutes: 6
+        run: timeout --kill-after=30 300 bash test/e2e/sso-login-page.sh
+
   ui-smoke:
     name: UI smoke (headless SPA crash check)
     runs-on: ubuntu-latest

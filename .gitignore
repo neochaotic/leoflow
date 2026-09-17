@@ -187,3 +187,7 @@ docs/go/
 # (source-of-truth at helm/leoflow/README.md, auto-generated from values.yaml
 # by helm-docs). #183.
 docs/helm-chart.md
+
+# Node deps for the browser-driven e2e (test/e2e/ui-smoke.js and
+# test/e2e/sso-login-page.js tell you to `npm i playwright-core` at the root).
+node_modules/

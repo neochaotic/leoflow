@@ -160,6 +160,22 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   overage is the one that bites: past roughly 200 group memberships Entra omits
   the `groups` claim entirely, so the most heavily grouped users are the only
   ones who cannot log in.
+- **The sign-in page offers single sign-on when it is configured (#1160).** The
+  server has had complete OIDC since ADR 0057, and nothing linked to the route
+  that starts it. A deployment with SSO correctly configured showed a username
+  and password form; users typed their IdP credentials into it, got
+  `Invalid credentials`, and produced no audit record at all, because no OIDC
+  request was ever made. The only way in was typing
+  `/api/v2/auth/oidc/login` into the address bar.
+
+  Indistinguishable, from the outside, from a broken configuration: every
+  diagnostic instinct then points at the IdP, the tenant pin or the redirect URL,
+  none of which is the problem.
+
+  The password form stays, deliberately, below the SSO control and marked as such.
+  `auth.oidc.break_glass_emails` exists precisely so a named set of local logins
+  still works when the IdP is down or the tenant mapping is wrong, and hiding the
+  form would hide the escape hatch at the moment it is needed.
 
 - **OpenMetadata can catalogue leoflow again: `class_ref.module_path` is no
   longer null.** A field team reported that they could not integrate leoflow with

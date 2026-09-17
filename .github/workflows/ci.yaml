@@ -1352,7 +1352,7 @@ jobs:
   # models accept our bodies, and the defect this guards was exactly that: a
   # field that is valid JSON, valid against our own OpenAPI spec, and rejected by
   # OM's type, so every DAG failed validation and no pipeline was ingested while
-  # OM's Test Connection stayed green. So Go writes the four responses OM reads
+  # OM's Test Connection stayed green. So Go writes the six responses OM reads
   # and Python judges them against OM's own vendored models.
   # ─────────────────────────────────────────────────────────────────────
   om-contract:
@@ -1370,6 +1370,13 @@ jobs:
 
       - name: Install pydantic
         run: pip install --upgrade pip && pip install 'pydantic>=2'
+
+      # om_models.py is a verbatim copy of OpenMetadata's own models, pinned to a
+      # release tag. The pin is the whole value: an edited copy would validate our
+      # bodies against a model OM does not have, which is a green gate over a
+      # broken integration. Refreshing the copy means updating both files.
+      - name: Check the vendored OpenMetadata models are unedited
+        run: cd test/om-contract && shasum -a 256 -c om_models.py.sha256
 
       - name: Capture the responses OpenMetadata reads
         env:

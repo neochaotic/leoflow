@@ -107,3 +107,35 @@ func TestTasksResponseCarriesNoNullInClassRef(t *testing.T) {
 		}
 	}
 }
+
+// TestListDagsCarriesFileloc covers the endpoint OpenMetadata actually reads for
+// the DAG list. OM's get_all_dags paginates GET /api/v2/dags and feeds each entry
+// to build_dag_details, which takes pipelineLocation from `fileloc` there and
+// never calls the details endpoint. Airflow's own DAGResponse declares fileloc as
+// a required string, so an absent key is a compatibility gap too, not only an
+// empty field in one catalog.
+func TestListDagsCarriesFileloc(t *testing.T) {
+	rec := authGet(authedServer(), http.MethodGet, "/api/v2/dags", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET dags = %d (%s)", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Dags []map[string]any `json:"dags"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Dags) == 0 {
+		t.Fatal("premise failed: no dags in the response, so the assertion below would be vacuous")
+	}
+	for i, dag := range got.Dags {
+		v, ok := dag["fileloc"]
+		if !ok {
+			t.Errorf("dags[%d] has no fileloc; OpenMetadata reads pipelineLocation from this response", i)
+			continue
+		}
+		if s, isStr := v.(string); !isStr || strings.TrimSpace(s) == "" {
+			t.Errorf("dags[%d].fileloc = %v, want a non-empty string", i, v)
+		}
+	}
+}

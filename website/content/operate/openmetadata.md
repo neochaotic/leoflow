@@ -23,11 +23,19 @@ directly, and leoflow has no such database. Table lineage for leoflow comes from
 OpenLineage emission, tracked in
 [ADR 0059](/project/adrs/0059-openlineage-emission/).
 
+You also do not get the schedule. On the v2 API OpenMetadata reads a pipeline's
+`scheduleInterval` from `timetable_summary`, which leoflow does not emit yet, so
+the field lands empty. The schedule is visible in the leoflow UI the catalogued
+`sourceUrl` links back to.
+
 ## Configuration
 
-Create a service account first. The `viewer` role carries exactly the four
-permissions the connector needs (`read:dag`, `read:dag_run`,
-`read:task_instance`, `read:task`) and nothing else.
+Create a service account first. The connector needs exactly four permissions:
+`read:dag`, `read:dag_run`, `read:task_instance` and `read:task`. The built-in
+`viewer` role covers them, and grants five more reads on top (`xcom`, `pool`,
+`connection`, `variable`, `config`); see `migrations/025_role_ladder.up.sql`. If
+that is wider than you want a catalog to hold, grant the four permissions
+directly rather than the role.
 
 In OpenMetadata, add an **Airflow** pipeline service with the **REST API**
 connection:

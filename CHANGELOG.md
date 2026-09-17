@@ -132,6 +132,45 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   edited copy fails the job. Two layers, because a Go test cannot prove that
   pydantic accepts a body, and this defect was valid JSON that was valid against
   our own OpenAPI spec.
+- **The control plane's credentials are an ordinary resource, not a Helm hook
+  (#1142).** Reported from production: both replicas sat in
+  `CreateContainerConfigError` for 4h47m with `secret "leoflow-secrets" not
+  found`, while Argo CD reported the Application `Synced` the whole time and
+  nobody was paged.
+
+  The Secret the Deployment reads was rendered as a `pre-install,pre-upgrade`
+  hook. Under Argo CD a `before-hook-creation` hook is deleted and recreated in
+  **separate passes of one operation**, hooks are excluded from the compared
+  state, and self-heal reconciles only tracked resources. So a sync interrupted
+  between those two passes removes the Secret permanently, with nothing OutOfSync
+  to show for it. The reporter's audit log shows exactly that: four clean
+  delete/create cycles, then a delete with no create, then 30 hours until a node
+  replacement restarted the pods and the absence finally surfaced.
+
+  Nothing paged because nothing could: Argo reports a Deployment `Degraded` only
+  on `ProgressDeadlineExceeded`, and Kubernetes never sets that when the rollout
+  was already complete, which is the case when pods die from node replacement
+  rather than a spec change.
+
+  The Deployment now reads `<release>-credentials`, a normal tracked resource, so
+  deleting it makes the Application OutOfSync and self-heal restores it. The hook
+  Secret remains for the migration Job, which runs before the normal manifest is
+  applied, reduced to the one key that Job reads and deleted when the hook
+  succeeds.
+
+  **A new name, deliberately.** Helm stamps ownership metadata only on
+  main-manifest resources, never in `execHook`. Measured against the released
+  0.4.6 chart on a live cluster, the live Secret carries
+  `app.kubernetes.io/managed-by: Helm` and no `meta.helm.sh/release-name`, so
+  reusing that name in the manifest would abort every `helm upgrade` with an
+  ownership conflict. That would have fixed the GitOps path by breaking the
+  primary documented one.
+
+  **What to change:** nothing, on either engine. An operator with a runbook that
+  reads `<release>-secrets` for the control plane's credentials should point it
+  at `<release>-credentials`. CI now installs the last released chart and
+  upgrades it to HEAD on every run, which is the leg that would have caught the
+  adoption break.
 
 - **BREAKING: an unflagged `clearTaskInstances` now previews, and is scoped to
   failures (#1137).** Apache Airflow 3.2.1 declares `dry_run: bool = True` and

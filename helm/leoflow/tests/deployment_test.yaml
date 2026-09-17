@@ -63,7 +63,7 @@ tests:
             name: LEOFLOW_SECRET_KEY
             valueFrom:
               secretKeyRef:
-                name: leoflow-secrets
+                name: leoflow-credentials
                 key: secretKey
 
   - it: wires LEOFLOW_SECRET_KEY from existingSecret when secretKeyExistingSecret is set

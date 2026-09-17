@@ -7,12 +7,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"sort"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -152,6 +156,11 @@ func run() error {
 	defer dsCleanup()
 
 	repo := storage.NewRepository(pg)
+	// The name check needs the database, so it cannot live in warnStartup with the
+	// rest. It is bounded because it is on the boot path ahead of the listener: a
+	// hung lookup must not hold the probe endpoint down (the same reason discovery
+	// is bounded), and its bound is counted in the startup-probe budget.
+	warnOIDCNames(ctx, repo, cfg, tel.Logger)
 	if serr := configureSecrets(repo, cfg, tel.Logger); serr != nil {
 		return serr
 	}
@@ -390,6 +399,7 @@ func warnStartup(cfg *config.ServerConfig, logger *slog.Logger) {
 		oidcWarnings := oidcRoleSourceWarnings(cfg.Auth)
 		oidcWarnings = append(oidcWarnings, oidcClientSecretWarnings(cfg.Auth)...)
 		oidcWarnings = append(oidcWarnings, oidcJITWarnings(cfg.Auth)...)
+		oidcWarnings = append(oidcWarnings, oidcBreakGlassWarnings(cfg.Auth)...)
 		for _, w := range oidcWarnings {
 			logger.Warn(w.Msg, "config_key", w.Key, "value", w.Value, "missing_config_key", w.MissingKey)
 		}
@@ -522,6 +532,271 @@ func oidcRoleSourceWarnings(c config.AuthSection) []configWarning {
 		Value:      "",
 		MissingKey: mappingsKey,
 	}}
+}
+
+// oidcNameCheckTimeout bounds the boot-time existence lookups, all of them
+// together rather than one each. It is a var so tests can shrink it; the value
+// is what ships. The lookups are unique-index probes (tenants.name is UNIQUE,
+// roles is UNIQUE (tenant_id, name)) against a database whose schema was just
+// read, one per distinct tenant plus one per distinct role name, so 5s is
+// already generous.
+//
+// It ADDS to the startup-probe budget rather than sitting inside it: this is a
+// further sequential phase of boot, after the Postgres connect retry, not a
+// share of it. The retry having succeeded proves the pool connects, which is
+// exactly not what this bound guards against: a pool can be established and a
+// query still never answer. scripts/check-startup-probe-budget.sh counts it, and
+// raising it here without raising probes.startup.failureThreshold there fails
+// that gate rather than turning a slow boot into a restart loop.
+var oidcNameCheckTimeout = 5 * time.Second
+
+// warnOIDCNames runs the database-backed name check and logs what it finds.
+//
+// Gated on the API role for the same reason the role warning is: the login path
+// is API-side, so this is the process whose logins the missing names break. The
+// lookups are bounded because this is on the boot path ahead of the listener,
+// and a hung query must not hold the probe endpoint down.
+func warnOIDCNames(ctx context.Context, ck oidcNameChecker, cfg *config.ServerConfig, logger *slog.Logger) {
+	if !cfg.Server.ServesAPI() {
+		return
+	}
+	nameCtx, cancel := context.WithTimeout(ctx, oidcNameCheckTimeout)
+	defer cancel()
+	for _, w := range oidcNameWarnings(nameCtx, ck, cfg.Auth) {
+		logger.Warn(w.Msg, "config_key", w.Key, "value", w.Value, "missing_config_key", w.MissingKey)
+	}
+}
+
+// oidcNameChecker is the pair of existence lookups the boot name check needs.
+// It is an interface so the check is testable without a database, and narrow so
+// it cannot grow into a second place that reads users.
+type oidcNameChecker interface {
+	TenantExists(ctx context.Context, name string) (bool, error)
+	RoleExists(ctx context.Context, tenant, role string) (bool, error)
+}
+
+// oidcNameWarnings reports OIDC settings that name rows which do not exist.
+//
+// Everything else in this file checks the shape of the configuration. These two
+// are the shapes that are correct and still cannot work, because the name is
+// fine and the row is missing:
+//
+//   - a tenant_claims VALUE naming a tenant that does not exist. Nothing in this
+//     project creates a tenant: INSERT INTO tenants appears once, in migration
+//     001, creating "default". No API, CLI, chart setting or later migration
+//     adds another. So any other name denies every login carrying that claim
+//     value, and no supported action makes it start working.
+//   - a default_role or role_mappings value naming a role that does not exist
+//     for the resolved tenant. The ladder (viewer, editor, operator, admin) is
+//     seeded for "default" alone. This one matters because "set default_role to
+//     viewer" is the remedy this binary's own warnings recommend, so it is the
+//     name most likely to be typed by hand.
+//
+// It runs after the schema check, so Postgres is connected and current. A lookup
+// that fails is reported rather than skipped: a check that could not run and a
+// check that found nothing must not produce the same silence.
+//
+// Both maps are walked per distinct VALUE rather than per key (keysByValue),
+// because the value is the name being looked up: several domains commonly map to
+// one tenant and several IdP groups to one role, and the same missing row asked
+// for once per key is a repeated round trip on the boot path and a warning
+// repeated until operators stop reading it. The keys that named it travel with
+// it, so one warning still points at every line that has to be edited.
+func oidcNameWarnings(ctx context.Context, ck oidcNameChecker, c config.AuthSection) []configWarning {
+	if c.Provider != config.AuthProviderOIDC {
+		return nil
+	}
+	const tenantsKey = "auth.oidc.tenant_claims"
+	var out []configWarning
+	// Walked per distinct TENANT, not per claim value: several domains commonly
+	// map to the same tenant, and asking the same question once per domain is a
+	// repeated round trip on the boot path and a warning repeated until operators
+	// stop reading it. The claim values that named the tenant travel with it, so
+	// one warning still points at every line that has to be edited.
+	for tenant, claims := range keysByValue(c.OIDC.TenantClaims) {
+		ok, err := ck.TenantExists(ctx, tenant)
+		switch {
+		case err != nil:
+			out = append(out, configWarning{
+				Msg: "could not check whether the tenant " + quoted(tenant) + " named by " + tenantsKey +
+					" exists: " + err.Error() + ". A login resolving to a tenant that does not exist is denied, " +
+					"so this is worth re-running by hand",
+				Key:   tenantsKey,
+				Value: tenant,
+			})
+			continue
+		case !ok:
+			out = append(out, configWarning{
+				Msg: tenantsKey + " maps " + quotedList(claims) + " to the tenant " + quoted(tenant) +
+					", which does not exist. Every login carrying those claim values is denied, and nothing in Leoflow " +
+					"creates a tenant: the only one is " + quoted("default") + ", created by the first migration. " +
+					"Map them to " + quoted("default") + " unless you created this tenant yourself",
+				Key:        tenantsKey,
+				Value:      tenant,
+				MissingKey: tenantsKey,
+			})
+			continue
+		}
+		out = append(out, missingRoleWarnings(ctx, ck, tenant, c.OIDC)...)
+	}
+	return out
+}
+
+// missingRoleWarnings reports the role names configured for one existing tenant
+// that the tenant does not have.
+//
+// The tenant is known to exist, so a lookup that comes back false means the role
+// row is absent and resolveUser takes its !exists branch, denying the login as
+// unknown_role:<role>. role_check_failed is the OTHER branch, the lookup itself
+// erroring, which is what a MISSING TENANT produces (Repository.RoleExists
+// resolves the tenant first and returns domain.ErrNotFound). Naming the wrong one
+// sends an operator to grep the audit log for a reason that is not there.
+//
+// Each distinct role name is looked up once. Mapping several IdP groups to one
+// Leoflow role is the normal shape, and asking the same question per group is
+// both a repeated round trip on the boot path and, when the answer is "missing",
+// the same warning printed once per group.
+func missingRoleWarnings(ctx context.Context, ck oidcNameChecker, tenant string, o config.OIDCSection) []configWarning {
+	const mappingsKey = "auth.oidc.role_mappings"
+	var out []configWarning
+	type lookup struct {
+		ok  bool
+		err error
+	}
+	looked := map[string]lookup{}
+	exists := func(role string) lookup {
+		if l, done := looked[role]; done {
+			return l
+		}
+		ok, err := ck.RoleExists(ctx, tenant, role)
+		looked[role] = lookup{ok: ok, err: err}
+		return looked[role]
+	}
+	// named describes where the role came from, for a message that points at a
+	// line the operator can edit rather than at a role name alone.
+	check := func(key, role, named string) {
+		l := exists(role)
+		switch {
+		case l.err != nil:
+			out = append(out, configWarning{
+				Msg: "could not check whether the role " + quoted(role) + " named by " + key + " exists in the tenant " +
+					quoted(tenant) + ": " + l.err.Error() + ". A login resolving to a role that does not exist is denied",
+				Key:   key,
+				Value: role,
+			})
+		case !l.ok:
+			out = append(out, configWarning{
+				Msg: key + " " + named + "the role " + quoted(role) + ", which the tenant " + quoted(tenant) +
+					" does not have. A login that resolves to it is denied (audited unknown_role:" + role +
+					") behind the same generic 403 as every other failure. The roles seeded for a new deployment are " +
+					"viewer, editor, operator and admin",
+				Key:        key,
+				Value:      role,
+				MissingKey: key,
+			})
+		}
+	}
+	// An unset default_role is a supported strict default-deny, not a name that
+	// is missing, and oidcRoleSourceWarnings already says so. An EMPTY value
+	// anywhere else is a name that does not exist: MapRoles copies an empty
+	// mapped value straight into the resolved role set, and the login is denied
+	// on it like any other unknown role.
+	if o.DefaultRole != "" {
+		check(defaultRoleKey, o.DefaultRole, "names ")
+	}
+	for role, groups := range keysByValue(o.RoleMappings) {
+		check(mappingsKey, role, "maps "+quotedList(groups)+" to ")
+	}
+	return out
+}
+
+// keysByValue inverts a configured name→name map into one entry per distinct
+// VALUE, carrying the keys that named it: the tenant and the claim values mapped
+// to it, the role and the IdP groups mapped to it.
+//
+// The value is what gets looked up, so this is what makes "once per distinct
+// name" structural rather than a deduplication bolted onto a per-key walk. The
+// keys travel with it so the warning can name every line the operator has to
+// edit. Entries come out in the order their first key sorts, and the keys within
+// an entry in sorted order, so two boots log the same lines and a diff between
+// them means something.
+//
+// An empty value is kept, not dropped. `corp.example:` with nothing after it is
+// valid YAML that binds to "", nothing rejects it (validateOIDC checks only that
+// tenant_claims is non-empty as a map), and it denies every login it touches.
+// That is a name that does not exist, which is what this check is for.
+func keysByValue(m map[string]string) iter.Seq2[string, []string] {
+	keys := map[string][]string{}
+	order := make([]string, 0, len(m))
+	for k, v := range sortedPairs(m) {
+		if _, seen := keys[v]; !seen {
+			order = append(order, v)
+		}
+		keys[v] = append(keys[v], k)
+	}
+	return func(yield func(string, []string) bool) {
+		for _, v := range order {
+			if !yield(v, keys[v]) {
+				return
+			}
+		}
+	}
+}
+
+// quotedList renders names for an operator-facing message, quoted for the same
+// reason a single one is.
+func quotedList(names []string) string {
+	quotedNames := make([]string, 0, len(names))
+	for _, n := range names {
+		quotedNames = append(quotedNames, quoted(n))
+	}
+	return strings.Join(quotedNames, ", ")
+}
+
+// oidcBreakGlassWarnings reports an SSO deployment with no way back in.
+//
+// Under provider: oidc, newBreakGlass with an empty allowlist returns a gate that
+// admits nobody, so every password login is rejected. That is correct, and it is
+// also the state in which any of the other failures here leaves NOBODY able to
+// reach the control plane, including the operator who has to fix it. An IdP
+// outage does the same, and neither is in this deployment's control.
+func oidcBreakGlassWarnings(c config.AuthSection) []configWarning {
+	const key = "auth.oidc.break_glass_emails"
+	if c.Provider != config.AuthProviderOIDC || len(c.OIDC.BreakGlassEmails) > 0 {
+		return nil
+	}
+	return []configWarning{{
+		Msg: "auth.provider: oidc with an empty " + key + " rejects every password login, so an IdP outage or a " +
+			"wrong tenant pin leaves nobody able to reach the control plane, including whoever has to fix it. " +
+			"List at least one local admin address there (Helm: auth.oidc.breakGlassEmails), or keep a documented " +
+			"route back to auth.provider: jwt",
+		Key:        key,
+		Value:      "",
+		MissingKey: key,
+	}}
+}
+
+// quoted renders a configured name for an operator-facing message. The quotes
+// are the point: a trailing space or an invisible character in a YAML value is
+// otherwise impossible to see in a log line.
+func quoted(s string) string { return strconv.Quote(s) }
+
+// sortedPairs iterates a string map in key order, so a boot log reads the same
+// on every restart. Go randomizes map order, which would reshuffle the warnings
+// each time and defeat a diff between two boots.
+func sortedPairs(m map[string]string) iter.Seq2[string, string] {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return func(yield func(string, string) bool) {
+		for _, k := range keys {
+			if !yield(k, m[k]) {
+				return
+			}
+		}
+	}
 }
 
 // oidcJITWarnings reports an OIDC deployment with just-in-time provisioning off.

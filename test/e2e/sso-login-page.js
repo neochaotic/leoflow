@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 //
-// Browser assertion for #1160: a deployment configured for SSO must OFFER the
-// flow on its sign-in page.
+// Browser assertions for the two ends of the sign-in page: a deployment
+// configured for SSO must OFFER the flow (#1160), and a refused sign-on must
+// come BACK to it saying so, rather than to a page of raw JSON.
 //
 // A Go handler test pins the rendered bytes, which is necessary and not
 // sufficient: the defect was that a real user, on a correctly configured SSO
@@ -95,6 +96,35 @@ const fail = (msg) => { console.error(`FAIL: ${msg}`); process.exitCode = 1; };
     await page.goto(`${URL_BASE}/api/v2/auth/login`, { waitUntil: 'domcontentloaded' });
     if (await page.locator('input[name="password"]').count() === 0) {
       fail('the password form is gone; break-glass accounts have no way in when the IdP is unreachable');
+    }
+
+    // A REFUSED login has to land somewhere a person can act on. This is the
+    // property a Go handler test cannot assert: the old answer was a 403 with a
+    // problem+json body, which is a correct API response and, to the browser that
+    // is the only caller of this route, a page of raw JSON with no way back to the
+    // sign-in page. Driving the callback with a state that cannot match is a real
+    // rejection through the real fail-closed path.
+    await page.goto(`${URL_BASE}/api/v2/auth/oidc/callback?code=nope&state=nope`, { waitUntil: 'domcontentloaded' });
+    const denied = page.url();
+    if (!denied.startsWith(`${URL_BASE}/api/v2/auth/login`)) {
+      fail(`a refused sign-on left the browser on ${denied}, not back on the sign-in page`);
+    }
+    if (await page.locator('input[name="password"]').count() === 0) {
+      fail(`a refused sign-on rendered something that is not the sign-in page: ${denied}`);
+    }
+    const banner = page.locator('.ssoerr');
+    if (await banner.count() === 0) {
+      fail('a refused sign-on returned the bare sign-in form, which reads as the button having done nothing');
+    }
+    // The reason is withheld from the browser on purpose: it is the same map of
+    // the deployment someone probing it is after. Assert on the rendered page, not
+    // just the URL, because the banner is the one place it could creep back in.
+    const shown = `${denied} ${await page.content()}`.toLowerCase();
+    for (const leak of ['state_mismatch', 'invalid_state', 'missing_state', 'tenant_not_allowed',
+      'email_not_verified', 'email_domain_not_allowed', 'token_expired', 'exchange_failed']) {
+      if (shown.includes(leak)) {
+        fail(`the refused sign-on told the browser why: ${leak}`);
+      }
     }
   } else if (ssoCount > 0) {
     fail('a deployment with no OIDC flow advertises the SSO route; following it 404s');

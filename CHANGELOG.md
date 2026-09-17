@@ -142,18 +142,23 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   JSON with no way back to the sign-in page, which is also where the retry lives.
 
   The browser is now returned to the login page, which says that sign-on did not
-  complete and where the reason is recorded. **The redirect carries no reason.**
-  Withholding the cause from the browser is the posture of this whole path, since
-  it is the same information someone probing the deployment is after; the cause
-  is in the audit row and, since the previous release, in a WARN on the server
-  log.
+  complete and points at the person who can look up why. **The redirect carries
+  no reason.** Withholding the cause from the browser is the posture of this
+  whole path, since it is the same information someone probing the deployment is
+  after; the cause is in the audit row and, since the previous release, in a WARN
+  on the server log. The banner names an administrator rather than telling the
+  locked-out reader to go read the audit log, which under `provider: oidc` with
+  an empty `break_glass_emails` is behind the very session they do not have.
 
   The tests changed shape with it. A denied login is a 302 now, so `302` alone no
   longer means a login succeeded, and every assertion that read it that way would
   have passed on a rejection. Success and denial are each asserted in one shared
-  place: denial checks that no session was minted, that the redirect stays on
-  this origin, and that the body carries no reason; success checks that a session
-  cookie exists and that the redirect is not the bounce back to the login page.
+  place, and those two assertions are themselves tested: denial requires that no
+  session was minted, that the target is exactly the login page on this origin,
+  and that neither the body nor any response header carries the cause; success
+  requires a session cookie and a target that is not the bounce back to the login
+  page. The pair is also pinned as mutually exclusive, so one response can never
+  satisfy both.
 
 - **Every rejected SSO login now says why, in the logs.** Each fail-closed path
   recorded an audit row, wrote a 403, and logged nothing. The audit row is the

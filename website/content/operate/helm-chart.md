@@ -75,6 +75,42 @@ A first-class values reference on this site is a TODO for a later migration phas
 
 ## Tuning the probes
 
+### The startup gate
+
+`probes.startup` runs before the other two, and while it is failing Kubernetes
+suppresses **both** liveness and readiness. That is what keeps a slow boot from
+being read as an unhealthy process.
+
+It matters because liveness and readiness both target the API listener, and that
+listener binds at the *end* of boot. Without a startup gate the kubelet answers
+a boot that is slow or stuck by restarting the container, roughly every 70
+seconds, and each cycle is recorded as `Completed exit=0` because the process
+handles `SIGTERM` cleanly. An operator triaging that sees a Deployment whose
+containers keep finishing successfully, a readiness probe refusing connections,
+and no cause anywhere.
+
+The budget is `periodSeconds * failureThreshold`, 120 seconds by default against
+the 70 the liveness probe would have allowed. A boot that overruns even that
+still restarts, which is the honest reading: something is wrong, not merely slow.
+
+```yaml
+probes:
+  startup:
+    enabled: true
+    periodSeconds: 5
+    failureThreshold: 24
+```
+
+Raise `failureThreshold` if your control plane legitimately takes longer to come
+up, for example against a distant database. Set `enabled: false` to go back to
+liveness policing the boot.
+
+If a pod never passes the gate, read `/readyz` rather than guessing: it names the
+dependency that is not ready. The common causes are a database the pod cannot
+reach and a ServiceAccount that cannot `list`/`watch` pods in the task namespace.
+
+### Timeouts under load
+
 `probes.liveness` and `probes.readiness` are exposed so you can loosen them
 under load: a busy scheduler can miss a 1s `/healthz` during a task-pod burst
 and be kubelet-killed mid-run, which cascades in-flight tasks to `agent_lost`.

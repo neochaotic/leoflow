@@ -171,7 +171,12 @@ shipped numbers, which is a different thing: an operator reaches this with a
 single `--set probes.startup.failureThreshold`, and the render is the only place
 that sees both budgets at once.
 */ -}}
-{{- if .Values.probes.startup.enabled -}}
+{{- /* `helm upgrade --reuse-values` from a chart that predates probes.startup
+     hands these templates a values tree with no such key, so every dereference
+     below has to tolerate its absence or the render fails outright for every
+     operator using that flag. Absent means "the gate this chart added is not
+     configured", which is the same as disabled. */ -}}
+{{- if and .Values.probes.startup .Values.probes.startup.enabled -}}
 {{- $startupBudget := mul (int .Values.probes.startup.periodSeconds) (int .Values.probes.startup.failureThreshold) -}}
 {{- $livenessBudget := add (int .Values.probes.liveness.initialDelaySeconds) (mul (int .Values.probes.liveness.periodSeconds) (int .Values.probes.liveness.failureThreshold)) -}}
 {{- if le $startupBudget $livenessBudget -}}

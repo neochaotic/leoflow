@@ -132,6 +132,23 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   edited copy fails the job. Two layers, because a Go test cannot prove that
   pydantic accepts a body, and this defect was valid JSON that was valid against
   our own OpenAPI spec.
+- **`helm upgrade --reuse-values` from 0.4.6 no longer fails to render.** The
+  startup gate added this cycle dereferenced `probes.startup` unguarded, and
+  `--reuse-values` does not merge the new chart's defaults: helm rebuilds the
+  previous release's coalesced values and hands them to the new templates. Since
+  `probes.startup` is the only key this chart gained, an operator upgrading a
+  0.4.6 release with that flag got
+
+  ```
+  nil pointer evaluating interface {}.enabled
+  ```
+
+  and no render at all. Nothing caught it because every test and every CI install
+  starts from the chart's own defaults, where the key is always present; the
+  cross-version upgrade leg added alongside it is what surfaced the class.
+
+  An absent `probes.startup` is now read as "not configured", which renders the
+  same output the 0.4.6 chart did.
 
 - **BREAKING: an unflagged `clearTaskInstances` now previews, and is scoped to
   failures (#1137).** Apache Airflow 3.2.1 declares `dry_run: bool = True` and

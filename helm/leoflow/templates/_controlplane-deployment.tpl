@@ -392,7 +392,7 @@ spec:
             {{- end }}
           {{- $probePort := "http" }}
           {{- if eq .role "scheduler" }}{{ $probePort = "metrics" }}{{ end }}
-          {{- if .ctx.Values.probes.startup.enabled }}
+          {{- if and .ctx.Values.probes.startup .ctx.Values.probes.startup.enabled }}
           # Gate the other two probes on boot completing. Liveness and readiness
           # both target the API listener, which binds at the END of boot, so
           # without this the kubelet answers a slow or stuck boot by restarting

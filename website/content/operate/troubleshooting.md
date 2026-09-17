@@ -83,6 +83,15 @@ leoflow-mcp --version
 | Task state badge does not refresh after "Mark as failed/success" | Known upstream Airflow bug — see [apache/airflow#67883](https://github.com/apache/airflow/issues/67883). The server-side mutation persists correctly; the SPA cache update is the gap. Hard-refresh the page (Cmd+Shift+R) to see the new state. |
 | Browser tab title shows "Airflow" not "Leoflow Lite" | Old build; the SPA shell rewrites the `<title>` to the configured instance name at request time. Update to the latest release. |
 
+## Single sign-on (OIDC)
+
+| Symptom | Cause / fix |
+|---|---|
+| Sign-in page still shows only username/password | No OIDC flow was discovered at boot (`auth.provider` is not `oidc`, or discovery failed). The SSO control only renders when the server registered the route. Check the server log for `oidc setup:` at boot. |
+| A configured SSO deployment refuses every login, and nothing explains why | The callback answers a generic 403 by design (a browser must not learn why a login was refused). Read the audit log for `oidc.%` actions and their `metadata->>'reason'`, and the server's WARN-level `oidc: login denied` log line, which also carries the reason and, for the token_invalid and group_claim_overage arms, the underlying error. The full reason vocabulary (`tenant_not_allowed`, `no_user_jit_off`, `jit_failed`, `unknown_role`, `inactive`, `tenant_mismatch`, `issuer_mismatch`, `token_expired`, and the rest) is documented in [SSO with Google Workspace: when a login is denied](/operate/sso-google-workspace/#when-a-login-is-denied); the mechanism and every reason there is provider-agnostic. |
+| SSO looks dead before the IdP redirect even happens | Check the boot log first. Four configurations are named at boot rather than at login time: an empty `auth.oidc.client_secret`, `auth.oidc.jit_provisioning` off, `auth.oidc.role_mappings` set with no `default_role`, and IdP discovery timing out (bounded at 15s). See [When no login is even attempted](/operate/sso-google-workspace/#when-no-login-is-even-attempted). |
+| Not on Google Workspace | [SSO with Microsoft Entra ID, Okta, or another OIDC provider](/operate/sso-other-providers/) covers the two settings that differ per IdP. |
+
 ## Reset paths (when in doubt)
 
 ```bash

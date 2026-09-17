@@ -72,6 +72,11 @@ A first-class values reference on this site is a TODO for a later migration phas
   **The HPA needs both of its bounds set together** — see
   [Autoscaling](/operate/control-plane-ha/#autoscaling-set-both-bounds-or-neither).
 - TLS termination via cert-manager — see [Pro TLS](/operate/pro-tls/).
+- OIDC/SSO login (`auth.oidc.*`), off by default: turning it on renders the
+  ConfigMap the two map settings need and makes `auth.provider: oidc` reachable
+  from values, rather than requiring a hand-mounted config file. See
+  [SSO with Google Workspace](/operate/sso-google-workspace/) or
+  [SSO with another OIDC provider](/operate/sso-other-providers/).
 
 ## Tuning the probes
 
@@ -102,11 +107,12 @@ probes:
 The budget is `periodSeconds * failureThreshold`, 180 seconds by default. That
 number is sized from the server's own boot bounds rather than picked: the
 Postgres connect retry is 30 seconds and runs twice (the request pool and the
-dedicated probe pool), the pod-informer warm-up is bounded at 10 seconds, and on
-top of those sit credential detection for an object-store log sink and OIDC
-discovery, neither of which carries a bound of its own. That is 70 seconds of
-code-defined budget before anything cloud-shaped, and a gate tighter than the
-boot would kill a pod that was about to come up.
+dedicated probe pool), the pod-informer warm-up is bounded at 10 seconds, and
+OIDC discovery is bounded at 15 seconds. That is 85 seconds of code-defined
+budget before anything cloud-shaped, plus headroom for what still carries no
+bound of its own (credential detection for an object-store log sink, and
+process start), and a gate tighter than the boot would kill a pod that was
+about to come up.
 
 It is deliberately generous, because the two directions are not symmetric. A boot
 that *fails* returns an error and the process exits 1, so `CrashLoopBackOff`
@@ -183,4 +189,7 @@ replica report itself unready at the same moment.
   validation status.
 - [Deploy your first Pro DAG](/operate/first-pro-dag/) — the promotion walkthrough.
 - [Upgrades](/operate/upgrades/) — upgrading a chart release safely.
+- [SSO with Google Workspace](/operate/sso-google-workspace/) or
+  [with another OIDC provider](/operate/sso-other-providers/): turning on
+  `auth.oidc.*`.
 - Cross-listed from the [Reference](/reference/) section for the values surface.

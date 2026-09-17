@@ -106,14 +106,17 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the other way, so this request:
 
   ```
-  POST /api/v2/dags/{id}/clearTaskInstances -d '{"dag_run_id":"r"}'
+  POST /api/v2/dags/{id}/clearTaskInstances -d '{"dag_run_id":"r","task_ids":["load"]}'
   ```
 
   previewed on Airflow and **executed** here, over every task instance named by
-  the request, including ones that had succeeded. Anything written against the
-  Airflow API, which is leoflow's declared compatibility target, sends exactly
-  that request. The divergence was known and recorded in the OpenAPI description
-  ("NOTE: Apache Airflow's equivalent defaults to true") rather than reconciled.
+  the request, including ones that had succeeded. With no `task_ids` the same
+  unflagged request cleared no task instance but still re-opened the run, putting
+  a finished run back to `queued` and discarding its alert bookkeeping. Anything
+  written against the Airflow API, which is leoflow's declared compatibility
+  target, sends exactly that request. The divergence was known and recorded in
+  the OpenAPI description ("NOTE: Apache Airflow's equivalent defaults to true")
+  rather than reconciled.
 
   A missing `dry_run` now previews and a missing `only_failed` now restricts the
   clear to failed task instances. Both explicit values still win, so

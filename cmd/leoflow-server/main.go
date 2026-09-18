@@ -156,11 +156,6 @@ func run() error {
 	defer dsCleanup()
 
 	repo := storage.NewRepository(pg)
-	// The name check needs the database, so it cannot live in warnStartup with the
-	// rest. It is bounded because it is on the boot path ahead of the listener: a
-	// hung lookup must not hold the probe endpoint down (the same reason discovery
-	// is bounded), and its bound is counted in the startup-probe budget.
-	warnOIDCNames(ctx, repo, cfg, tel.Logger)
 	if serr := configureSecrets(repo, cfg, tel.Logger); serr != nil {
 		return serr
 	}
@@ -172,6 +167,22 @@ func run() error {
 	if err := bootstrapAdmin(ctx, repo, tel.Logger); err != nil {
 		return err
 	}
+	// The name check needs the database, so it cannot live in warnStartup with the
+	// rest. It is bounded because it is still on the boot path ahead of the
+	// listener: a hung lookup must not hold the probe endpoint down (the same
+	// reason discovery is bounded), and its bound is counted in the startup-probe
+	// budget.
+	//
+	// It runs AFTER bootstrapAdmin, and that order is the whole point. The break-glass
+	// check asks whether a listed address has a local password login, and the
+	// bootstrap admin is the only such account a fresh install has. Running first
+	// meant a first install with bootstrap.password set and admin@leoflow.local in
+	// break_glass_emails, which is the chart's own documented posture, warned that
+	// its escape hatch does not open when it does. It cleared on the next restart,
+	// which is worse than plainly wrong: wrong on the one boot an operator reads,
+	// right afterwards, and that is how a whole family of warnings gets learned as
+	// noise. Found by installing the chart, not by any test.
+	warnOIDCNames(ctx, repo, cfg, tel.Logger)
 
 	logSink, lerr := buildLogSink(ctx, cfg, tel.Logger)
 	if lerr != nil {

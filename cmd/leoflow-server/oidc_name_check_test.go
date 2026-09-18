@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -534,4 +535,36 @@ func TestBreakGlassWarningCatchesAnAddressThatCannotSignIn(t *testing.T) {
 			t.Errorf("an empty list was reported as addresses that cannot sign in: %s", got.Msg)
 		}
 	})
+}
+
+// TestNameCheckRunsAfterTheBootstrapAdminExists pins an ordering that a k3d
+// install exposed and every unit test missed.
+//
+// The break-glass check asks whether a listed address has a local password
+// login. bootstrapAdmin creates admin@leoflow.local, and it ran AFTER the check.
+// So on a first install with bootstrap.password set and that address in
+// break_glass_emails, which is the chart's own documented posture, the very
+// first boot warned that the escape hatch does not open, and it did open. The
+// warning cleared on the next restart, which is worse than being simply wrong:
+// it is wrong on exactly the boot an operator reads, and right afterwards, so it
+// teaches them the whole family of warnings is noise.
+//
+// This test pins the order rather than the message, because the bug was not in
+// the message. run() is not callable from a test, so it reads the source: crude,
+// and it fails when someone moves either call, which is the only property that
+// matters here.
+func TestNameCheckRunsAfterTheBootstrapAdminExists(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("reading main.go: %v", err)
+	}
+	body := string(src)
+	check := strings.Index(body, "\twarnOIDCNames(ctx, repo, cfg, tel.Logger)")
+	bootstrap := strings.Index(body, "\tif err := bootstrapAdmin(ctx, repo, tel.Logger); err != nil {")
+	if check < 0 || bootstrap < 0 {
+		t.Fatal("one of the two calls was renamed; this test guards the order between them and can no longer see it")
+	}
+	if check < bootstrap {
+		t.Error("the name check runs before bootstrapAdmin, so a first install warns that its own break-glass account cannot sign in, on the one boot an operator reads")
+	}
 }

@@ -187,7 +187,7 @@ jobs:
                --gc --minify --logLevel info
 
       - name: Upload leg artifact (not a Pages artifact — combined in `assemble`)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: site-${{ matrix.id }}
           path: src/website/public

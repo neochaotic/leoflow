@@ -171,6 +171,28 @@ one deployment; each row leaves the cluster in the state the next one needs.
 | 17 | Google Workspace end to end, on a real tenant (#1164) | The only row here that needs a real Google client. `tenantClaim: hd` with exactly one domain. **Decides:** the authorization redirect carries `hd=<domain>` and the chooser offers only that domain; a personal account is still rejected server-side if forced (the pin is the claim, not the parameter); and a first login provisions the user with `defaultRole`. | ★ |
 | 18 | The chart renders a complete SSO install from values alone (#1159) | `helm install` with the `auth.oidc.*` block, including the two maps, and nothing in `extraEnv`. **Decides:** the ConfigMap is mounted, `LEOFLOW_CONFIG` points at it, the client secret comes from `existingSecret` and is absent from the ConfigMap, and the render REFUSES when `tenantClaim`/`tenantClaims` are not both set. | ✔ |
 
+**Execution record, v0.4.7-rc.2.** Rows 13, 14, 15, 16 and 18 were run against
+the commit this RC is cut from. Row 18 was run as a real `helm install` on k3d,
+and it is the one that earned its keep: the first boot of a correct install
+warned that its own break-glass account could not sign in, because the check ran
+before `bootstrapAdmin` created it (#1175). No unit test could see that ordering,
+and neither could a local run against a database prepared by hand.
+
+Row 14 was driven with a real rejection through the fail-closed path, which
+proved the whole channel (browser page, audit row, one WARN) for one reason,
+`missing_state`. The other reasons in the decoder table need a signed ID token,
+so they remain unit-verified only.
+
+**Row 17 was NOT executed.** It needs an OAuth client in a real Google Workspace
+tenant, which this cut did not have. What that leaves unproven is narrow and
+worth naming rather than glossing: the `hd` parameter reaching Google's real
+account chooser, and a first login provisioning through it end to end. Everything
+`hd` depends on is covered elsewhere (the parameter's construction by unit test,
+the tenant pin by unit test, the authorization redirect's shape by the e2e
+against a fake IdP), and the parameter is a hint with no security weight, since
+the pin is the verified claim on the returned token. It carries forward to §3b
+rather than retiring, tracked as #1177.
+
 **Process notes, both of which have cost a cut before.**
 
 Build the RC image from the commit under test (#1019). Rows 1, 2, 3, 4, 5, 8 and
@@ -186,6 +208,21 @@ that is still open, which is what earns a row the carry-forward below instead of
 retirement; see §3b.
 
 ### §3b — standing assertions (carry forward until the issue closes)
+
+**Carried from the v0.4.7 tranche, pending #1177** (row 17, never executed
+because no cut so far had a Google Workspace tenant to point at):
+
+- **#1164 the `hd` hint reaches Google's real account chooser.** With
+  `tenantClaim: hd` and exactly one accepted domain, the authorization redirect
+  must carry `hd=<domain>` and the chooser must offer only that domain, and a
+  first login through it must provision with `defaultRole`. **PASS:** both hold
+  against a real Workspace client. Not a security claim: the pin is the verified
+  `hd` CLAIM on the returned token, and the parameter is attacker-editable, so a
+  failure here means the chooser still offers accounts the pin will reject, which
+  is the problem this was meant to remove rather than a new one. Everything the
+  hint is built from is covered without a tenant (the parameter by unit test
+  including the two cases where it is deliberately not sent, the pin by unit
+  test, the redirect's shape by `e2e-sso-login` against a fake IdP).
 
 **Carried from the v0.4.6 tranche, pending #1089** (never proven on a cloud CNI
 or a real admission controller; not standing by original design, but they earn

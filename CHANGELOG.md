@@ -256,7 +256,11 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     is the bootstrap admin; every other one comes from the admin-authenticated
     user API, which is precisely what cannot be reached during a lock-out. A user
     provisioned through SSO does not count either: it has no password for
-    anything to verify against.
+    anything to verify against. The check runs after the bootstrap admin is
+    created, so a first install with `bootstrap.password` set and
+    `admin@leoflow.local` on the allowlist, which is the chart's documented
+    posture, says nothing: the account it asks about is the one that install just
+    made.
   - **an empty `break_glass_emails` under `provider: oidc`.** Every password
     login is rejected, which is correct, and is also the state in which any of
     the failures above leaves nobody able to reach the control plane, including

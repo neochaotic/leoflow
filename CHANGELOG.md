@@ -330,6 +330,16 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `hd` **claim** on the returned token, which is what the tenant pin already
   does, and this must never be read as a reason to relax that check.
 
+  **How this was verified, and how it was not.** The parameter's construction is
+  unit-tested, including the two cases where it is deliberately not sent, and the
+  authorization request's shape is checked on every push by a browser test
+  against a fake identity provider. It has **not** been exercised against a real
+  Google Workspace tenant: no cut so far had one to point at
+  ([#1177](https://github.com/neochaotic/leoflow/issues/1177)). If it is wrong,
+  the symptom is the account chooser still offering accounts the tenant pin then
+  rejects, which is the problem this set out to remove rather than a new one, and
+  it cannot weaken the pin, which is the verified claim on the returned token.
+
 - **OpenMetadata can catalogue leoflow again: `class_ref.module_path` is no
   longer null.** A field team reported that they could not integrate leoflow with
   OpenMetadata and could not say why. The cause was one field. `classRefDTO`

@@ -28,6 +28,38 @@ numbers.
 
 ---
 
+## The credential question, and what soak_token does and does not answer
+
+A task pod is dispatched with a short-lived agent credential that the control
+plane renews on each heartbeat, bounded by
+`auth.max_attempt_credential_lifetime` (24h by default). Renewal is what lets an
+attempt outlive its own token, and until `soak_token` nothing exercised it: the
+longest task in the battery ran for seven minutes.
+
+**The shape that matters is not "a task ran for a long time".** It is "a task ran
+for a long time AND THEN used its credential". A task that sleeps and exits
+proves nothing, because the agent may need the token only at dispatch. So
+`soak_token` resolves the managed connection `soak_http` three times: at the
+start, at the midpoint, and after the sleep. The last one is the assertion; the
+first exists so a deployment that was broken from the outset says so in a second
+rather than in forty minutes.
+
+**Retries are off, deliberately.** A retry is dispatched with a FRESH credential,
+so a task that died of a lapsed token would pass on attempt 2 and the run would
+end green. The single failure this DAG exists to catch is the one a retry would
+erase.
+
+**What it does not cover.** It proves renewal holds for as long as the task runs.
+It does not reach the 24h ceiling that deliberately STOPS renewing, so the bound
+itself is untested. Asserting that means lowering
+`auth.max_attempt_credential_lifetime` for a dedicated run and requiring the task
+to fail for that reason: a different experiment, since this one asserts the happy
+path holds and that one asserts the bound is enforced.
+
+**Why hourly.** The body defaults to forty minutes. On a shorter schedule
+`max_active_runs=1` would block the next run and the cadence check would report
+the DAG as starved, which would be a true reading of the wrong thing.
+
 ## Scheduler punctuality, and what the cadence check cannot see
 
 `cadence_starved` asks whether the runs EXIST. A scheduler running twenty

@@ -348,7 +348,7 @@ func TestViolationCarriesItsEvidence(t *testing.T) {
 // losing its cadence coverage when a DAG is added to test/soak/dags without a
 // matching expectation, which would leave that DAG's schedule unasserted.
 func TestCadenceExpectationsCoverEveryShippedDag(t *testing.T) {
-	shipped := []string{"soak_ingest", "soak_fanout", "soak_chain", "soak_operators", "soak_flaky", "soak_long"}
+	shipped := []string{"soak_ingest", "soak_fanout", "soak_chain", "soak_operators", "soak_flaky", "soak_long", "soak_token"}
 	for _, dag := range shipped {
 		if _, ok := cadenceExpectations[dag]; !ok {
 			t.Errorf("%s ships in test/soak/dags but has no cadence expectation", dag)
@@ -403,7 +403,14 @@ func TestCadenceExpectationsMatchTheShippedSchedules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading test/soak/dags: %v", err)
 	}
-	re := regexp.MustCompile(`schedule\s*=\s*"\*/(\d+) \* \* \* \*"`)
+	// Two forms, because the battery needs both. `*/N * * * *` is every N
+	// minutes; `0 * * * *` is hourly, which a task longer than an hour's worth of
+	// interval needs so a run cannot collide with the next one. Anything else is
+	// rejected rather than guessed at: a cron this cannot read would silently get
+	// no expectation, and a cadence check with no expectation is a check that
+	// cannot fail.
+	reEveryN := regexp.MustCompile(`schedule\s*=\s*"\*/(\d+) \* \* \* \*"`)
+	reHourly := regexp.MustCompile(`schedule\s*=\s*"0 \* \* \* \*"`)
 	seen := map[string]bool{}
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -414,14 +421,19 @@ func TestCadenceExpectationsMatchTheShippedSchedules(t *testing.T) {
 			t.Errorf("%s has no dag.py: %v", e.Name(), rerr)
 			continue
 		}
-		m := re.FindSubmatch(src)
-		if m == nil {
-			t.Errorf("%s does not declare a `*/N * * * *` schedule the cadence check can express", e.Name())
+		var period int
+		switch m := reEveryN.FindSubmatch(src); {
+		case m != nil:
+			p, cerr := strconv.Atoi(string(m[1]))
+			if cerr != nil {
+				t.Fatalf("%s: unparsable period %q", e.Name(), m[1])
+			}
+			period = p
+		case reHourly.Match(src):
+			period = 60
+		default:
+			t.Errorf("%s declares no schedule the cadence check can express (`*/N * * * *` or `0 * * * *`)", e.Name())
 			continue
-		}
-		period, cerr := strconv.Atoi(string(m[1]))
-		if cerr != nil {
-			t.Fatalf("%s: unparsable period %q", e.Name(), m[1])
 		}
 		seen[e.Name()] = true
 		want, ok := cadenceExpectations[e.Name()]

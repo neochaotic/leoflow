@@ -276,6 +276,9 @@ var cadenceExpectations = map[string]int{
 	"soak_operators": 5,
 	"soak_flaky":     7,
 	"soak_long":      15,
+	// Hourly on purpose: its body defaults to forty minutes, so a run must never
+	// collide with the next. See test/soak/dags/soak_token/dag.py.
+	"soak_token": 60,
 }
 
 // minCadencePeriodMin is the shortest schedule in the battery; the cadence check

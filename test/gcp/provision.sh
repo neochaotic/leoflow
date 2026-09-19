@@ -235,7 +235,7 @@ flags_known_to_gcloud() { # <subcommand words as one string> <argv...>
     if grep -qE -- "(^|[^A-Za-z0-9-])${flagname}([^A-Za-z0-9-]|$)" <<<"$help"; then
       continue
     fi
-    echo "  FAIL gcloud $sub does not accept $flagname"
+    echo "  FAIL gcloud $sub does not accept $flagname (checked against $(gcloud version 2>/dev/null | head -1))"
     bad=1
   done
   [ "$bad" = "0" ] && { echo "  ok   every flag passed to 'gcloud $sub' exists in its help"; return 0; }

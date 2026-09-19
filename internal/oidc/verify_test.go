@@ -550,3 +550,90 @@ func TestVerifyGroupOverage(t *testing.T) {
 		t.Fatalf("Verify with group overage = %v, want ErrGroupOverage", err)
 	}
 }
+
+// verifyWithClaims signs a token with the base claims plus a mutation and
+// requires it to verify.
+func verifyWithClaims(t *testing.T, f *fakeIDP, cfg config.OIDCSection, mut func(jwt.MapClaims)) *VerifiedIdentity {
+	t.Helper()
+	claims := baseClaims(cfg, testNonce)
+	mut(claims)
+	id, err := newTestVerifier(t, cfg).Verify(context.Background(), f.signIDToken(t, claims), testNonce)
+	if err != nil {
+		t.Fatalf("Verify = %v, want success", err)
+	}
+	return id
+}
+
+// verifyExpectingError is its counterpart for the arms that must fail closed.
+func verifyExpectingError(t *testing.T, f *fakeIDP, cfg config.OIDCSection, mut func(jwt.MapClaims)) (*VerifiedIdentity, error) {
+	t.Helper()
+	claims := baseClaims(cfg, testNonce)
+	mut(claims)
+	return newTestVerifier(t, cfg).Verify(context.Background(), f.signIDToken(t, claims), testNonce)
+}
+
+// TestResolveTenantAcceptsAnArrayClaim covers a shape the pin silently could not
+// read.
+//
+// The claim was cast to string and nothing else, which is right for hd (Google)
+// and tid (Entra) but not for aud, which OpenID Connect defines as a string OR
+// an array of strings. An operator behind a single-tenant IdP has no domain
+// claim to pin on and reaches for aud (see the single-tenant discussion in
+// ADR 0057). Cognito emits it as one string, so it works there; an IdP emitting
+// the array form rejected EVERY login, audited tenant_not_allowed, which reads
+// as "this tenant is not on the allowlist" and sends the operator to inspect a
+// map that is correct.
+func TestResolveTenantAcceptsAnArrayClaim(t *testing.T) {
+	f := newFakeIDP(t)
+	cfg := baseOIDCConfig(f)
+	cfg.TenantClaim = "aud_list"
+	cfg.TenantClaims = map[string]string{"client-abc": "default"}
+
+	t.Run("a single-element array resolves", func(t *testing.T) {
+		id := verifyWithClaims(t, f, cfg, func(c jwt.MapClaims) { c["aud_list"] = []any{"client-abc"} })
+		if id.Tenant != "default" {
+			t.Errorf("tenant = %q, want default: an array of one names exactly one tenant", id.Tenant)
+		}
+	})
+
+	t.Run("a string still resolves", func(t *testing.T) {
+		id := verifyWithClaims(t, f, cfg, func(c jwt.MapClaims) { c["aud_list"] = "client-abc" })
+		if id.Tenant != "default" {
+			t.Errorf("tenant = %q, want default", id.Tenant)
+		}
+	})
+
+	t.Run("an array with one MATCHING element resolves even when others are present", func(t *testing.T) {
+		id := verifyWithClaims(t, f, cfg, func(c jwt.MapClaims) {
+			c["aud_list"] = []any{"some-other-client", "client-abc"}
+		})
+		if id.Tenant != "default" {
+			t.Errorf("tenant = %q, want default: unmapped values are not claims about our tenants", id.Tenant)
+		}
+	})
+
+	t.Run("two matching elements are refused, not picked between", func(t *testing.T) {
+		amb := cfg
+		amb.TenantClaims = map[string]string{"client-abc": "default", "client-xyz": "other"}
+		_, err := verifyExpectingError(t, f, amb, func(c jwt.MapClaims) {
+			c["aud_list"] = []any{"client-abc", "client-xyz"}
+		})
+		if !errors.Is(err, ErrTenantAmbiguous) {
+			t.Errorf("err = %v, want ErrTenantAmbiguous: a token naming two accepted tenants identifies neither, and picking the first would be arbitrary", err)
+		}
+	})
+
+	t.Run("a shape that is neither is refused with its own reason", func(t *testing.T) {
+		_, err := verifyExpectingError(t, f, cfg, func(c jwt.MapClaims) { c["aud_list"] = 42 })
+		if !errors.Is(err, ErrTenantClaimShape) {
+			t.Errorf("err = %v, want ErrTenantClaimShape: the log must separate a claim we cannot read from a tenant that is not allowed", err)
+		}
+	})
+
+	t.Run("an array with no match is still not allowed", func(t *testing.T) {
+		_, err := verifyExpectingError(t, f, cfg, func(c jwt.MapClaims) { c["aud_list"] = []any{"nope"} })
+		if !errors.Is(err, ErrTenantNotAllowed) {
+			t.Errorf("err = %v, want ErrTenantNotAllowed", err)
+		}
+	})
+}

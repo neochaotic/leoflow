@@ -403,6 +403,8 @@ spec:
               value: {{ .ctx.Values.auth.oidc.groupsClaim | quote }}
             - name: LEOFLOW_AUTH_OIDC_JIT_PROVISIONING
               value: {{ .ctx.Values.auth.oidc.jitProvisioning | quote }}
+            - name: LEOFLOW_AUTH_OIDC_AUTO_REDIRECT
+              value: {{ .ctx.Values.auth.oidc.autoRedirect | quote }}
             - name: LEOFLOW_AUTH_OIDC_CLOCK_SKEW_SECONDS
               value: {{ .ctx.Values.auth.oidc.clockSkewSeconds | quote }}
             {{- if .ctx.Values.auth.oidc.defaultRole }}

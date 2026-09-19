@@ -3,6 +3,7 @@ package api
 import (
 	"html/template"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -100,6 +101,49 @@ var loginPageTemplate = template.Must(template.New("login").Parse(`<!doctype htm
  });
 </script></body></html>`))
 
+// loginPageOpts is what the sign-in page needs to know about the deployment. It
+// is a struct rather than a parameter list because the three flags interact:
+// autoRedirect is meaningless without sso, and the break-glass posture decides
+// how the form is presented under both.
+type loginPageOpts struct {
+	// sso is whether an OIDC flow was discovered at boot, which is the same
+	// condition the router uses to register /api/v2/auth/oidc/login.
+	sso bool
+	// breakGlass is whether any address may use the password form while SSO is on.
+	breakGlass bool
+	// autoRedirect starts the flow instead of rendering the page, for deployments
+	// where the sign-in page is a screen to acknowledge for nothing.
+	autoRedirect bool
+}
+
+// loginLocalParam reaches the password form on a deployment that auto-redirects.
+// It exists because the account that needs the form is the one used when the IdP
+// is the thing that is broken, and requiring a values edit and a rollout to
+// reach the escape hatch would defeat the hatch.
+const loginLocalParam = "local"
+
+// autoRedirectTarget returns where to send the browser instead of rendering, and
+// whether to do so.
+//
+// The guard is the point of this function, not the redirect. Since #1169 a
+// refused sign-on answers 302 to this page carrying sso_error, so redirecting
+// unconditionally would bounce every denial straight back to the IdP: an
+// infinite loop with no surface left to read the error on. The #1161 review
+// predicted this when it rejected auto-redirect outright; the marker is what
+// makes the feature safe rather than impossible.
+//
+// It also requires sso, or a deployment with no flow would send every user to a
+// route the router never registered.
+func (o loginPageOpts) autoRedirectTarget(c *gin.Context) (string, bool) {
+	if !o.autoRedirect || !o.sso {
+		return "", false
+	}
+	if c.Query(ssoErrorParam) != "" || c.Query(loginLocalParam) != "" {
+		return "", false
+	}
+	return "/api/v2/auth/oidc/login?next=" + url.QueryEscape(sanitizeNext(c.Query("next"))), true
+}
+
 // sanitizeNext keeps the post-login redirect on this origin: a single-slash
 // absolute path only, defaulting to "/". This blocks open redirects (e.g.
 // "//evil.com" or "https://evil.com").
@@ -124,8 +168,12 @@ func sanitizeNext(next string) string {
 // "Invalid credentials" - the same answer a wrong password gets. The form stays
 // in the page, so adding an account needs no release, but it collapses and says
 // which setting turns it on.
-func loginPageHandler(sso, breakGlass bool) gin.HandlerFunc {
+func loginPageHandler(o loginPageOpts) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if target, ok := o.autoRedirectTarget(c); ok {
+			c.Redirect(http.StatusFound, target)
+			return
+		}
 		c.Status(http.StatusOK)
 		c.Header("Content-Type", "text/html; charset=utf-8")
 		c.Header("Cache-Control", "no-cache")
@@ -157,11 +205,11 @@ func loginPageHandler(sso, breakGlass bool) gin.HandlerFunc {
 		}{
 			Next:       template.JS("'" + template.JSEscapeString(next) + "'"),
 			NextQuery:  next,
-			SSO:        sso,
-			SSORefused: sso && c.Query("sso_error") == ssoErrorRefused,
-			SSOFailed:  sso && c.Query("sso_error") == ssoErrorServer,
-			Collapse:   sso && !breakGlass,
-			Focus:      !sso || breakGlass,
+			SSO:        o.sso,
+			SSORefused: o.sso && c.Query(ssoErrorParam) == ssoErrorRefused,
+			SSOFailed:  o.sso && c.Query(ssoErrorParam) == ssoErrorServer,
+			Collapse:   o.sso && !o.breakGlass,
+			Focus:      !o.sso || o.breakGlass,
 		}); err != nil {
 			AbortProblem(c, http.StatusInternalServerError, "internal error", "could not render login page")
 		}
@@ -173,6 +221,11 @@ func loginPageHandler(sso, breakGlass bool) gin.HandlerFunc {
 func logoutHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.SetCookie(authTokenCookie, "", -1, "/", "", false, false)
-		c.Redirect(http.StatusFound, "/api/v2/auth/login")
+		// The PAGE, not the flow. With auto_redirect on, the bare sign-in URL is
+		// itself a redirect to the IdP, and our sign-out does not touch the IdP
+		// session, so a user who signed out would be signed straight back in and
+		// the button would appear to do nothing. The marker that reaches the form
+		// is the same one break-glass uses.
+		c.Redirect(http.StatusFound, "/api/v2/auth/login?"+loginLocalParam+"=1")
 	}
 }

@@ -531,6 +531,15 @@ type OIDCSection struct {
 	// migration can pre-create an OIDC identity (ADR 0057, amendment on D4).
 	// cmd/leoflow-server warns about this at boot.
 	JITProvisioning bool `mapstructure:"jit_provisioning"`
+	// AutoRedirect starts the login flow on the sign-in page instead of rendering
+	// it, for a deployment where that page is a screen to acknowledge for nothing
+	// (an edge proxy has already authenticated, or SSO is the only way in).
+	//
+	// OFF by default: turning it on for everyone would remove the sign-in page
+	// from deployments that rely on it. It is suppressed on a refused sign-on and
+	// behind an explicit ?local=1, so a denial still lands somewhere readable and
+	// a break-glass account can always reach the form.
+	AutoRedirect bool `mapstructure:"auto_redirect"`
 	// ClockSkewSeconds is the tolerance applied to the ID token's exp/iat/nbf
 	// checks to absorb small clock differences between the IdP and this server.
 	// Defaults to 60.
@@ -655,9 +664,14 @@ var serverDefaults = map[string]any{
 	"auth.oidc.allowed_email_domains": []string{},
 	"auth.oidc.break_glass_emails":    []string{},
 	"auth.oidc.jit_provisioning":      false,
-	"auth.oidc.clock_skew_seconds":    60,
-	"scheduler.loop_interval_ms":      1000,
-	"scheduler.enabled":               true,
+	// Registered so viper binds LEOFLOW_AUTH_OIDC_AUTO_REDIRECT from the
+	// environment. Without an entry here the chart would render the variable and
+	// the server would ignore it, which is a setting that looks configured and is
+	// not. TestDocumentedEnvVarsBind exists for exactly this and caught it.
+	"auth.oidc.auto_redirect":      false,
+	"auth.oidc.clock_skew_seconds": 60,
+	"scheduler.loop_interval_ms":   1000,
+	"scheduler.enabled":            true,
 	// Default: synchronous dispatch (BufferSize=0). Safe and zero-overhead for
 	// Lite. Pro deployments should set buffer_size>=1 + workers>=1 in their
 	// values.yaml so K8s API latency does not stretch the tick (#127, ADR 0031).

@@ -343,6 +343,10 @@ func verifyReason(err error) string {
 		return "email_not_verified"
 	case errors.Is(err, oidc.ErrTenantNotAllowed):
 		return "tenant_not_allowed"
+	case errors.Is(err, oidc.ErrTenantAmbiguous):
+		return "tenant_ambiguous"
+	case errors.Is(err, oidc.ErrTenantClaimShape):
+		return "tenant_claim_shape"
 	case errors.Is(err, oidc.ErrEmailDomainNotAllowed):
 		return "email_domain_not_allowed"
 	case errors.Is(err, oidc.ErrMissingExpiry):

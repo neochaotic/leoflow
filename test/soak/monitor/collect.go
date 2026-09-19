@@ -101,7 +101,10 @@ type sample struct {
 	// Cadence: runs created per DAG in the rolling window, the signal that
 	// catches a scheduler that heartbeats but has stopped creating work.
 	RunsCreated map[string]int `json:"runs_created_in_window"`
-	WindowMin   float64        `json:"cadence_window_min"`
+	// WorstLatenessS is the largest gap, per DAG in the window, between when a
+	// scheduled run was DUE (logical_date) and when the scheduler created it.
+	WorstLatenessS map[string]float64 `json:"worst_lateness_seconds"`
+	WindowMin      float64            `json:"cadence_window_min"`
 
 	// Correctness invariants evaluated in SQL.
 	TerminalRunsWithActiveTIs int64 `json:"terminal_runs_with_active_tis"`
@@ -232,11 +235,12 @@ func (c *collector) Sample(ctx context.Context, started time.Time) (sample, erro
 	c.seq++
 	now := time.Now()
 	s := sample{
-		At:          now,
-		ElapsedS:    now.Sub(started).Seconds(),
-		Label:       c.o.label,
-		Seq:         c.seq,
-		RunsCreated: map[string]int{},
+		At:             now,
+		ElapsedS:       now.Sub(started).Seconds(),
+		Label:          c.o.label,
+		Seq:            c.seq,
+		RunsCreated:    map[string]int{},
+		WorstLatenessS: map[string]float64{},
 	}
 
 	// Liveness first: it is the one reading that is still meaningful when
@@ -405,8 +409,20 @@ func (c *collector) cadence(ctx context.Context, s *sample, started time.Time) e
 		win = time.Hour
 	}
 	s.WindowMin = win.Minutes()
+	// Lateness rides along with the count on purpose: cadence asserts that runs
+	// EXIST, and a scheduler twenty minutes behind still creates every run it
+	// owes. Volume and punctuality are different failures and the first one hides
+	// the second, so both are read in the same query and from the same rows.
+	//
+	// logical_date is the instant the schedule was due; queued_at is when the
+	// scheduler actually created the run. Their difference is the lateness the
+	// operator would feel. Scheduled-only runs are counted so a manual trigger,
+	// which has no schedule to be late for, cannot flatter the number.
 	const q = `
-SELECT d.dag_id, count(*)
+SELECT d.dag_id,
+       count(*),
+       COALESCE(MAX(EXTRACT(EPOCH FROM (r.queued_at - r.logical_date)))
+                FILTER (WHERE r.trigger = 'scheduled'), 0)
 FROM dag_runs r JOIN dags d ON d.id = r.dag_id
 WHERE r.queued_at >= now() - $1::interval
 GROUP BY d.dag_id`
@@ -418,10 +434,12 @@ GROUP BY d.dag_id`
 	for rows.Next() {
 		var id string
 		var n int
-		if err := rows.Scan(&id, &n); err != nil {
+		var lateS float64
+		if err := rows.Scan(&id, &n, &lateS); err != nil {
 			return fmt.Errorf("cadence scan: %w", err)
 		}
 		s.RunsCreated[id] = n
+		s.WorstLatenessS[id] = lateS
 	}
 	return rows.Err()
 }

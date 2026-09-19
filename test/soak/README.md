@@ -28,6 +28,27 @@ numbers.
 
 ---
 
+## Scheduler punctuality, and what the cadence check cannot see
+
+`cadence_starved` asks whether the runs EXIST. A scheduler running twenty
+minutes behind still creates every run it owes, so volume alone reports that
+deployment as healthy while the thing an operator feels, a pipeline due at 02:00
+that starts at 02:40, goes unmeasured.
+
+`schedule_late` measures the gap between `logical_date` (when the schedule was
+due) and `queued_at` (when the scheduler created the run), per DAG, worst case
+in the window. Only `trigger = 'scheduled'` runs count: a manual trigger has no
+schedule to be late for and would otherwise flatter the number.
+
+The budget is **half the DAG's own period**, not one constant. Thirty seconds is
+nothing for an hourly schedule and most of the interval for a two-minute one, so
+a single threshold would be noise on the short schedules or blind on the long
+ones. Past half an interval a run is closer to the next slot than to its own,
+and two consecutive late runs begin colliding.
+
+It is silent inside a fault window, where being late is the correct behavior.
+
+
 ## 1. What "the scheduler did not wedge" means as a measurement
 
 Six signals are asserted. Each one is named for the failure it catches, and each

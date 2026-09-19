@@ -12,8 +12,8 @@
 #
 # Discovery is by the `self_test()` definition rather than a hand-kept list, so
 # a new script's self-test joins this gate by existing (anywhere under scripts/
-# or test/) — the same property that
-# makes cut-release.sh's run_gates() glob scripts/check-*.sh.
+# or test/), the same property that makes cut-release.sh's run_gates() glob
+# scripts/check-*.sh.
 #
 # run_gates() globs scripts/check-*.sh, so this is also part of the cut's own
 # pre-flight.

@@ -501,7 +501,14 @@ jobs:
   # plus the logs render contract. ~4 min (chromium + relocatable PG download).
   # ─────────────────────────────────────────────────────────────────────
   # ─────────────────────────────────────────────────────────────────────
-  # SSO login page (#1160): the sign-in page against a real IdP handshake.
+  # SSO login page: the sign-in page against a real IdP handshake, and the two
+  # session-cookie properties only a browser can judge.
+  #
+  # #1160: a configured deployment must offer the flow and a refused sign-on must
+  # come back to the sign-in page. #1191: a break-glass password login on top of
+  # a live SSO session must replace the identity (a script cannot overwrite an
+  # HttpOnly cookie, which is why the old JS cookie write was silently dropped),
+  # and neither path's session cookie may be readable from document.cookie.
   #
   # Separate from ui-smoke on purpose. That job boots Lite with managed
   # Postgres and one server; this needs TWO servers with their own config (an

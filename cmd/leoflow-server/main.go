@@ -1248,6 +1248,11 @@ func discoverOIDCFlow(ctx context.Context, cfg *config.ServerConfig, logger *slo
 }
 
 func buildAPIServer(cfg *config.ServerConfig, tel *observability.Telemetry, authn *auth.JWTAuthenticator, pg *storage.Postgres, repo *storage.Repository, xcomReader *storage.XComReader, logSink logs.Sink, logTailer logs.Tailer, checks map[string]api.HealthChecker, executorInfo api.ExecutorInfo, schedulerHealth api.Heartbeater, oidcFlow *oidc.Flow) *http.Server {
+	if cfg.Auth.SessionCookieInsecure {
+		tel.Logger.Warn("session cookie will be sent without the Secure attribute (auth.session_cookie_insecure): " +
+			"the browser will carry the session token over plain http, where anything on the path can read it. " +
+			"Set this only on a plain-http deployment that cannot be reached over https; a loopback deployment does not need it")
+	}
 	if cfg.Auth.DevNoAuth {
 		tel.Logger.Warn("AUTHENTICATION DISABLED (auth.dev_no_auth): every request is treated as admin. Dev only — NEVER use in production")
 	}
@@ -1314,6 +1319,8 @@ func buildAPIServer(cfg *config.ServerConfig, tel *observability.Telemetry, auth
 		OIDCUsers:    repo,
 		AuthAudit:    repo,
 		JWTSecret:    cfg.Auth.JWT.Secret,
+
+		SessionCookieInsecure: cfg.Auth.SessionCookieInsecure,
 	})
 	return &http.Server{Addr: cfg.Server.HTTPAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 }

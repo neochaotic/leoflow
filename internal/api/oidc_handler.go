@@ -23,6 +23,11 @@ import (
 // redirect and the callback. Scoped to the auth path and short-lived.
 const oidcStateCookie = "_oidc_state"
 
+// oidcStateCookiePath scopes the state cookie to the auth routes that use it.
+// Both the write and the single-use clear name it, and a browser matches a
+// deletion on it, so it is a constant rather than two literals.
+const oidcStateCookiePath = "/api/v2/auth/"
+
 // Auth audit actions (H5).
 const (
 	auditOIDCLoginSuccess = "oidc.login.success"
@@ -65,6 +70,9 @@ type oidcDeps struct {
 	jwtSecret string
 	tokenTTL  time.Duration
 	logger    *slog.Logger
+	// insecureCookies drops Secure from the session and state cookies; see
+	// cookieSecure. Its zero value is the safe one.
+	insecureCookies bool
 }
 
 // randomURLToken returns a cryptographically random, URL-safe token used for the
@@ -77,19 +85,26 @@ func randomURLToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-// setSessionCookie sets the app's _token session cookie server-side, hardened
-// HttpOnly; Secure; SameSite=Lax (D2). Unlike the client-JS cookie the login
-// page sets, this one is never readable by scripts.
-func setSessionCookie(c *gin.Context, token string, ttl time.Duration) {
+// setStateCookie and clearStateCookie are the only two writers of the state
+// cookie, so its attributes cannot drift the way the session cookie's did. It is
+// scoped to the auth path (it has no business being sent with every API call)
+// and is HttpOnly for the same reason the session cookie is: it seals the nonce
+// and the PKCE verifier.
+func setStateCookie(c *gin.Context, value string, insecure bool) {
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(authTokenCookie, token, int(ttl.Seconds()), "/", "", true, true)
+	c.SetCookie(oidcStateCookie, value, int(oidc.StateCookieTTL.Seconds()), oidcStateCookiePath, "", cookieSecure(insecure), true)
+}
+
+func clearStateCookie(c *gin.Context, insecure bool) {
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(oidcStateCookie, "", -1, oidcStateCookiePath, "", cookieSecure(insecure), true)
 }
 
 // oidcLoginHandler implements GET /api/v2/auth/oidc/login: it starts the
 // Authorization Code + PKCE flow. It generates the CSRF state, the nonce, and
 // the PKCE verifier, seals them (plus the sanitized post-login target) in a
 // signed HttpOnly state cookie, and redirects the browser to the IdP.
-func oidcLoginHandler(flow *oidc.Flow, logger *slog.Logger) gin.HandlerFunc {
+func oidcLoginHandler(flow *oidc.Flow, logger *slog.Logger, insecureCookies bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		state, serr := randomURLToken()
 		nonce, nerr := randomURLToken()
@@ -106,8 +121,7 @@ func oidcLoginHandler(flow *oidc.Flow, logger *slog.Logger) gin.HandlerFunc {
 			abortSSOServerFailure(c, logger, "encoding state cookie", err)
 			return
 		}
-		c.SetSameSite(http.SameSiteLaxMode)
-		c.SetCookie(oidcStateCookie, cookie, int(oidc.StateCookieTTL.Seconds()), "/api/v2/auth/", "", true, true)
+		setStateCookie(c, cookie, insecureCookies)
 		c.Redirect(http.StatusFound, flow.AuthCodeURL(state, nonce, verifier))
 	}
 }
@@ -166,7 +180,7 @@ func oidcCallbackHandler(deps oidcDeps) gin.HandlerFunc {
 			abortSSOServerFailure(c, deps.logger, "minting session token", terr)
 			return
 		}
-		setSessionCookie(c, token, deps.tokenTTL)
+		setSessionCookie(c, token, deps.tokenTTL, deps.insecureCookies)
 		deps.record(c, auditOIDCLoginSuccess, identity.Tenant, user.ID, identity.Email, "success",
 			map[string]string{"subject": identity.Subject, "roles": strings.Join(user.Roles, ",")})
 		c.Redirect(http.StatusFound, sanitizeNext(payload.Next))
@@ -188,7 +202,7 @@ func (d oidcDeps) readState(c *gin.Context) (oidc.StatePayload, bool) {
 	}
 	// The state cookie is single-use for this attempt; clear it regardless of
 	// outcome so it cannot be replayed.
-	c.SetCookie(oidcStateCookie, "", -1, "/api/v2/auth/", "", true, true)
+	clearStateCookie(c, d.insecureCookies)
 	return payload, true
 }
 

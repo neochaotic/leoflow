@@ -13,11 +13,16 @@ import (
 // credentials to /auth/token and stores the returned JWT in the "_token" cookie
 // (path /) that the rest of the UI reads. Rather than embed that second SPA,
 // Leoflow serves a minimal login page honoring the same contract: it POSTs
-// /auth/token and sets the _token cookie, then returns to `next`. See
-// docs/ui-compatibility.md and ADR 0018.
+// /auth/token and returns to `next`. See docs/ui-compatibility.md and ADR 0018.
+//
+// The cookie itself is the response's, not the page's: /auth/token sets it
+// server-side (setSessionCookie), the same way the SSO callback does. The page
+// used to write it with document.cookie, which meant a password login could not
+// replace a live SSO session and a JWT-only deployment ran with a session cookie
+// any script could read.
 
 // loginPageTemplate is a self-contained login form. Its script posts to
-// /auth/token, stores the JWT in the _token cookie, and navigates to next.
+// /auth/token, whose response carries the session cookie, and navigates to next.
 var loginPageTemplate = template.Must(template.New("login").Parse(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -72,8 +77,11 @@ var loginPageTemplate = template.Must(template.New("login").Parse(`<!doctype htm
    ev.preventDefault();
    document.getElementById('e').textContent = '';
    try {
+     // same-origin is the fetch default; it is named because the session now
+     // depends on it. The response's Set-Cookie is the login.
      const r = await fetch('/auth/token', {
-       method: 'POST', headers: {'Content-Type':'application/json'},
+       method: 'POST', credentials: 'same-origin',
+       headers: {'Content-Type':'application/json'},
        body: JSON.stringify({username: f.username.value, password: f.password.value})
      });
      if (!r.ok) {
@@ -82,9 +90,11 @@ var loginPageTemplate = template.Must(template.New("login").Parse(`<!doctype htm
          : 'Invalid credentials';
        return;
      }
-     const data = await r.json();
-     const secure = location.protocol === 'https:' ? '; secure' : '';
-     document.cookie = '_token=' + data.access_token + '; path=/; samesite=lax' + secure;
+     // The session cookie arrived with the response. The body still carries the
+     // access_token for API clients; this page has no use for it and must not
+     // try to set the cookie itself, because a script cannot overwrite the
+     // HttpOnly one the server just sent.
+     //
      // Ask the browser to remember the credentials. A fetch-based login (no
      // native form navigation) does not trigger the "save password?" prompt on
      // its own; the Credential Management API does. Best-effort, guarded.
@@ -169,10 +179,12 @@ func loginPageHandler(sso, breakGlass bool) gin.HandlerFunc {
 }
 
 // logoutHandler implements GET /api/v2/auth/logout: it clears the _token cookie
-// and returns to the login page.
-func logoutHandler() gin.HandlerFunc {
+// and returns to the login page. It clears through the same helper both login
+// paths set through, so the deletion can never disagree with the cookie it is
+// deleting.
+func logoutHandler(insecureCookies bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.SetCookie(authTokenCookie, "", -1, "/", "", false, false)
+		clearSessionCookie(c, insecureCookies)
 		c.Redirect(http.StatusFound, "/api/v2/auth/login")
 	}
 }

@@ -27,6 +27,7 @@ COMPOSE="$SOAK_DIR/docker-compose.soak.yaml"
 # ── Defaults. Every one of these is a budget decision; see README.md. ─────────
 DURATION="30m"
 FAULTS="none"
+MODE="soak"
 LABEL="soak"
 API_PORT="${SOAK_API_PORT:-18700}"
 FIXTURE_PORT="${SOAK_FIXTURE_PORT:-18701}"
@@ -35,6 +36,12 @@ SAMPLE_INTERVAL="${SOAK_SAMPLE_INTERVAL:-10s}"
 ROWS="${SOAK_ROWS:-400000}"
 FANOUT_ROWS="${SOAK_FANOUT_ROWS:-200000}"
 LONG_SECONDS="${SOAK_LONG_SECONDS:-420}"
+TOKEN_SECONDS="${SOAK_TOKEN_SECONDS:-2400}"
+# Empty means "leave the server default alone" (24h). A duration here lowers the
+# ceiling past which the control plane STOPS renewing an attempt's credential,
+# which is the only way to reach that bound in a run short enough to watch. See
+# --mode credential-ceiling.
+CREDENTIAL_CEILING="${SOAK_CREDENTIAL_CEILING:-}"
 MAX_DB_BYTES="${SOAK_MAX_DB_BYTES:-$((4 * 1024 * 1024 * 1024))}"
 MAX_DATA_BYTES="${SOAK_MAX_DATA_BYTES:-$((4 * 1024 * 1024 * 1024))}"
 MIN_FREE_BYTES="${SOAK_MIN_FREE_BYTES:-$((10 * 1024 * 1024 * 1024))}"
@@ -50,6 +57,10 @@ usage() {
 Flags:
   --duration D      wall-clock ceiling as Ns/Nm/Nh/Nd (default 30m, hard max 72h)
   --faults PLAN     none | standard | selftest-red | "kind:dur:offset,..."
+  --mode MODE       soak (default) | credential-ceiling. credential-ceiling
+                    lowers auth.max_attempt_credential_lifetime and requires
+                    soak_token to FAIL because its credential lapsed. It is an
+                    inverted run: green means the bound was NOT enforced.
   --label NAME      label recorded in every sample (default soak)
   --out DIR         evidence directory (default .soak/<timestamp>)
   --keep-db         do not stop the Postgres container on teardown
@@ -72,6 +83,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --duration) DURATION="$2"; shift 2 ;;
     --faults)   FAULTS="$2"; shift 2 ;;
+    --mode)     MODE="$2"; shift 2 ;;
     --label)    LABEL="$2"; shift 2 ;;
     --out)      OUT_DIR="$2"; shift 2 ;;
     --rows)     ROWS="$2"; shift 2 ;;
@@ -119,6 +131,7 @@ OWNS_STACK=0
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m    ok\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m    !!\033[0m %s\n' "$*" >&2; }
+err()  { printf '\033[1;31m    xx\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mFATAL:\033[0m %s\n' "$*" >&2; exit 2; }
 
 # ── Teardown. Idempotent, runs on every exit path including the kill switch. ──
@@ -259,6 +272,8 @@ OWNS_STACK=1
 # port only proves docker-proxy is listening, which it does from container start.
 # So the probe is a real query, and it has to succeed three times in a row.
 pg_query_ok() { docker exec leoflow-soak-postgres psql -U leoflow -d leoflow_dev -At -c 'SELECT 1' >/dev/null 2>&1; }
+# psql_q runs one read against the soak's own metadatabase and prints the value.
+psql_q() { docker exec leoflow-soak-postgres psql -U leoflow -d leoflow_dev -At -c "$1" 2>/dev/null; }
 streak=0
 for _ in $(seq 1 120); do
   if pg_query_ok; then
@@ -369,6 +384,8 @@ start_lite() {
   HOME="$SOAK_HOME" \
   SOAK_DATA_DIR="$SOAK_DATA_DIR" \
   SOAK_ROWS="$ROWS" SOAK_FANOUT_ROWS="$FANOUT_ROWS" SOAK_LONG_SECONDS="$LONG_SECONDS" \
+  SOAK_TOKEN_SECONDS="$TOKEN_SECONDS" \
+  ${CREDENTIAL_CEILING:+LEOFLOW_AUTH_MAX_ATTEMPT_CREDENTIAL_LIFETIME="$CREDENTIAL_CEILING"} \
   PYTHONPATH="${PYTHONPATH:-$ROOT/parser}" \
     "$BIN/leoflow" lite --no-up --executor subprocess --port "$API_PORT" "$WORKSPACE" \
       >> "$OUT_DIR/lite.log" 2>&1 &
@@ -468,6 +485,42 @@ inject_fault() { # kind duration_seconds
   log "fault $kind ran for $((end - start))s"
 }
 
+# assert_credential_ceiling_enforced decides the inverted run. It reads the
+# database rather than the log, because a log line is prose that a reword
+# silently breaks while the task state and its error are what the system acted
+# on.
+assert_credential_ceiling_enforced() {
+  local failed reason
+  failed="$(psql_q "SELECT count(*) FROM task_instances ti
+                    JOIN dag_runs r ON r.id = ti.dag_run_id
+                    JOIN dags d ON d.id = r.dag_id
+                    WHERE d.dag_id = 'soak_token' AND ti.state = 'failed'")"
+  failed="${failed//[[:space:]]/}"
+  if [ "${failed:-0}" = "0" ]; then
+    err "credential-ceiling: soak_token never failed, with the renewal ceiling set to $CREDENTIAL_CEILING and its body at ${TOKEN_SECONDS}s."
+    err "  The bound that stops renewing a runaway attempt's credential did not fire, so an attempt can hold a live credential past the ceiling."
+    return 1
+  fi
+  # The reason has to be the credential. A timeout or a compile error would also
+  # show as failed, and accepting either would make a green run meaningless.
+  reason="$(psql_q "SELECT coalesce(string_agg(DISTINCT lower(ti.error_message), ' | '), '')
+                    FROM task_instances ti
+                    JOIN dag_runs r ON r.id = ti.dag_run_id
+                    JOIN dags d ON d.id = r.dag_id
+                    WHERE d.dag_id = 'soak_token' AND ti.state = 'failed'")"
+  case "$reason" in
+    *unauthenticated*|*unauthorized*|*permissiondenied*|*permission\ denied*|*token*|*credential*)
+      log "credential-ceiling: soak_token failed $failed time(s) and the reason names the credential"
+      printf '  reason: %s\n' "$reason"
+      return 0 ;;
+    *)
+      err "credential-ceiling: soak_token failed $failed time(s), but not for a credential reason."
+      err "  reason recorded: ${reason:-<empty>}"
+      err "  A timeout or an import error passing here would make this assertion decorative, so it fails."
+      return 1 ;;
+  esac
+}
+
 fault_plan_for() {
   case "$1" in
     none) echo "" ;;
@@ -522,3 +575,20 @@ log "soaking. tail -f $OUT_DIR/monitor.log, or read $OUT_DIR/summary.md at any t
 wait "$MONITOR_PID"
 VERDICT_CODE=$?
 log "monitor exited with $VERDICT_CODE"
+
+# The credential-ceiling run is INVERTED, and the inversion is the whole point.
+# Every other mode passes when nothing went wrong. This one lowered
+# auth.max_attempt_credential_lifetime below soak_token's runtime, so the bound
+# that deliberately stops renewing an attempt's credential MUST have fired: a
+# green run here means the ceiling was not enforced and a runaway attempt can
+# keep a live credential forever, which is the thing the setting exists to
+# prevent.
+#
+# It asserts the REASON and not just the failure. soak_token has retries off and
+# an execution_timeout far above its body, so the only expected way for it to
+# die is the credential, and a timeout or an import error passing as success
+# here would make this check decorative.
+if [ "$MODE" = "credential-ceiling" ]; then
+  assert_credential_ceiling_enforced
+  VERDICT_CODE=$?
+fi

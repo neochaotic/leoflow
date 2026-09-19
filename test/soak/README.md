@@ -49,12 +49,21 @@ so a task that died of a lapsed token would pass on attempt 2 and the run would
 end green. The single failure this DAG exists to catch is the one a retry would
 erase.
 
-**What it does not cover.** It proves renewal holds for as long as the task runs.
-It does not reach the 24h ceiling that deliberately STOPS renewing, so the bound
-itself is untested. Asserting that means lowering
-`auth.max_attempt_credential_lifetime` for a dedicated run and requiring the task
-to fail for that reason: a different experiment, since this one asserts the happy
-path holds and that one asserts the bound is enforced.
+**The ceiling has its own run, and it is inverted.** `make soak-credential-ceiling`
+lowers `auth.max_attempt_credential_lifetime` to four minutes, sets
+`soak_token`'s body to nine, and **requires the task to fail**. Green there would
+mean the bound did not fire, so an attempt can hold a live credential past the
+ceiling, which is the thing the setting exists to prevent.
+
+It asserts the REASON and not just the failure, reading the task's recorded state
+and error from the database rather than a log line: `soak_token` has retries off
+and an execution timeout far above its body, so the credential is the only
+expected way for it to die, and letting a timeout or an import error pass as
+success here would make the whole check decorative.
+
+The normal soak still runs `soak_token` at the shipped ceiling, where it must
+SUCCEED. The two runs assert opposite things about the same DAG, which is why
+they are separate modes rather than one flag.
 
 **Why hourly.** The body defaults to forty minutes. On a shorter schedule
 `max_active_runs=1` would block the next run and the cadence check would report

@@ -1,0 +1,13 @@
+schema_version: "1.0"
+dag_id: soak_fanout
+description: "Soak: 1 generator to 8 parallel DuckDB partition tasks to 1 reducer. The parallelism shape."
+owner: soak
+tags:
+  - soak
+  - python
+# No python_version: the battery must boot on whatever CPython the box has.
+# Pinning one here makes the harness refuse to start on a machine without that
+# exact interpreter, which is a portability failure, not a fidelity win: the
+# soak measures the scheduler, not the runtime version.
+dependencies:
+  - duckdb==1.4.4

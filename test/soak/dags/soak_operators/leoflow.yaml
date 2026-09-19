@@ -1,0 +1,32 @@
+schema_version: "1.0"
+dag_id: soak_operators
+description: "Soak: the non-native airflow_operator path. HttpOperator against a local fixture, SQLExecuteQueryOperator against the local warehouse, a reschedule-mode sensor."
+owner: soak
+tags:
+  - soak
+  - airflow_operator
+# No python_version: the battery must boot on whatever CPython the box has.
+# Pinning one here makes the harness refuse to start on a machine without that
+# exact interpreter, which is a portability failure, not a fidelity win: the
+# soak measures the scheduler, not the runtime version.
+# `connectors:` is the ADR 0038 sugar: each entry expands to the provider pip
+# package, which is what puts the operator class on the import path. Both
+# providers below talk only to a process on 127.0.0.1, so a soak weekend costs
+# nobody's API quota and cannot fail on a stranger's outage.
+connectors:
+  - http
+  - postgres
+connections:
+  - soak_http
+  - soak_pg
+tasks:
+  http_get:
+    retries: 2
+    retry_delay_seconds: 10
+    execution_timeout_seconds: 120
+  sql_upsert:
+    retries: 2
+    retry_delay_seconds: 10
+    execution_timeout_seconds: 120
+  sql_count:
+    execution_timeout_seconds: 120

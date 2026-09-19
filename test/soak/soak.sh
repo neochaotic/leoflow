@@ -199,31 +199,34 @@ export PATH="$BIN:$PATH"
 ok "binaries in $BIN"
 
 log "starting the soak Postgres (dedicated container, 1 CPU / 1 GiB)"
-docker compose -f "$COMPOSE" up -d >/dev/null 2>&1 || die "docker compose up failed"
-# Two readiness checks, not one. `pg_isready` inside the container answers on the
-# Unix socket, which the bootstrap postmaster brings up during initdb BEFORE the
-# real server starts listening on TCP. Trusting it alone gives a green light a
-# second or two too early, and the next command fails with a connection refused
-# that looks like a configuration error. What matters is that the port is
-# reachable from the HOST, over the name `localhost`, because that is the DSN
-# `leoflow lite` builds for itself.
-for _ in $(seq 1 90); do
-  docker exec leoflow-soak-postgres pg_isready -U leoflow -d leoflow_dev >/dev/null 2>&1 \
-    && python3 -c '
-import socket, sys
-s = socket.socket()
-s.settimeout(2)
-try:
-    s.connect(("localhost", int(sys.argv[1])))
-except OSError:
-    sys.exit(1)
-finally:
-    s.close()
-' "$PG_PORT" >/dev/null 2>&1 && break
+# --wait blocks on the compose healthcheck rather than on the container merely
+# existing. That matters here: `postgres:16-alpine` runs initdb on a fresh volume
+# behind a BOOTSTRAP postmaster, accepts on the Unix socket, then shuts it down
+# and starts the real server. A readiness check that catches the bootstrap window
+# reports ready a second or two too early.
+docker compose -f "$COMPOSE" up -d --wait >/dev/null 2>&1 \
+  || warn "docker compose --wait did not report healthy; falling back to the probe below"
+
+# Belt and braces, because neither of the obvious probes is sufficient on its own:
+# `pg_isready` answers on the bootstrap socket, and a TCP connect to the published
+# port only proves docker-proxy is listening, which it does from container start.
+# So the probe is a real query, and it has to succeed three times in a row.
+pg_query_ok() { docker exec leoflow-soak-postgres psql -U leoflow -d leoflow_dev -At -c 'SELECT 1' >/dev/null 2>&1; }
+streak=0
+for _ in $(seq 1 120); do
+  if pg_query_ok; then
+    streak=$((streak + 1))
+    [ "$streak" -ge 3 ] && break
+  else
+    streak=0
+  fi
   sleep 1
 done
-docker exec leoflow-soak-postgres pg_isready -U leoflow -d leoflow_dev >/dev/null 2>&1 \
-  || die "soak Postgres did not become ready (container socket)"
+if [ "$streak" -lt 3 ]; then
+  docker logs leoflow-soak-postgres > "$OUT_DIR/postgres.log" 2>&1
+  tail -20 "$OUT_DIR/postgres.log" >&2
+  die "soak Postgres never answered three consecutive queries (container log above, full copy in $OUT_DIR/postgres.log)"
+fi
 # The warehouse the operator leg writes into: a separate database, so the
 # workload never shares a table with Leoflow's own metadata and the two growth
 # curves in the budget stay separable.
@@ -239,8 +242,24 @@ if [ "$FRESH" = "1" ]; then
   # The output is captured rather than discarded: a fatal that will not say why
   # costs a whole CI round trip to diagnose, which is exactly what happened the
   # first time this ran on a clean runner.
-  HOME="$SOAK_HOME" "$BIN/leoflow" db reset --yes > "$OUT_DIR/db-reset.log" 2>&1 \
-    || { tail -20 "$OUT_DIR/db-reset.log" >&2; die "leoflow db reset failed (log above, full copy in $OUT_DIR/db-reset.log)"; }
+  # Retried, because the probe above speaks to the container socket while this
+  # speaks to the published port through `localhost`, and only the second one is
+  # the path Lite will use. A retry is cheaper than a class of flake that only
+  # shows up on a cold machine.
+  reset_ok=0
+  for attempt in 1 2 3 4 5; do
+    if HOME="$SOAK_HOME" "$BIN/leoflow" db reset --yes > "$OUT_DIR/db-reset.log" 2>&1; then
+      reset_ok=1
+      break
+    fi
+    warn "leoflow db reset attempt $attempt failed; retrying"
+    sleep 3
+  done
+  if [ "$reset_ok" = "0" ]; then
+    tail -20 "$OUT_DIR/db-reset.log" >&2
+    docker logs leoflow-soak-postgres > "$OUT_DIR/postgres.log" 2>&1
+    die "leoflow db reset failed after 5 attempts (log above, full copies in $OUT_DIR)"
+  fi
   ok "database migrated and empty"
 else
   HOME="$SOAK_HOME" "$BIN/leoflow" db migrate > "$OUT_DIR/db-migrate.log" 2>&1 || true

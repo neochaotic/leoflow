@@ -156,6 +156,8 @@ LIMIT 20;
 | `token_missing_expiry` | the ID token carries no `exp` | an IdP problem; a token with no expiry is refused rather than treated as eternal |
 | `token_no_subject` | the ID token carries no `sub` | as above: there is no stable identity to match a user on |
 | `group_claim_overage` | the IdP returned a pointer instead of the groups | Entra only, past roughly 200 group memberships. It hits the most heavily grouped, usually most privileged, users and nobody else. Configure app roles or the groups scope |
+| `tenant_ambiguous` | the tenant claim is an array naming two tenants you accept | it identifies neither, so it is refused rather than resolved to one. Narrow `tenant_claims`, or pin on a claim that carries one value |
+| `tenant_claim_shape` | the tenant claim is neither a string nor an array of strings | the pin cannot read it; your `tenant_claim` probably names the wrong claim |
 | `token_invalid` | verification failed for any other reason | the server log carries the underlying error |
 
 If the page instead says Leoflow could not complete the sign-in *on its side*,

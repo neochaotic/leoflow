@@ -86,13 +86,25 @@ for leg in ("latest", "dev"):
 		fail(f"{vpath} has no `{leg}` entry; the menu needs both a current release and an unreleased leg")
 
 latest = by_id["latest"]["label"]
-if not re.search(r"v\d+\.\d+\.\d+", latest):
+version_match = re.search(r"v\d+\.\d+\.\d+(?:[-.][0-9A-Za-z]+)*", latest)
+if not version_match:
 	fail(
 		f"the `latest` label is {latest!r} and names no version. The current release is then the one "
 		f"release the menu never identifies, since an archived tag shows its number only after it is "
 		f"superseded. Use a label like 'latest (v1.2.3)'."
 	)
-if "main" not in by_id["dev"]["label"]:
+# A version-shaped substring is not enough on its own: a label left over from a
+# previous promotion also matches the pattern above. Tie the check to the
+# `ref` the `latest` entry actually points at, so a label that names the wrong
+# release (stale, or copy-pasted from an archived leg) fails instead of
+# passing because *some* version string is present.
+latest_ref = by_id["latest"].get("ref")
+if latest_ref and version_match.group(0) != latest_ref:
+	fail(
+		f"the `latest` label is {latest!r} but its `ref` is {latest_ref!r}. The label names a version "
+		f"other than the one it actually builds from; update the label to match the ref."
+	)
+if not re.search(r"\bmain\b", by_id["dev"]["label"]):
 	fail(
 		f"the `dev` label is {by_id['dev']['label']!r} and does not say it is main. A reader cannot tell "
 		f"unreleased documentation from the current release."
@@ -132,6 +144,13 @@ self_test() {
 	local unnumbered='{"versions":[{"id":"latest","label":"latest"},{"id":"dev","label":"dev (main, unreleased)"}]}'
 	local vague_dev='{"versions":[{"id":"latest","label":"latest (v1.2.3)"},{"id":"dev","label":"dev"}]}'
 	local no_dev='{"versions":[{"id":"latest","label":"latest (v1.2.3)"}]}'
+	# A version-shaped substring is not the same as the RIGHT version: this
+	# `latest` label still matches v1.2.3, but its own `ref` says v1.2.4, which
+	# is the shape of a promotion that updated the ref and forgot the label.
+	local stale_latest='{"versions":[{"id":"latest","ref":"v1.2.4","label":"latest (v1.2.3)"},{"id":"dev","label":"dev (main, unreleased)"}]}'
+	# "main" is a substring of "maintenance" too. A dev label built by string
+	# concatenation could land here without ever saying it is the main branch.
+	local mainless_dev='{"versions":[{"id":"latest","label":"latest (v1.2.3)"},{"id":"dev","label":"dev (maintenance branch)"}]}'
 
 	_case "matching menus pass"            0 "3 legs agree"          "$good"       "latest (v1.2.3)" "v1.2.2" "dev (main, unreleased)"
 	_case "a leg missing downstream"       1 "missing from the fallback" "$good"   "latest (v1.2.3)" "dev (main, unreleased)"
@@ -139,6 +158,8 @@ self_test() {
 	_case "an unnumbered latest is caught" 1 "names no version"      "$unnumbered" "latest" "dev (main, unreleased)"
 	_case "a dev that hides main"          1 "does not say it is main" "$vague_dev" "latest (v1.2.3)" "dev"
 	_case "a missing dev leg"              1 "no \`dev\` entry"       "$no_dev"     "latest (v1.2.3)"
+	_case "a latest label stale vs. its ref" 1 "names a version other than the one it actually builds from" "$stale_latest" "latest (v1.2.3)" "dev (main, unreleased)"
+	_case "'maintenance' does not count as naming main" 1 "does not say it is main" "$mainless_dev" "latest (v1.2.3)" "dev (maintenance branch)"
 
 	# A renamed-away fallback must fail loudly rather than pass by matching nothing.
 	printf '%s\n' "$good" > "$tmp/versions.json"

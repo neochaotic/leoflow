@@ -1354,6 +1354,14 @@ jobs:
         run: bash scripts/check-startup-probe-budget.sh
       - name: Hugo pin agrees between the website build and deploy
         run: bash scripts/check-hugo-version-pin.sh
+      # Same shape again: landed with a self-test in `Script self-tests` and its
+      # REAL check reachable only through cut-release.sh's run_gates(), which
+      # only runs at cut time. A PR that edits website/hugo.toml's fallback menu
+      # or website/scripts/ci/versions.json without the other drifted silently
+      # through review, which is the exact failure this gate exists to catch,
+      # so it cannot itself be cut-time-only.
+      - name: Docs version menu agrees between versions.json and hugo.toml
+        run: bash scripts/check-docs-version-menu.sh
 
   # ─────────────────────────────────────────────────────────────────────
   stale-deploy-path:

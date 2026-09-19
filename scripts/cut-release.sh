@@ -212,7 +212,7 @@ self_test() {
   # superseded. Pinning the new behavior rather than deleting the old assertion,
   # because a promotion that silently stopped updating the label would put the
   # menu back to naming a version the reader cannot identify.
-  _eq "$(printf '%s' "$out" | jq -r '.versions[] | select(.id=="latest") | .label')" "latest (v2.0.0)" "the dropdown label names the release it points at"
+  _eq "$(printf '%s' "$out" | jq -r '.versions[] | select(.id=="latest") | .label')" "v2.0.0 (latest)" "the dropdown label names the release it points at"
 
   # The outgoing GA may have no archive leg yet — three of them do not, because
   # no cut has ever run this. One must be created rather than silently skipped.
@@ -701,15 +701,17 @@ promote_docs_version() { # <tag>
   [ -n "$prev" ] || { warn "versions.json has no \`latest\` entry to repoint"; return 1; }
   if [ "$prev" = "$tag" ]; then log "docs: latest already $tag"; return 0; fi
   tmp="$(mktemp)"
-  # The label carries the version now, so the dropdown says which release
-  # "latest" IS. It used to say only "latest", and the number of the CURRENT GA
+  # The label leads with the version, so the dropdown says which release
+  # "latest" IS. Number-first is what Kubernetes, Istio and Docsy's own
+  # versioning guide do; leading with the generic word was this project's
+  # invention. It used to say only "latest", and the number of the CURRENT GA
   # was the one number the menu never showed: a version appeared by name only
   # after it was superseded and archived. The project's own maintainer read the
   # menu and concluded latest was main, which is the clearest evidence the old
   # label was not doing its job.
   jq --arg tag "$tag" --arg prev "$prev" '
     .versions |= (
-      map(if .id == "latest" then .ref = $tag | .label = "latest (" + $tag + ")" else . end)
+      map(if .id == "latest" then .ref = $tag | .label = $tag + " (latest)" else . end)
       | if any(.[]; .id == $prev)
         then map(if .id == $prev then .archived = true else . end)
         else ( ([.[] | .id] | index("latest")) + 1 ) as $at

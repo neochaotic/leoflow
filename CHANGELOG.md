@@ -9,7 +9,7 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **The documentation version menu says which release you are reading.** The
-  current release now appears as `latest (v0.4.7)` rather than `latest`, and the
+  current release now appears as `v0.4.7 (latest)` rather than `latest`, and the
   unreleased leg as `dev (main, unreleased)`. Before this, the current release
   was the ONE release whose number the menu never showed: an archived tag shows
   its number only after it has been superseded, so the number a reader most
@@ -20,7 +20,6 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   local `hugo` build uses. The two had already drifted: one listed a release the
   other did not, so a local build and the published site disagreed about which
   releases exist.
-
 
 ## [0.4.7] - 2026-09-19
 

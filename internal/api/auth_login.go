@@ -221,6 +221,11 @@ func loginPageHandler(o loginPageOpts) gin.HandlerFunc {
 func logoutHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.SetCookie(authTokenCookie, "", -1, "/", "", false, false)
-		c.Redirect(http.StatusFound, "/api/v2/auth/login")
+		// The PAGE, not the flow. With auto_redirect on, the bare sign-in URL is
+		// itself a redirect to the IdP, and our sign-out does not touch the IdP
+		// session, so a user who signed out would be signed straight back in and
+		// the button would appear to do nothing. The marker that reaches the form
+		// is the same one break-glass uses.
+		c.Redirect(http.StatusFound, "/api/v2/auth/login?"+loginLocalParam+"=1")
 	}
 }

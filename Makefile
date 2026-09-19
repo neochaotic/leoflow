@@ -161,6 +161,23 @@ e2e: ## Run the k3d end-to-end smoke test (needs k3d, kubectl, docker, jq; run m
 chaos-runtime: ## Runtime fault-injection chaos e2e (#231 Phase 2): kill scheduler/task pod, assert at-most-once + recovery. Run inside Lima. Destructive.
 	bash test/e2e/chaos-runtime.sh
 
+.PHONY: soak
+soak: ## Long-running resilience soak (test/soak): 30 min by default, local Postgres + Lite, asserts invariants continuously. Bounded and safe to leave unattended.
+	bash test/soak/soak.sh
+
+.PHONY: soak-selftest
+soak-selftest: ## Prove the soak's assertions can fail: injects a real outage that outlives its declared window. MUST exit non-zero.
+	@bash test/soak/soak.sh --duration 6m --faults selftest-red --label selftest-red; \
+	code=$$?; \
+	if [ $$code -eq 0 ]; then \
+	  echo "soak-selftest FAILED: the battery reported PASS through an undeclared outage"; exit 1; \
+	fi; \
+	echo "soak-selftest OK: the battery went red (exit $$code) as designed"
+
+.PHONY: soak-warmpool-ab
+soak-warmpool-ab: ## Warm-pool A/B on k3d (ADR 0058): same workload with pools off and on, interleaved. Needs k3d + docker. Written, not yet executed.
+	bash test/soak/warmpool-ab.sh
+
 .PHONY: e2e-timeout
 e2e-timeout: ## Run the k3d execution_timeout e2e (#925/#930: agent clock beats the kubelet, durable reason, agent-lost reap; needs k3d, kubectl, docker, jq, migrate; run make dev-up + make build first)
 	bash test/e2e/execution-timeout-e2e.sh

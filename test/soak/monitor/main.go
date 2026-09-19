@@ -54,11 +54,12 @@ func main() {
 // options is the whole configuration surface, kept in one struct so the design
 // document and the flag list cannot drift apart.
 type options struct {
-	dbURL    string
-	apiURL   string
-	outDir   string
-	duration time.Duration
-	interval time.Duration
+	dbURL      string
+	apiURL     string
+	metricsURL string
+	outDir     string
+	duration   time.Duration
+	interval   time.Duration
 
 	latencyWindow time.Duration
 
@@ -81,6 +82,7 @@ func run() (int, error) {
 	o := options{}
 	flag.StringVar(&o.dbURL, "db", firstEnv("SOAK_DATABASE_URL", "DATABASE_URL", "LEOFLOW_DATABASE_URL"), "Postgres URL of the soak metadatabase")
 	flag.StringVar(&o.apiURL, "api", envOr("SOAK_API_URL", "http://127.0.0.1:18700"), "base URL of the Lite control plane")
+	flag.StringVar(&o.metricsURL, "metrics", os.Getenv("SOAK_METRICS_URL"), "base URL of the control plane's METRICS listener (empty derives it from --api with Lite's +1010 offset; it is never the API port)")
 	flag.StringVar(&o.outDir, "out", "soak-out", "directory for samples.jsonl, violations.jsonl, summary.md and verdict.json")
 	flag.DurationVar(&o.duration, "duration", 30*time.Minute, "wall-clock ceiling; the monitor stops itself at this point no matter what")
 	flag.DurationVar(&o.interval, "interval", 10*time.Second, "sampling interval")
@@ -93,24 +95,13 @@ func run() (int, error) {
 	flag.Int64Var(&o.maxDBBytes, "max-db-bytes", 8<<30, "stop cleanly when the soak database exceeds this size")
 	flag.Int64Var(&o.maxDataBytes, "max-data-bytes", 8<<30, "stop cleanly when --data-dir exceeds this size")
 	flag.Int64Var(&o.minFreeBytes, "min-free-bytes", 10<<30, "stop cleanly when the filesystem holding --out drops below this much free space")
-	flag.StringVar(&o.dataDir, "data-dir", "", "the DuckDB scratch directory the DAGs write to (sized every sample; empty disables the check)")
+	flag.StringVar(&o.dataDir, "data-dir", "", "comma-separated list of directories the soak writes into (DuckDB scratch, Lite's task logs, the evidence dir); summed every sample, empty disables the check")
 	flag.StringVar(&o.faultsFile, "faults", "", "JSONL file of declared fault windows written by the harness (empty = no faults expected)")
 	flag.StringVar(&o.label, "label", "soak", "label recorded in every sample, e.g. warm-on / warm-off")
 	flag.Parse()
 
-	if o.dbURL == "" {
-		return 2, errors.New("no database URL: pass --db or set $SOAK_DATABASE_URL")
-	}
-	if o.interval <= 0 {
-		return 2, errors.New("--interval must be positive")
-	}
-	// A soak left unattended must have a ceiling. Refusing an unbounded run is
-	// the cheapest guard against an experiment quietly becoming a resident.
-	if o.duration <= 0 {
-		return 2, errors.New("--duration must be positive: an unattended run needs a wall-clock ceiling")
-	}
-	if o.duration > 72*time.Hour {
-		return 2, fmt.Errorf("--duration %s exceeds the 72h ceiling; run several bounded soaks instead", o.duration)
+	if err := o.validate(); err != nil {
+		return 2, err
 	}
 
 	if err := os.MkdirAll(o.outDir, 0o750); err != nil {
@@ -126,6 +117,13 @@ func run() (int, error) {
 	}
 	defer col.Close()
 
+	// Refuse to start with a check that cannot fire. leader_churn and
+	// undispatchable_task are read only from the metrics listener, so an
+	// unscrapable endpoint is not a degraded run, it is a silently weaker one.
+	if merr := checkMetricsEndpoint(ctx, col.http, o.metricsURL); merr != nil {
+		return 2, fmt.Errorf("the metrics listener must be scrapable or two invariants cannot fire: %w", merr)
+	}
+
 	rep, err := newReporter(o)
 	if err != nil {
 		return 2, err
@@ -140,6 +138,7 @@ func run() (int, error) {
 	defer ticker.Stop()
 
 	fmt.Printf("soak monitor: label=%s interval=%s duration=%s out=%s\n", o.label, o.interval, o.duration, o.outDir)
+	fmt.Printf("soak monitor: api=%s metrics=%s\n", o.apiURL, o.metricsURL)
 	fmt.Printf("soak monitor: thresholds queued=%s scheduled=%s run=%s recovery=%s\n",
 		o.queuedWedge, o.scheduledWedge, o.runWedge, o.recoveryBudget)
 
@@ -181,6 +180,34 @@ done:
 		return 1, nil
 	}
 	return 0, nil
+}
+
+// validate rejects a configuration that would produce a run nobody can trust: no
+// database, no ceiling, or a metrics URL that cannot be derived. It is a method
+// so the rules live next to the struct they constrain and `run` stays readable.
+func (o *options) validate() error {
+	if o.dbURL == "" {
+		return errors.New("no database URL: pass --db or set $SOAK_DATABASE_URL")
+	}
+	if o.interval <= 0 {
+		return errors.New("--interval must be positive")
+	}
+	// A soak left unattended must have a ceiling. Refusing an unbounded run is
+	// the cheapest guard against an experiment quietly becoming a resident.
+	if o.duration <= 0 {
+		return errors.New("--duration must be positive: an unattended run needs a wall-clock ceiling")
+	}
+	if o.duration > 72*time.Hour {
+		return fmt.Errorf("--duration %s exceeds the 72h ceiling; run several bounded soaks instead", o.duration)
+	}
+	if o.metricsURL == "" {
+		derived, err := deriveLiteMetricsURL(o.apiURL)
+		if err != nil {
+			return err
+		}
+		o.metricsURL = derived
+	}
+	return nil
 }
 
 func firstEnv(keys ...string) string {

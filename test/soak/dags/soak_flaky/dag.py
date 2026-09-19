@@ -3,18 +3,25 @@
 Two deliberately different failure modes, because the scheduler treats them
 differently:
 
-* `flaky` fails its first two attempts and succeeds on the third. It pins the
-  retry budget: over a long run the harness asserts that it never succeeds
-  before try 3 and never runs a try 5. A retry-accounting regression (an attempt
-  replayed, a try_number reset) shows up here and nowhere else in the battery.
+* `flaky` fails its first two attempts and succeeds on the third. It is what
+  exercises the retry rail continuously. What the monitor actually asserts on it
+  is one predicate, `try_number > max_tries`, so a try 5 on a budget of 4 is
+  caught; "succeeded before try 3" is NOT asserted anywhere, and this docstring
+  used to claim it was.
 * `always_fails` never succeeds and exhausts its budget, so every run of this
   DAG reaches the terminal `failed` state. That is on purpose: a battery where
   every run is green never exercises run finalization on the failure branch, nor
   the on-failure alert path, nor the "downstream is upstream_failed" transition.
 
 The attempt counter is kept on disk per (run_id, task_id) rather than read from
-the run context, so the decision is deterministic across a control-plane restart
-and a replayed attempt increments it. A replay is therefore visible.
+the run context, so the decision is deterministic across a control-plane restart.
+
+Nothing reads that counter back yet, so it does not make a replay visible: a
+replayed fourth execution simply succeeds like the third. It is written in this
+shape because comparing it against the task instance's `try_number +
+infra_attempts` is the cheapest at-most-once probe available to this battery, and
+that comparison is the follow-up. Until it exists, the suite does not assert
+at-most-once (see README section 1, C3).
 
 Task types exercised: `python` (native).
 """

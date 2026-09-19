@@ -20,16 +20,20 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `python`, `bash` and `airflow_operator` task types, with DuckDB generating the
   data volume) against a dedicated local Postgres and asserts ten invariants on
   every sample: wedge thresholds on `queued`/`scheduled`/`running`, scheduler
-  health, run-creation cadence per DAG, leader churn, retry budget, at-most-once
-  (a `success` row in `task_instance_history` means a successful attempt was
-  replayed), and terminal-run consistency. Evidence is written continuously
+  health, run-creation cadence per DAG, leader churn, retry budget, archived-
+  attempt state, and terminal-run consistency. (The archived-attempt check is
+  cheap and holds, but it is not an at-most-once proof: see `test/soak/README.md`
+  section 1 for exactly what it can and cannot catch.) Evidence is written
+  continuously
   (`samples.jsonl` fsynced per record, `summary.md` and `verdict.json` rewritten
   atomically every sample), so a harness that is killed still leaves a current
   report.
 
   `make soak-selftest` proves the assertions can fail: it injects a real 300 s
   Postgres outage while declaring a 45 s window for it, and the run must exit
-  non-zero. Nothing is faked and no threshold is relaxed.
+  exactly 1 with recorded violations (exit 2, a harness that never ran, is a
+  failure of the self test, not a pass). Nothing is faked and no threshold is
+  relaxed.
 
   Everything runs locally and costs nothing: no cloud, no cluster, no paid
   service, and no public HTTP endpoint anywhere in the workload (the operator leg

@@ -16,19 +16,20 @@ import (
 // current verdict on disk. That is the whole point: the interesting failure is
 // the one that takes the harness with it.
 type verdict struct {
-	Verdict     string         `json:"verdict"`
-	Label       string         `json:"label"`
-	StartedAt   time.Time      `json:"started_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	ElapsedS    float64        `json:"elapsed_s"`
-	Samples     int            `json:"samples"`
-	Violations  int            `json:"violations"`
-	ByCheck     map[string]int `json:"violations_by_check"`
-	StopReason  string         `json:"stop_reason"`
-	Complete    bool           `json:"complete"`
-	Thresholds  map[string]any `json:"thresholds"`
-	LastSample  *sample        `json:"last_sample,omitempty"`
-	FirstSample *sample        `json:"first_sample,omitempty"`
+	Verdict      string         `json:"verdict"`
+	Label        string         `json:"label"`
+	StartedAt    time.Time      `json:"started_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	ElapsedS     float64        `json:"elapsed_s"`
+	Samples      int            `json:"samples"`
+	Violations   int            `json:"violations"`
+	ByCheck      map[string]int `json:"violations_by_check"`
+	StopReason   string         `json:"stop_reason"`
+	StoppedEarly bool           `json:"stopped_early"`
+	Complete     bool           `json:"complete"`
+	Thresholds   map[string]any `json:"thresholds"`
+	LastSample   *sample        `json:"last_sample,omitempty"`
+	FirstSample  *sample        `json:"first_sample,omitempty"`
 }
 
 // reporter owns every output file. Appends are flushed and synced per write so
@@ -52,6 +53,7 @@ type reporter struct {
 type trendPoint struct {
 	elapsedS   float64
 	tickProbe  float64
+	baseline   float64
 	totalRuns  int64
 	activeRuns int
 	p95        float64
@@ -90,7 +92,7 @@ func (r *reporter) WriteSample(s sample, vs []violation) {
 	cp := s
 	r.last = &cp
 	r.trend = append(r.trend, trendPoint{
-		elapsedS: s.ElapsedS, tickProbe: s.TickProbeMS,
+		elapsedS: s.ElapsedS, tickProbe: s.TickProbeMS, baseline: s.BaselineProbeMS,
 		totalRuns: s.TotalRuns, activeRuns: s.ActiveRuns, p95: s.DispatchP95,
 	})
 
@@ -146,8 +148,13 @@ func (r *reporter) writeSummary(stopReason string, complete bool) verdict {
 	if r.n == 0 {
 		v.Verdict = "INCONCLUSIVE"
 	}
-	if complete && strings.Contains(stopReason, "budget") {
-		v.Verdict += " (stopped on budget)"
+	// An early stop is not a violation, but it is also not the run that was
+	// asked for, so it is annotated identically for all three budgets and the
+	// exit code stays non-zero. Reporting a 40-minute truncation of a 48 h
+	// request as a clean PASS is how an unattended battery lies by omission.
+	if complete && isEarlyStop(stopReason) {
+		v.Verdict += " (stopped early on a budget)"
+		v.StoppedEarly = true
 	}
 	writeAtomic(filepath.Join(r.o.outDir, "verdict.json"), mustJSONIndent(v))
 	writeAtomic(filepath.Join(r.o.outDir, "summary.md"), []byte(r.renderMarkdown(v)))
@@ -163,6 +170,9 @@ func (r *reporter) renderMarkdown(v verdict) string {
 	fmt.Fprintf(&b, "| updated | %s |\n", v.UpdatedAt.Format(time.RFC3339))
 	fmt.Fprintf(&b, "| elapsed | %s |\n", time.Duration(v.ElapsedS*float64(time.Second)).Round(time.Second))
 	fmt.Fprintf(&b, "| stop reason | `%s` |\n", v.StopReason)
+	if v.StoppedEarly {
+		fmt.Fprintf(&b, "| stopped early | **yes**, a budget was reached before the wall-clock ceiling |\n")
+	}
 	fmt.Fprintf(&b, "| complete | %v |\n\n", v.Complete)
 
 	if len(r.byCheck) > 0 {
@@ -184,11 +194,12 @@ func (r *reporter) renderMarkdown(v verdict) string {
 		fmt.Fprintf(&b, "| up_for_retry / up_for_reschedule | %d / %d |\n", s.RetryTIs, s.ReschedTIs)
 		fmt.Fprintf(&b, "| oldest queued / scheduled | %.0fs / %.0fs |\n", s.OldestQueuedS, s.OldestScheduledS)
 		fmt.Fprintf(&b, "| tick probe (ActiveRuns wall time) | %.2f ms over %d runs |\n", s.TickProbeMS, s.TickProbeRuns)
+		fmt.Fprintf(&b, "| baseline probe (`SELECT 1`, same sample) | %.2f ms |\n", s.BaselineProbeMS)
 		fmt.Fprintf(&b, "| dispatch latency p50 / p95 / p99 | %.0f / %.0f / %.0f ms (n=%d) |\n", s.DispatchP50, s.DispatchP95, s.DispatchP99, s.DispatchN)
 		fmt.Fprintf(&b, "| runs total / success / failed | %d / %d / %d |\n", s.TotalRuns, s.RunsSuccess, s.RunsFailed)
 		fmt.Fprintf(&b, "| task instances / archived attempts / xcom rows | %d / %d / %d |\n", s.TotalTIs, s.TotalHistory, s.TotalXCom)
 		fmt.Fprintf(&b, "| state-history rows / audit rows | %d / %d |\n", s.TotalStateHistory, s.TotalAudit)
-		fmt.Fprintf(&b, "| database size | %s |\n", humanBytes(s.DBBytes))
+		fmt.Fprintf(&b, "| database size (metadatabase / whole cluster) | %s / %s |\n", humanBytes(s.DBBytes), humanBytes(s.DBClusterBytes))
 		fmt.Fprintf(&b, "| DAG scratch data | %s |\n", humanBytes(s.DataBytes))
 		fmt.Fprintf(&b, "| filesystem free | %s |\n\n", humanBytes(s.FreeBytes))
 
@@ -233,8 +244,8 @@ func (r *reporter) renderShape() string {
 	const buckets = 10
 	var b strings.Builder
 	b.WriteString("## Tick-cost shape (does a tick cost grow with ACTIVE runs or with TOTAL history?)\n\n")
-	b.WriteString("| elapsed | samples | active runs (med) | total runs (med) | tick probe p50 ms | tick probe p95 ms | dispatch p95 ms |\n")
-	b.WriteString("|---|---|---|---|---|---|---|\n")
+	b.WriteString("| elapsed | samples | active runs (med) | total runs (med) | tick probe p50 ms | tick probe p95 ms | baseline `SELECT 1` p50 ms | dispatch p95 ms |\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|\n")
 	size := (len(r.trend) + buckets - 1) / buckets
 	for i := 0; i < len(r.trend); i += size {
 		end := i + size
@@ -243,26 +254,35 @@ func (r *reporter) renderShape() string {
 		}
 		chunk := r.trend[i:end]
 		probes := make([]float64, 0, len(chunk))
+		bases := make([]float64, 0, len(chunk))
 		disp := make([]float64, 0, len(chunk))
 		actives := make([]float64, 0, len(chunk))
 		totals := make([]float64, 0, len(chunk))
 		for _, p := range chunk {
 			probes = append(probes, p.tickProbe)
+			bases = append(bases, p.baseline)
 			disp = append(disp, p.p95)
 			actives = append(actives, float64(p.activeRuns))
 			totals = append(totals, float64(p.totalRuns))
 		}
 		p50, p95, _, _ := pcts(probes)
+		bp50, _, _, _ := pcts(bases)
 		dp95, _, _, _ := pcts(disp)
 		am, _, _, _ := pcts(actives)
 		tm, _, _, _ := pcts(totals)
-		fmt.Fprintf(&b, "| %.0fs | %d | %.0f | %.0f | %.2f | %.2f | %.0f |\n",
-			chunk[len(chunk)-1].elapsedS, len(chunk), am, tm, p50, p95, dp95)
+		fmt.Fprintf(&b, "| %.0fs | %d | %.0f | %.0f | %.2f | %.2f | %.2f | %.0f |\n",
+			chunk[len(chunk)-1].elapsedS, len(chunk), am, tm, p50, p95, bp50, dp95)
 	}
 	b.WriteString("\nRead it this way: if the probe column is flat while `total runs` grows by an\n")
 	b.WriteString("order of magnitude, a tick costs what the ACTIVE set costs and the ceiling is\n")
 	b.WriteString("set by concurrency, not by retention. If the probe tracks `total runs`, the\n")
-	b.WriteString("ceiling arrives with age and the fix is retention, not capacity.\n")
+	b.WriteString("ceiling arrives with age and the fix is retention, not capacity.\n\n")
+	b.WriteString("Read the baseline column before either conclusion: it is a trivial `SELECT 1`\n")
+	b.WriteString("taken in the same sample. A bucket where BOTH columns rose says the database,\n")
+	b.WriteString("the loopback or the laptop got slower, not that a tick did. Only a bucket where\n")
+	b.WriteString("the probe rose and the baseline did not is evidence about `ActiveRuns` itself.\n")
+	b.WriteString("Note also that `active runs` co-varies with elapsed time in this workload, so a\n")
+	b.WriteString("single run cannot separate the active-set axis from the history axis on its own.\n")
 	return b.String()
 }
 

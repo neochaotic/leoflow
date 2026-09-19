@@ -14,7 +14,11 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: leoflow-soak-postgres
-    restart: unless-stopped
+    # Deliberately NOT `unless-stopped`: a harness that is SIGKILLed leaves the
+    # container behind, and a restart policy would then bring the soak's Postgres
+    # back on every boot, for good, on a machine whose owner has forgotten it
+    # exists. An unattended experiment must not outlive the experiment.
+    restart: "no"
     environment:
       # The credentials and database name are the ones `leoflow lite` hard-wires
       # for its own datastore (internal/cli/dsn.go). Lite overrides
@@ -28,7 +32,10 @@ services:
     ports:
       # Not 5432: that is the development Postgres. A soak that can be reached
       # on the conventional port is a soak that will be reset by accident.
-      - "127.0.0.1:55433:5432"
+      # SOAK_PG_PORT is the same knob soak.sh reads, so the two cannot drift: the
+      # harness exports it before `docker compose up` and asserts afterwards that
+      # this container really publishes it.
+      - "127.0.0.1:${SOAK_PG_PORT:-55433}:5432"
     command:
       - postgres
       - -c

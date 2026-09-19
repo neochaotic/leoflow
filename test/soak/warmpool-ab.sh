@@ -102,13 +102,19 @@ done
 # registry. Images go in with `k3d image import`, and the kubeconfig is the one
 # k3d writes for the throwaway cluster, never an inherited context.
 if [ -n "${KUBECONFIG:-}" ]; then
-  warn "KUBECONFIG is set; this script overrides it with the throwaway cluster's own file"
+  warn "KUBECONFIG is set; this script ignores it and uses the throwaway cluster's own file"
 fi
 ok "preflight passed"
 
 log "creating the throwaway k3d cluster $CLUSTER"
 k3d cluster delete "$CLUSTER" >/dev/null 2>&1
-k3d cluster create "$CLUSTER" --agents 0 --wait >/dev/null 2>&1 || die "k3d cluster create failed"
+# --kubeconfig-update-default=false is not decoration: k3d defaults to merging the
+# new cluster into the operator's ~/.kube/config AND switching the current
+# context to it. A throwaway experiment must not repoint the machine's kubectl at
+# a cluster it is about to delete.
+k3d cluster create "$CLUSTER" --agents 0 --wait \
+  --kubeconfig-update-default=false --kubeconfig-switch-context=false \
+  >/dev/null 2>&1 || die "k3d cluster create failed"
 export KUBECONFIG="$OUT/kubeconfig"
 k3d kubeconfig get "$CLUSTER" > "$KUBECONFIG" || die "could not fetch the kubeconfig"
 kubectl create namespace "$NS" >/dev/null 2>&1

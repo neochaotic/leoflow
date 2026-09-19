@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -136,25 +137,25 @@ func (c *checker) checkCorrectness(s sample, add addFunc) {
 			fmt.Sprintf("%d archived attempts are in state success; history is written when an attempt is reset for retry, so a successful attempt in there means a success was re-run (at-most-once violated)",
 				s.SuccessInHistory), float64(s.SuccessInHistory), 0)
 	}
-	if s.UpstreamFailedSuccesses > 0 {
+	if s.UpstreamFailedExecuted > 0 {
 		add("upstream_failed_task_ran",
-			fmt.Sprintf("%d instances of soak_flaky.never_runs reached success; its upstream always fails, so it must never execute",
-				s.UpstreamFailedSuccesses), float64(s.UpstreamFailedSuccesses), 0)
+			fmt.Sprintf("%d instances of soak_flaky.never_runs were started; its upstream always fails, so it must never execute (it raises on entry, so it can never end in success: started_at is the evidence)",
+				s.UpstreamFailedExecuted), float64(s.UpstreamFailedExecuted), 0)
 	}
 	if s.ImportErrors > 0 {
 		add("import_error",
 			fmt.Sprintf("%d DAGs are failing to import; a DAG that stopped compiling stops producing runs and the cadence check would only notice later",
 				s.ImportErrors), float64(s.ImportErrors), 0)
 	}
-	if !math.IsNaN(s.StepDowns) && s.StepDowns > 0 {
+	if !math.IsNaN(float64(s.StepDowns)) && s.StepDowns > 0 {
 		add("leader_churn",
 			fmt.Sprintf("leoflow_scheduler_step_downs_total = %.0f in a single-process soak; nothing is contending for the lock, so a step-down means the leader lost it",
-				s.StepDowns), s.StepDowns, 0)
+				float64(s.StepDowns)), float64(s.StepDowns), 0)
 	}
-	if !math.IsNaN(s.Undispatchable) && s.Undispatchable > 0 {
+	if !math.IsNaN(float64(s.Undispatchable)) && s.Undispatchable > 0 {
 		add("undispatchable_task",
-			fmt.Sprintf("leoflow_tasks_undispatchable_total = %.0f; a task was queued with no executor able to launch it", s.Undispatchable),
-			s.Undispatchable, 0)
+			fmt.Sprintf("leoflow_tasks_undispatchable_total = %.0f; a task was queued with no executor able to launch it", float64(s.Undispatchable)),
+			float64(s.Undispatchable), 0)
 	}
 }
 
@@ -248,13 +249,31 @@ func (c *checker) stopCondition(s sample) string {
 	if c.stopLatch != "" {
 		return c.stopLatch
 	}
+	db := s.DBBytes
+	if s.DBClusterBytes > db {
+		db = s.DBClusterBytes
+	}
 	switch {
-	case c.o.maxDBBytes > 0 && s.DBBytes > c.o.maxDBBytes:
-		c.stopLatch = fmt.Sprintf("db_budget_exceeded:%d>%d", s.DBBytes, c.o.maxDBBytes)
+	case c.o.maxDBBytes > 0 && db > c.o.maxDBBytes:
+		c.stopLatch = fmt.Sprintf("db_budget_exceeded:%d>%d", db, c.o.maxDBBytes)
 	case c.o.maxDataBytes > 0 && s.DataBytes > c.o.maxDataBytes:
 		c.stopLatch = fmt.Sprintf("data_budget_exceeded:%d>%d", s.DataBytes, c.o.maxDataBytes)
 	case c.o.minFreeBytes > 0 && s.FreeBytes >= 0 && s.FreeBytes < c.o.minFreeBytes:
 		c.stopLatch = fmt.Sprintf("disk_free_floor:%d<%d", s.FreeBytes, c.o.minFreeBytes)
 	}
 	return c.stopLatch
+}
+
+// isEarlyStop reports whether a stop reason means the soak ended before the
+// wall-clock ceiling it was given. Every budget latch does; a duration reached
+// and a signal do not. The distinction is what an unattended operator needs on
+// Monday: a report that covers 40 minutes of a 48 h request is not a clean run,
+// whatever the violation count says.
+func isEarlyStop(reason string) bool {
+	for _, p := range []string{"db_budget_exceeded", "data_budget_exceeded", "disk_free_floor"} {
+		if strings.HasPrefix(reason, p) {
+			return true
+		}
+	}
+	return false
 }

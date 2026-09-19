@@ -3,6 +3,7 @@ package main
 import (
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -129,11 +130,130 @@ func TestFirstEnvAndEnvOrResolveConfiguration(t *testing.T) {
 // leader-churn and undispatchable checks silently unfalsifiable.
 func TestCountersReportNaNWhenUnreachable(t *testing.T) {
 	c := &collector{
-		o:    options{apiURL: "http://127.0.0.1:1"},
+		o:    options{metricsURL: "http://127.0.0.1:1"},
 		http: &http.Client{Timeout: time.Second},
 	}
 	a, b, d := c.counters(t.Context())
-	if !math.IsNaN(a) || !math.IsNaN(b) || !math.IsNaN(d) {
+	if !math.IsNaN(float64(a)) || !math.IsNaN(float64(b)) || !math.IsNaN(float64(d)) {
 		t.Errorf("counters against an unreachable endpoint = %v/%v/%v, want NaN", a, b, d)
+	}
+}
+
+// TestCountersRejectANon200Scrape pins the difference between "the counter is
+// zero" and "the endpoint is not there". Lite serves /metrics on its own
+// listener (internal/cli/dev.go devMetricsPort, --port + 1010), never on the API
+// port, so a monitor pointed at the API port gets a 404 whose body parses to no
+// samples at all. Reading that as zero makes leader_churn and undispatchable_task
+// permanently unfalsifiable, which is the exact defect this battery exists to
+// avoid.
+func TestCountersRejectANon200Scrape(t *testing.T) {
+	for _, code := range []int{http.StatusNotFound, http.StatusUnauthorized, http.StatusServiceUnavailable} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(code)
+			_, _ = w.Write([]byte("404 page not found\n"))
+		}))
+		c := &collector{o: options{metricsURL: srv.URL}, http: srv.Client()}
+		a, b, d := c.counters(t.Context())
+		srv.Close()
+		if !math.IsNaN(float64(a)) || !math.IsNaN(float64(b)) || !math.IsNaN(float64(d)) {
+			t.Errorf("counters against a %d response = %v/%v/%v, want NaN", code, a, b, d)
+		}
+	}
+}
+
+// TestCountersReadAServedExpositionPage is the other half: a real scrape is read,
+// summed across labels, and absent families are a genuine zero.
+func TestCountersReadAServedExpositionPage(t *testing.T) {
+	const body = `# HELP leoflow_scheduler_step_downs_total Leader step-downs.
+# TYPE leoflow_scheduler_step_downs_total counter
+leoflow_scheduler_step_downs_total{reason="lost_lock"} 2
+leoflow_scheduler_step_downs_total{reason="shutdown"} 1
+go_goroutines 42
+`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	c := &collector{o: options{metricsURL: srv.URL}, http: srv.Client()}
+	steps, undisp, atCap := c.counters(t.Context())
+	if steps != 3 {
+		t.Errorf("step downs = %v, want 3 (summed across labels)", steps)
+	}
+	// An unincremented CounterVec exports no series at all, so absent is zero and
+	// must not be NaN: the scrape itself succeeded.
+	if undisp != 0 || atCap != 0 {
+		t.Errorf("absent families = %v/%v, want 0/0 on a successful scrape", undisp, atCap)
+	}
+}
+
+// TestMetricsEndpointIsValidatedAtStartup pins the guard that would have caught
+// the wrong-port scrape before a weekend of samples was written: the monitor
+// refuses to start against an endpoint that does not serve an exposition page.
+func TestMetricsEndpointIsValidatedAtStartup(t *testing.T) {
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("leoflow_build_info{version=\"x\"} 1\n"))
+	}))
+	defer good.Close()
+	if err := checkMetricsEndpoint(t.Context(), good.Client(), good.URL); err != nil {
+		t.Errorf("a served exposition page was rejected: %v", err)
+	}
+
+	empty := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer empty.Close()
+	if err := checkMetricsEndpoint(t.Context(), empty.Client(), empty.URL); err == nil {
+		t.Error("a 404 was accepted as a metrics endpoint")
+	}
+
+	// A 200 that carries no leoflow_ family is the other shape of the same
+	// mistake: some other service answering on the port we guessed.
+	foreign := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("<html>hello</html>"))
+	}))
+	defer foreign.Close()
+	if err := checkMetricsEndpoint(t.Context(), foreign.Client(), foreign.URL); err == nil {
+		t.Error("a page with no leoflow metric family was accepted")
+	}
+}
+
+// TestDeriveLiteMetricsURLAppliesLitesOwnOffset pins the derivation against the
+// constant it mirrors (internal/cli/dev.go devMetricsPortOffset = 1010). The
+// default soak API port 18700 must resolve to 19710 and never to 18700.
+func TestDeriveLiteMetricsURLAppliesLitesOwnOffset(t *testing.T) {
+	got, err := deriveLiteMetricsURL("http://127.0.0.1:18700")
+	if err != nil {
+		t.Fatalf("deriving from the default API URL: %v", err)
+	}
+	if got != "http://127.0.0.1:19710" {
+		t.Errorf("derived %q, want http://127.0.0.1:19710", got)
+	}
+	if _, err := deriveLiteMetricsURL("http://127.0.0.1"); err == nil {
+		t.Error("a URL with no port was accepted; the offset cannot be applied to it")
+	}
+}
+
+// TestDataDirsAreSummedAcrossEveryTreeTheSoakWritesTo pins the disk budget
+// against every tree a weekend actually fills. The DuckDB scratch is not the
+// only one: Lite writes its task logs under the private soak HOME
+// (LEOFLOW_LOGS_DIR, internal/cli/dev.go sharedServerEnv) and the harness writes
+// its evidence under --out. A budget that sizes one of the three is not a budget.
+func TestDataDirsAreSummedAcrossEveryTreeTheSoakWritesTo(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(a, "scratch.bin"), make([]byte, 100), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(b, "task.log"), make([]byte, 250), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dirs := splitDirs(a + "," + b + ",,  ")
+	if len(dirs) != 2 {
+		t.Fatalf("splitDirs returned %v, want the two non-empty entries", dirs)
+	}
+	if got := dirsBytes(dirs); got != 350 {
+		t.Errorf("dirsBytes = %d, want 350", got)
+	}
+	if got := dirsBytes(nil); got != 0 {
+		t.Errorf("dirsBytes of no directories = %d, want 0", got)
 	}
 }

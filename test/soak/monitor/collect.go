@@ -4,10 +4,13 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -66,9 +69,16 @@ type sample struct {
 	// The tick-cost probe: the wall time of SchedulerStore.ActiveRuns, which is
 	// a scheduler tick's dominant read. See the README for why this stands in
 	// for a metric the product does not emit.
-	TickProbeMS   float64 `json:"tick_probe_ms"`
-	TickProbeRuns int     `json:"tick_probe_runs"`
-	TickProbeErr  string  `json:"tick_probe_error,omitempty"`
+	TickProbeMS float64 `json:"tick_probe_ms"`
+	// BaselineProbeMS is the wall time of a trivial `SELECT 1` taken in the same
+	// sample, on the same pool, immediately before the tick probe. It is the
+	// control for the tick-cost reading: the probe is timed from a second process
+	// on a machine that is also doing other work, so without a baseline a slower
+	// bucket is ambiguous between "ActiveRuns got more expensive" and "the
+	// database, the loopback or the laptop got slower".
+	BaselineProbeMS float64 `json:"baseline_probe_ms"`
+	TickProbeRuns   int     `json:"tick_probe_runs"`
+	TickProbeErr    string  `json:"tick_probe_error,omitempty"`
 
 	// Dispatch latency (queued -> running) over the rolling window, split by the
 	// task's operator so the native and non-native paths can be compared.
@@ -88,17 +98,24 @@ type sample struct {
 	TerminalRunsWithActiveTIs int64 `json:"terminal_runs_with_active_tis"`
 	OverRetriedTIs            int64 `json:"over_retried_tis"`
 	SuccessInHistory          int64 `json:"success_rows_in_history"`
-	UpstreamFailedSuccesses   int64 `json:"never_runs_succeeded"`
+	UpstreamFailedExecuted    int64 `json:"never_runs_executed"`
 
-	// Product counters scraped from /metrics.
-	StepDowns      float64 `json:"scheduler_step_downs_total"`
-	Undispatchable float64 `json:"tasks_undispatchable_total"`
-	DispatchAtCap  float64 `json:"dispatch_at_capacity_total"`
+	// Product counters scraped from the metrics listener. `metric` and not
+	// float64: an unscraped counter is NaN, encoding/json refuses NaN, and a
+	// refused sample is dropped silently by appendJSON, which would blank the
+	// evidence for exactly the window in which the scrape failed.
+	StepDowns      metric `json:"scheduler_step_downs_total"`
+	Undispatchable metric `json:"tasks_undispatchable_total"`
+	DispatchAtCap  metric `json:"dispatch_at_capacity_total"`
 
-	// Budget.
-	DBBytes   int64 `json:"db_bytes"`
-	DataBytes int64 `json:"data_bytes"`
-	FreeBytes int64 `json:"free_bytes"`
+	// Budget. DBBytes is the metadatabase; DBClusterBytes is every database on
+	// the same volume (the operator leg writes into soak_warehouse), which is
+	// what the disk actually holds. 0 means the cluster-wide reading was not
+	// available.
+	DBBytes        int64 `json:"db_bytes"`
+	DBClusterBytes int64 `json:"db_cluster_bytes"`
+	DataBytes      int64 `json:"data_bytes"`
+	FreeBytes      int64 `json:"free_bytes"`
 
 	// Outcome accounting over the whole soak so far.
 	RunsSuccess int64 `json:"runs_success_total"`
@@ -108,6 +125,42 @@ type sample struct {
 	Violations    int    `json:"violations"`
 	SampleError   string `json:"sample_error,omitempty"`
 }
+
+// metric is a scraped counter that may not have been scraped at all. NaN means
+// "no reading", which is not zero, and it serializes as JSON null so the
+// distinction survives into samples.jsonl. The checks refuse to assert on a
+// value they could not read; the difference matters because a check that reads
+// an unreachable endpoint as zero can never fail.
+type metric float64
+
+// MarshalJSON renders an unreadable counter as null instead of failing the whole
+// sample. Infinity is treated the same way: no exposition value is legitimately
+// infinite, and losing the record would cost more than losing the number.
+func (m metric) MarshalJSON() ([]byte, error) {
+	f := float64(m)
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return []byte("null"), nil
+	}
+	return json.Marshal(f)
+}
+
+// UnmarshalJSON reads null back as "no reading", so a sample round-trips.
+func (m *metric) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		*m = metric(math.NaN())
+		return nil
+	}
+	var f float64
+	if err := json.Unmarshal(b, &f); err != nil {
+		return err
+	}
+	*m = metric(f)
+	return nil
+}
+
+// nanMetric is the "not scraped" reading, named so the call sites say what they
+// mean rather than spelling math.NaN() four times.
+func nanMetric() metric { return metric(math.NaN()) }
 
 // latency is one percentile summary, in milliseconds.
 type latency struct {
@@ -182,9 +235,7 @@ func (c *collector) Sample(ctx context.Context, started time.Time) (sample, erro
 	s.SchedulerHealth, s.HealthSource, s.APIReachable = c.health(ctx)
 	s.StepDowns, s.Undispatchable, s.DispatchAtCap = c.counters(ctx)
 	s.FreeBytes = freeBytes(c.o.outDir)
-	if c.o.dataDir != "" {
-		s.DataBytes = dirBytes(c.o.dataDir)
-	}
+	s.DataBytes = dirsBytes(splitDirs(c.o.dataDir))
 
 	qctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
@@ -203,7 +254,14 @@ func (c *collector) Sample(ctx context.Context, started time.Time) (sample, erro
 	keep(c.cadence(qctx, &s, started))
 	keep(c.dbSize(qctx, &s))
 
-	// The probe goes last so a slow probe does not distort the gauges above.
+	// The probe goes last so a slow probe does not distort the gauges above, and
+	// the trivial round trip goes immediately before it so the two share their
+	// conditions as closely as two consecutive queries can.
+	b0 := time.Now()
+	var one int
+	if berr := c.pool.QueryRow(qctx, `SELECT 1`).Scan(&one); berr == nil {
+		s.BaselineProbeMS = float64(time.Since(b0)) / float64(time.Millisecond)
+	}
 	t0 := time.Now()
 	runs, perr := c.store.ActiveRuns(qctx)
 	s.TickProbeMS = float64(time.Since(t0)) / float64(time.Millisecond)
@@ -263,10 +321,16 @@ SELECT (SELECT count(*) FROM dag_runs),
 	return nil
 }
 
-// correctness evaluates the invariants that need no timing at all: they are
+// correctnessQuery evaluates the invariants that need no timing at all: they are
 // either true or the system is wrong, right now.
-func (c *collector) correctness(ctx context.Context, s *sample) error {
-	const q = `
+//
+// The last one keys on started_at, not on a state. soak_flaky.never_runs raises
+// on entry, so it cannot reach `success` even when the scheduler wrongly
+// dispatches it; the only durable evidence that an upstream_failed task executed
+// is that the control plane stamped it running. A failure without started_at is
+// a different thing (an undispatchable or dispatch-lost fail) and must not be
+// read as an execution.
+const correctnessQuery = `
 SELECT
   (SELECT count(*) FROM task_instances ti
      JOIN dag_runs r ON r.id = ti.dag_run_id
@@ -274,9 +338,11 @@ SELECT
       AND ti.state IN ('none','scheduled','queued','running','up_for_retry','up_for_reschedule')),
   (SELECT count(*) FROM task_instances WHERE try_number > max_tries),
   (SELECT count(*) FROM task_instance_history WHERE state = 'success'),
-  (SELECT count(*) FROM task_instances WHERE task_id = 'never_runs' AND state = 'success')`
-	if err := c.pool.QueryRow(ctx, q).Scan(
-		&s.TerminalRunsWithActiveTIs, &s.OverRetriedTIs, &s.SuccessInHistory, &s.UpstreamFailedSuccesses,
+  (SELECT count(*) FROM task_instances WHERE task_id = 'never_runs' AND started_at IS NOT NULL)`
+
+func (c *collector) correctness(ctx context.Context, s *sample) error {
+	if err := c.pool.QueryRow(ctx, correctnessQuery).Scan(
+		&s.TerminalRunsWithActiveTIs, &s.OverRetriedTIs, &s.SuccessInHistory, &s.UpstreamFailedExecuted,
 	); err != nil {
 		return fmt.Errorf("correctness invariants: %w", err)
 	}
@@ -354,6 +420,15 @@ func (c *collector) dbSize(ctx context.Context, s *sample) error {
 	if err := c.pool.QueryRow(ctx, `SELECT pg_database_size(current_database())`).Scan(&s.DBBytes); err != nil {
 		return fmt.Errorf("database size: %w", err)
 	}
+	// The whole cluster, because the workload writes into a second database in
+	// the same container (soak_warehouse) and the disk budget is about the
+	// volume, not about one database. Best-effort: a role without rights to size
+	// every database leaves this at 0 and the budget falls back to DBBytes,
+	// which is the conservative direction.
+	const clusterQ = `SELECT COALESCE(sum(pg_database_size(datname)), 0)::bigint FROM pg_database WHERE datallowconn`
+	if err := c.pool.QueryRow(ctx, clusterQ).Scan(&s.DBClusterBytes); err != nil {
+		s.DBClusterBytes = 0
+	}
 	return nil
 }
 
@@ -414,19 +489,33 @@ func (c *collector) schedulerStatus(ctx context.Context, base string) (status st
 	return payload.Scheduler.Status, true
 }
 
-// counters scrapes the three product counters the soak asserts on. It parses the
-// exposition format with a line scanner rather than pulling prometheus/common
-// into the module's direct requirements for three numbers.
-func (c *collector) counters(ctx context.Context) (stepDowns, undispatchable, atCapacity float64) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.o.apiURL, "/")+"/metrics", http.NoBody)
+// counters scrapes the three product counters the soak asserts on, from the
+// METRICS listener. Lite serves /metrics on its own port (internal/cli/dev.go
+// devMetricsPort: --port + 1010) and deliberately not on the API port
+// (internal/api/server.go: "/metrics is intentionally NOT served here"), so a
+// monitor pointed at the API port would read a 404 body, find no samples in it,
+// and report three zeros forever. NaN is returned for anything that is not a
+// served exposition page, because a check that cannot tell "zero" from "not
+// there" cannot fail.
+//
+// It parses the exposition format with a line scanner rather than pulling
+// prometheus/common into the module's direct requirements for three numbers.
+func (c *collector) counters(ctx context.Context) (stepDowns, undispatchable, atCapacity metric) {
+	if c.o.metricsURL == "" {
+		return nanMetric(), nanMetric(), nanMetric()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.o.metricsURL, "/")+metricsPath(c.o.metricsURL), http.NoBody)
 	if err != nil {
-		return math.NaN(), math.NaN(), math.NaN()
+		return nanMetric(), nanMetric(), nanMetric()
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return math.NaN(), math.NaN(), math.NaN()
+		return nanMetric(), nanMetric(), nanMetric()
 	}
 	defer func() { _ = resp.Body.Close() }() //nolint:errcheck // best-effort close of a scrape response
+	if resp.StatusCode != http.StatusOK {
+		return nanMetric(), nanMetric(), nanMetric()
+	}
 	sc := bufio.NewScanner(io.LimitReader(resp.Body, 8<<20))
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	for sc.Scan() {
@@ -440,15 +529,79 @@ func (c *collector) counters(ctx context.Context) (stepDowns, undispatchable, at
 		}
 		switch name {
 		case "leoflow_scheduler_step_downs_total":
-			stepDowns += val
+			stepDowns += metric(val)
 		case "leoflow_tasks_undispatchable_total":
-			undispatchable += val
+			undispatchable += metric(val)
 		case "leoflow_dispatch_at_capacity_total":
-			atCapacity += val
+			atCapacity += metric(val)
 		}
 	}
 	return stepDowns, undispatchable, atCapacity
 }
+
+// metricsPath appends /metrics unless the operator already pointed --metrics at
+// the full path.
+func metricsPath(base string) string {
+	if strings.HasSuffix(strings.TrimRight(base, "/"), "/metrics") {
+		return ""
+	}
+	return "/metrics"
+}
+
+// checkMetricsEndpoint is the startup guard. Two of the correctness invariants
+// (leader_churn, undispatchable_task) are read only from this endpoint, so a
+// monitor that cannot scrape it is a monitor running with two checks that can
+// never fire. Better to refuse to start than to write a weekend of evidence with
+// a silent hole in it.
+func checkMetricsEndpoint(ctx context.Context, client *http.Client, base string) error {
+	if base == "" {
+		return errors.New("no metrics URL: pass --metrics (Lite serves it on --port + 1010, not on the API port)")
+	}
+	target := strings.TrimRight(base, "/") + metricsPath(base)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, http.NoBody)
+	if err != nil {
+		return fmt.Errorf("building the metrics request for %s: %w", target, err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("scraping %s: %w", target, err)
+	}
+	defer func() { _ = resp.Body.Close() }() //nolint:errcheck // best-effort close of a probe response
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", target, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s answered %d, which is not an exposition page; Lite serves /metrics on --port + 1010", target, resp.StatusCode)
+	}
+	if !strings.Contains(string(body), "leoflow_") {
+		return fmt.Errorf("%s answered 200 but exports no leoflow_ metric family; is that the control plane's metrics listener?", target)
+	}
+	return nil
+}
+
+// deriveLiteMetricsURL turns a Lite API base URL into its metrics listener URL by
+// applying the offset Lite itself uses (internal/cli/dev.go devMetricsPortOffset).
+// It exists so the common case needs no extra flag, and it is a derivation of a
+// documented constant rather than a guess.
+func deriveLiteMetricsURL(apiURL string) (string, error) {
+	u, err := url.Parse(strings.TrimRight(apiURL, "/"))
+	if err != nil {
+		return "", fmt.Errorf("parsing --api %q: %w", apiURL, err)
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil || port <= 0 {
+		return "", fmt.Errorf("--api %q has no port to derive the metrics listener from; pass --metrics", apiURL)
+	}
+	u.Host = net.JoinHostPort(u.Hostname(), strconv.Itoa(port+liteMetricsPortOffset))
+	u.Path = ""
+	return u.String(), nil
+}
+
+// liteMetricsPortOffset mirrors internal/cli/dev.go devMetricsPortOffset. It is
+// duplicated rather than imported because that constant is unexported, and it is
+// asserted at startup by checkMetricsEndpoint rather than trusted.
+const liteMetricsPortOffset = 1010
 
 // splitMetric pulls the family name and value out of one exposition line,
 // dropping any label set (the soak sums across labels). ok is false for any line
@@ -509,6 +662,27 @@ func dirBytes(root string) int64 {
 	}
 	if err := filepath.WalkDir(root, walk); err != nil {
 		return total
+	}
+	return total
+}
+
+// splitDirs parses the comma-separated --data-dir list, dropping empty entries.
+func splitDirs(list string) []string {
+	var out []string
+	for _, d := range strings.Split(list, ",") {
+		if d = strings.TrimSpace(d); d != "" {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// dirsBytes sums dirBytes over every tree the soak writes into. A tree that is
+// not there yet contributes zero rather than stopping the sample.
+func dirsBytes(dirs []string) int64 {
+	var total int64
+	for _, d := range dirs {
+		total += dirBytes(d)
 	}
 	return total
 }

@@ -89,8 +89,9 @@ says so. `--resume` cannot help once the tag exists, so that recovery is by
 hand. Three edits to `website/scripts/ci/versions.json`, as one PR labelled
 `skip-changelog`:
 
-1. point the `latest` entry's `ref` at the new tag (leave its `label` alone —
-   the dropdown says "latest", and `render-version-config.py` reads `label`);
+1. point the `latest` entry's `ref` at the new tag AND set its `label` to
+   `latest (<the new tag>)` (the dropdown names the release it points at, and
+   `render-version-config.py` reads `label`);
 2. for the GA it replaces, set `"archived": true`, adding the entry if it has
    none yet — `id`/`ref`/`subpath`/`label` all the **outgoing** tag, inserted
    directly after the `latest` entry, since the order here is the order of the

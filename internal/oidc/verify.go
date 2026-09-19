@@ -39,6 +39,16 @@ var (
 	// ErrTenantNotAllowed is returned when the tenant claim (tid/hd) is absent or
 	// not present in the tenant_claims map (D6b/d) — never a fallback to default.
 	ErrTenantNotAllowed = errors.New("oidc: tenant claim not allowed")
+	// ErrTenantAmbiguous is a tenant claim whose array names MORE THAN ONE
+	// accepted tenant. Picking one would be arbitrary and the choice would decide
+	// which tenant's data the session reaches, so this fails closed instead.
+	ErrTenantAmbiguous = errors.New("oidc: tenant claim names more than one accepted tenant")
+	// ErrTenantClaimShape is a tenant claim that is neither a string nor an array
+	// of strings. It is separate from ErrTenantNotAllowed on purpose: "not
+	// allowed" sends an operator to inspect their tenant_claims map, which in this
+	// case is correct, and nothing would tell them the value had a shape the pin
+	// cannot read.
+	ErrTenantClaimShape = errors.New("oidc: tenant claim is neither a string nor an array of strings")
 	// ErrEmailDomainNotAllowed is returned when a non-empty allowed_email_domains
 	// list does not include the verified email's domain (login-level allowlist).
 	ErrEmailDomainNotAllowed = errors.New("oidc: email domain not allowed")
@@ -243,15 +253,64 @@ func (v *Verifier) resolveTenant(idToken *gooidc.IDToken) (string, error) {
 	if err := idToken.Claims(&raw); err != nil {
 		return "", fmt.Errorf("oidc: decoding tenant claim: %w", err)
 	}
-	val, ok := raw[v.cfg.TenantClaim].(string)
-	if !ok || val == "" {
-		return "", ErrTenantNotAllowed
+	values, err := tenantClaimValues(raw[v.cfg.TenantClaim])
+	if err != nil {
+		return "", err
 	}
-	tenant, ok := v.cfg.TenantClaims[val]
-	if !ok || tenant == "" {
+	var tenant string
+	for _, val := range values {
+		mapped, ok := v.cfg.TenantClaims[val]
+		if !ok || mapped == "" {
+			continue // an unmapped value is not a claim about any tenant of ours
+		}
+		if tenant != "" && mapped != tenant {
+			return "", ErrTenantAmbiguous
+		}
+		tenant = mapped
+	}
+	if tenant == "" {
 		return "", ErrTenantNotAllowed
 	}
 	return tenant, nil
+}
+
+// tenantClaimValues reads a tenant claim as the set of strings it carries.
+//
+// A claim is a string for hd (Google) and tid (Entra), and those were the only
+// shapes this handled. OpenID Connect defines aud as a string OR an array of
+// strings, and aud is what an operator reaches for behind an IdP that issues no
+// domain claim at all, so the array form is reachable in a real deployment and
+// used to reject every login.
+//
+// An array is decoded from JSON as []any, so each element is checked rather than
+// assumed: a mixed array is a shape error, not a partial read.
+func tenantClaimValues(claim any) ([]string, error) {
+	switch v := claim.(type) {
+	case nil:
+		return nil, ErrTenantNotAllowed // the claim is absent, which is the allowlist's answer
+	case string:
+		if v == "" {
+			return nil, ErrTenantNotAllowed
+		}
+		return []string{v}, nil
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, e := range v {
+			s, ok := e.(string)
+			if !ok {
+				return nil, ErrTenantClaimShape
+			}
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		if len(out) == 0 {
+			return nil, ErrTenantNotAllowed
+		}
+		return out, nil
+	default:
+		return nil, ErrTenantClaimShape
+	}
 }
 
 // checkEmailDomain enforces the optional login-level domain allowlist. An empty

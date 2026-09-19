@@ -85,6 +85,39 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   plain http while the browser sees https, so request-derived `Secure` would
   strip it from the deployment that most needs it. Operator-scoped, `WARN` at
   boot while it is on, and no Helm value on purpose.
+### Added
+
+- **`auth.oidc.auto_redirect` starts the flow instead of showing the sign-in
+  page.** Off by default. Where an edge proxy has already authenticated the
+  session, or SSO is the only way in, that page was a screen to acknowledge for
+  nothing; a comparable tool against the same identity provider lands the user
+  inside with no visible login step.
+
+  It is **suppressed on a refused sign-on**, and that guard is the feature. A
+  denial answers a redirect back to the sign-in page, so redirecting it onward
+  would bounce every refusal straight back to the identity provider: an infinite
+  loop with no surface left to read the error on. It is also suppressed by
+  `?local=1`, so a break-glass account can reach the password form when the
+  identity provider is the thing that is broken, without an operator editing
+  values and rolling out to get back in.
+
+### Fixed
+
+- **A tenant claim that is an array no longer rejects every login.** The claim
+  was read as a string and nothing else, which is correct for `hd` and `tid` and
+  not for `aud`, which OpenID Connect defines as a string **or** an array. An
+  operator behind an identity provider that issues no domain claim reaches for
+  `aud`, and against one that emits the array form every login was refused as
+  `tenant_not_allowed`: a message that sends you to inspect a map that is
+  correct.
+
+  A string or an array is now accepted. An array naming two accepted tenants is
+  refused as `tenant_ambiguous` rather than resolved to one, because it
+  identifies neither and the choice would decide which tenant's data the session
+  reaches. A claim that is neither shape is refused as `tenant_claim_shape`, so
+  the audit log separates a value we cannot read from a tenant that is not
+  allowed.
+
 
 ## [0.4.7] - 2026-09-19
 

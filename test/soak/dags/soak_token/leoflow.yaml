@@ -1,0 +1,21 @@
+schema_version: "1.0"
+dag_id: soak_token
+description: "Soak: a task that outlives many credential renewals and then uses its token. Answers whether an agent credential survives a long attempt."
+owner: soak
+tags:
+  - soak
+  - credentials
+connectors:
+  - http
+connections:
+  - soak_http
+tasks:
+  long_then_authenticate:
+    # No retries ON PURPOSE. A retry gets a FRESH credential, so a task that
+    # failed because its token lapsed would succeed on attempt 2 and the run
+    # would end green. That is the one failure this DAG exists to catch, and a
+    # retry is precisely what would hide it.
+    retries: 0
+    # Comfortably above SOAK_TOKEN_SECONDS so the timeout never fires first and
+    # gets mistaken for a credential failure.
+    execution_timeout_seconds: 5400

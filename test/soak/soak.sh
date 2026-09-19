@@ -200,12 +200,30 @@ ok "binaries in $BIN"
 
 log "starting the soak Postgres (dedicated container, 1 CPU / 1 GiB)"
 docker compose -f "$COMPOSE" up -d >/dev/null 2>&1 || die "docker compose up failed"
-for _ in $(seq 1 60); do
-  docker exec leoflow-soak-postgres pg_isready -U leoflow -d leoflow_dev >/dev/null 2>&1 && break
+# Two readiness checks, not one. `pg_isready` inside the container answers on the
+# Unix socket, which the bootstrap postmaster brings up during initdb BEFORE the
+# real server starts listening on TCP. Trusting it alone gives a green light a
+# second or two too early, and the next command fails with a connection refused
+# that looks like a configuration error. What matters is that the port is
+# reachable from the HOST, over the name `localhost`, because that is the DSN
+# `leoflow lite` builds for itself.
+for _ in $(seq 1 90); do
+  docker exec leoflow-soak-postgres pg_isready -U leoflow -d leoflow_dev >/dev/null 2>&1 \
+    && python3 -c '
+import socket, sys
+s = socket.socket()
+s.settimeout(2)
+try:
+    s.connect(("localhost", int(sys.argv[1])))
+except OSError:
+    sys.exit(1)
+finally:
+    s.close()
+' "$PG_PORT" >/dev/null 2>&1 && break
   sleep 1
 done
 docker exec leoflow-soak-postgres pg_isready -U leoflow -d leoflow_dev >/dev/null 2>&1 \
-  || die "soak Postgres did not become ready"
+  || die "soak Postgres did not become ready (container socket)"
 # The warehouse the operator leg writes into: a separate database, so the
 # workload never shares a table with Leoflow's own metadata and the two growth
 # curves in the budget stay separable.
@@ -218,10 +236,14 @@ export SOAK_DATABASE_URL="$DB_URL"
 
 if [ "$FRESH" = "1" ]; then
   log "resetting the soak database (under the private HOME, so the developer's leoflow_dev is untouched)"
-  HOME="$SOAK_HOME" "$BIN/leoflow" db reset --yes >/dev/null 2>&1 || die "leoflow db reset failed"
+  # The output is captured rather than discarded: a fatal that will not say why
+  # costs a whole CI round trip to diagnose, which is exactly what happened the
+  # first time this ran on a clean runner.
+  HOME="$SOAK_HOME" "$BIN/leoflow" db reset --yes > "$OUT_DIR/db-reset.log" 2>&1 \
+    || { tail -20 "$OUT_DIR/db-reset.log" >&2; die "leoflow db reset failed (log above, full copy in $OUT_DIR/db-reset.log)"; }
   ok "database migrated and empty"
 else
-  HOME="$SOAK_HOME" "$BIN/leoflow" db migrate >/dev/null 2>&1 || true
+  HOME="$SOAK_HOME" "$BIN/leoflow" db migrate > "$OUT_DIR/db-migrate.log" 2>&1 || true
   ok "database kept (--no-fresh)"
 fi
 # A guard, not a formality: if HOME isolation ever stops working, this catches it

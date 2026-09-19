@@ -133,8 +133,8 @@ func (c *checker) checkCorrectness(s sample, add addFunc) {
 			float64(s.OverRetriedTIs), 0)
 	}
 	if s.SuccessInHistory > 0 {
-		add("success_replayed",
-			fmt.Sprintf("%d archived attempts are in state success; history is written when an attempt is reset for retry, so a successful attempt in there means a success was re-run (at-most-once violated)",
+		add("success_archived",
+			fmt.Sprintf("%d archived attempts are in state success; every rail that archives except the admin clear is guarded to a non-success state, so this is either an operator clearing a successful task or a reset rail that lost its guard. It is NOT proof of a replay, and its absence is not proof of at-most-once: see test/soak/README.md section 1",
 				s.SuccessInHistory), float64(s.SuccessInHistory), 0)
 	}
 	if s.UpstreamFailedExecuted > 0 {

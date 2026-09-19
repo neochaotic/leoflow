@@ -105,16 +105,24 @@ enableGitInfo = true
   # legs. .github/workflows/website-deploy.yml OVERRIDES version/versions/
   # archived_version/baseURL per leg at build time (see
   # website/scripts/ci/render-version-config.py) — that is the single source
-  # of truth for what actually ships; keep this block in sync by hand when
-  # website/scripts/ci/versions.json changes (a new GA, a newly-archived tag).
-  version = "dev"
+  # of truth for what actually ships. This block must agree with
+  # website/scripts/ci/versions.json, and scripts/check-docs-version-menu.sh
+  # now enforces that: it used to say "keep in sync by hand" and the two had
+  # already drifted (v0.4.5 was published and missing here).
+  version = "dev (main, unreleased)"
   version_menu = "Releases"
   version_menu_pagelinks = false
   archived_version = false
   url_latest_version = "https://neochaotic.github.io/leoflow/"
   [[params.versions]]
-    version = "latest"
+    version = "latest (v0.4.7)"
     url = "https://neochaotic.github.io/leoflow/"
+  [[params.versions]]
+    version = "v0.4.6"
+    url = "https://neochaotic.github.io/leoflow/v0.4.6/"
+  [[params.versions]]
+    version = "v0.4.5"
+    url = "https://neochaotic.github.io/leoflow/v0.4.5/"
   [[params.versions]]
     version = "v0.4.1"
     url = "https://neochaotic.github.io/leoflow/v0.4.1/"
@@ -122,7 +130,7 @@ enableGitInfo = true
     version = "v0.4.0"
     url = "https://neochaotic.github.io/leoflow/v0.4.0/"
   [[params.versions]]
-    version = "dev"
+    version = "dev (main, unreleased)"
     url = "https://neochaotic.github.io/leoflow/dev/"
 
   [params.links]

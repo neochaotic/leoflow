@@ -206,7 +206,13 @@ self_test() {
   local out; out="$(_promote v2.0.0)"
   _eq "$(printf '%s' "$out" | jq -r '.versions[] | select(.id=="latest") | .ref')" "v2.0.0" "docs root repointed at the new GA"
   _eq "$(printf '%s' "$out" | jq -r '.versions[] | select(.id=="v1.0.0") | .archived')" "true" "the superseded GA is archived"
-  _eq "$(printf '%s' "$out" | jq -r '.versions[] | select(.id=="latest") | .label')" "latest" "the dropdown label is left alone"
+  # The label carries the tag now. It used to be deliberately left as the bare
+  # string "latest", which made the current GA the one release whose number the
+  # menu never showed: an archived tag shows its number only after it has been
+  # superseded. Pinning the new behavior rather than deleting the old assertion,
+  # because a promotion that silently stopped updating the label would put the
+  # menu back to naming a version the reader cannot identify.
+  _eq "$(printf '%s' "$out" | jq -r '.versions[] | select(.id=="latest") | .label')" "latest (v2.0.0)" "the dropdown label names the release it points at"
 
   # The outgoing GA may have no archive leg yet — three of them do not, because
   # no cut has ever run this. One must be created rather than silently skipped.
@@ -695,9 +701,15 @@ promote_docs_version() { # <tag>
   [ -n "$prev" ] || { warn "versions.json has no \`latest\` entry to repoint"; return 1; }
   if [ "$prev" = "$tag" ]; then log "docs: latest already $tag"; return 0; fi
   tmp="$(mktemp)"
+  # The label carries the version now, so the dropdown says which release
+  # "latest" IS. It used to say only "latest", and the number of the CURRENT GA
+  # was the one number the menu never showed: a version appeared by name only
+  # after it was superseded and archived. The project's own maintainer read the
+  # menu and concluded latest was main, which is the clearest evidence the old
+  # label was not doing its job.
   jq --arg tag "$tag" --arg prev "$prev" '
     .versions |= (
-      map(if .id == "latest" then .ref = $tag else . end)
+      map(if .id == "latest" then .ref = $tag | .label = "latest (" + $tag + ")" else . end)
       | if any(.[]; .id == $prev)
         then map(if .id == $prev then .archived = true else . end)
         else ( ([.[] | .id] | index("latest")) + 1 ) as $at

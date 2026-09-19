@@ -39,6 +39,10 @@ func healthySample() sample {
 		FreeBytes:       100 << 30,
 		RunsCreated:     map[string]int{},
 		WorstLatenessS:  map[string]float64{},
+		// The healthy state includes the API answering. Leaving this at the zero
+		// value made every fixture describe a control plane that was not there,
+		// which is exactly the situation the reachability gate now suppresses.
+		APIReachable: true,
 	}
 }
 
@@ -590,5 +594,70 @@ func TestPunctualityIsSilentDuringAFault(t *testing.T) {
 	}
 	if got := violationsFor(t, s, "schedule_late"); got != 0 {
 		t.Errorf("reported %d lateness violations inside a fault window", got)
+	}
+}
+
+// TestAnUnreachableControlPlaneSuppressesEveryOtherCheck covers the failure that
+// wasted an aborted weekend run.
+//
+// With the API gone, every DAG looks starved, every schedule looks late and the
+// scheduler looks unhealthy. All of those are true statements about a
+// meaningless situation, and the monitor accumulated 2332 of them over ninety
+// minutes against a control plane that had already exited. A soak that cannot
+// tell "unhealthy" from "absent" is a soak whose FAIL nobody can trust.
+func TestAnUnreachableControlPlaneSuppressesEveryOtherCheck(t *testing.T) {
+	c := newChecker(defaultOptions())
+	gone := healthySample()
+	gone.APIReachable = false
+	gone.SchedulerHealth = ""
+	gone.WindowMin = 120
+	gone.RunsCreated = map[string]int{}
+	gone.WorstLatenessS = map[string]float64{}
+
+	// Well inside the grace period: nothing at all, because a brief gap is what
+	// an injected restart looks like.
+	for i := 0; i < 3; i++ {
+		if vs := c.Check(gone); len(vs) != 0 {
+			t.Fatalf("sample %d produced %v; a short gap is the restart fault working, not a finding", i, checkNames(vs))
+		}
+	}
+	if c.Gone() {
+		t.Fatal("gave up inside the grace period")
+	}
+
+	// Past it: exactly one finding, naming the absence.
+	var last []violation
+	for i := 0; i < unreachableSamplesBeforeGivingUp; i++ {
+		last = c.Check(gone)
+	}
+	names := checkNames(last)
+	if !names["control_plane_gone"] {
+		t.Fatalf("past the grace period the monitor reported %v, and never that its subject had left", names)
+	}
+	for _, noisy := range []string{"cadence_starved", "schedule_late", "scheduler_unhealthy"} {
+		if names[noisy] {
+			t.Errorf("%s fired against a control plane that is not there; this is the noise that buried the real signal", noisy)
+		}
+	}
+	if !c.Gone() {
+		t.Error("Gone() is false past the grace period, so the run would keep going and keep describing an absence")
+	}
+}
+
+// TestReachabilityResetsOnRecovery keeps an injected restart from accumulating
+// toward the give-up threshold across the whole run.
+func TestReachabilityResetsOnRecovery(t *testing.T) {
+	c := newChecker(defaultOptions())
+	gone := healthySample()
+	gone.APIReachable = false
+
+	for cycle := 0; cycle < 5; cycle++ {
+		for i := 0; i < unreachableSamplesBeforeGivingUp-1; i++ {
+			c.Check(gone)
+		}
+		c.Check(healthySample()) // recovered
+		if c.Gone() {
+			t.Fatalf("cycle %d: a recovered control plane still counted as gone; brief outages would add up across a weekend", cycle)
+		}
 	}
 }

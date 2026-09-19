@@ -48,6 +48,9 @@ type checker struct {
 	// stopLatch makes the stop condition sticky: once tripped it stays tripped,
 	// so a directory that shrinks between samples cannot un-stop the run.
 	stopLatch string
+	// unreachable counts CONSECUTIVE samples with no API. Reset on any reachable
+	// sample, so a blip during an injected restart does not accumulate.
+	unreachable int
 }
 
 func newChecker(o options) *checker {
@@ -108,13 +111,56 @@ func (c *checker) Check(s sample) []violation {
 		})
 		c.counts[name]++
 	}
+	// A control plane that is GONE is not a control plane behaving badly, and
+	// every check below would describe the corpse rather than the illness: with
+	// the API unreachable, every DAG looks starved, every schedule looks late and
+	// the scheduler looks unhealthy, all of which are true statements about a
+	// meaningless situation.
+	//
+	// This is not hypothetical. A weekend run lost its control plane 28 minutes
+	// in and the monitor spent the next hour and a half accumulating 2332
+	// violations against nothing, which would have produced a red verdict with
+	// thousands of entries and no signal whatsoever. A soak that cannot tell
+	// "unhealthy" from "absent" is a soak whose FAIL cannot be trusted.
+	//
+	// So an unreachable API suppresses the rest and is counted instead. Past the
+	// grace period the run is over: the monitor stops and reports a HARNESS
+	// failure rather than a product one, because the subject of the experiment
+	// left.
+	// Correctness runs regardless, because those invariants read the DATABASE and
+	// not the API: a terminal run holding an active task is still wrong, and
+	// still worth catching, when the control plane that produced it has exited.
+	// Only the checks that describe a live system are suppressed.
 	c.checkCorrectness(s, add)
+
+	if !s.APIReachable {
+		c.unreachable++
+		if c.unreachable >= unreachableSamplesBeforeGivingUp {
+			add("control_plane_gone",
+				fmt.Sprintf("the API has been unreachable for %d consecutive samples; the soak has no subject left and every other check would be describing its absence",
+					c.unreachable), float64(c.unreachable), float64(unreachableSamplesBeforeGivingUp))
+		}
+		return out
+	}
+	c.unreachable = 0
+
 	c.checkWedges(s, add)
 	c.checkLiveness(s, add)
 	c.checkCadence(s, add)
 	c.checkPunctuality(s, add)
 	return out
 }
+
+// unreachableSamplesBeforeGivingUp is how many consecutive unreachable samples
+// end the run. It is not 1: a restart fault deliberately takes the API away for
+// a few seconds, and a single missed scrape during one is the harness working.
+// At the shipped 10s cadence this is two minutes, which is far longer than any
+// injected fault and far shorter than a wasted weekend.
+const unreachableSamplesBeforeGivingUp = 12
+
+// Gone reports whether the run ended because the control plane disappeared, so
+// the caller can exit with the harness code instead of the violation one.
+func (c *checker) Gone() bool { return c.unreachable >= unreachableSamplesBeforeGivingUp }
 
 // addFunc records one violation. Passed down so each check group appends into the
 // same slice without any of them owning it.

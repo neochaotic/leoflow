@@ -38,7 +38,38 @@ func healthySample() sample {
 		DataBytes:       10 << 20,
 		FreeBytes:       100 << 30,
 		RunsCreated:     map[string]int{},
+		WorstLatenessS:  map[string]float64{},
 	}
+}
+
+// violationsFor counts how many violations of one check a sample produces, on
+// top of the healthy fixture so a test states only the field it is about.
+func violationsFor(t *testing.T, over sample, check string) int {
+	t.Helper()
+	s := healthySample()
+	if over.WindowMin != 0 {
+		s.WindowMin = over.WindowMin
+	}
+	// Give every DAG a healthy count by default. A fixture that names one DAG
+	// leaves the other five looking starved, so a punctuality test would be
+	// reading cadence violations and calling them its own.
+	for dag, periodMin := range cadenceExpectations {
+		s.RunsCreated[dag] = int(s.WindowMin/float64(periodMin)) + 1
+	}
+	s.InFaultWindow = over.InFaultWindow
+	for dag, n := range over.RunsCreated {
+		s.RunsCreated[dag] = n
+	}
+	if over.WorstLatenessS != nil {
+		s.WorstLatenessS = over.WorstLatenessS
+	}
+	n := 0
+	for _, v := range newChecker(defaultOptions()).Check(s) {
+		if v.Check == check {
+			n++
+		}
+	}
+	return n
 }
 
 func checkNames(vs []violation) map[string]bool {
@@ -475,5 +506,77 @@ func TestShapeTableCarriesTheBaselineProbe(t *testing.T) {
 	md := r.renderShape()
 	if !strings.Contains(md, "baseline") {
 		t.Errorf("the shape table has no baseline column, so a reader cannot tell a slower ActiveRuns from a slower machine:\n%s", md)
+	}
+}
+
+// TestPunctualityIsNotSatisfiedByVolume pins the gap punctuality exists to fill.
+//
+// checkCadence asks whether the runs exist. A scheduler running far behind still
+// creates every run it owes, so a deployment that is late but complete reads as
+// healthy to it. These two cases share a sample that cadence is happy with, and
+// differ only in lateness.
+func TestPunctualityIsNotSatisfiedByVolume(t *testing.T) {
+	onTime := sample{
+		WindowMin:      60,
+		RunsCreated:    map[string]int{"soak_ingest": 30},
+		WorstLatenessS: map[string]float64{"soak_ingest": 12},
+	}
+	late := sample{
+		WindowMin:      60,
+		RunsCreated:    map[string]int{"soak_ingest": 30},
+		WorstLatenessS: map[string]float64{"soak_ingest": 900},
+	}
+
+	if got := violationsFor(t, onTime, "schedule_late"); got != 0 {
+		t.Errorf("a punctual scheduler produced %d violations", got)
+	}
+	if got := violationsFor(t, late, "schedule_late"); got == 0 {
+		t.Error("a scheduler 15 minutes behind produced no violation, and cadence cannot see it because every run it owed exists")
+	}
+	if got := violationsFor(t, onTime, "cadence_starved"); got != 0 {
+		t.Errorf("the shared fixture is not cadence-clean (%d), so this test would not isolate punctuality", got)
+	}
+}
+
+// TestPunctualityBudgetScalesWithThePeriod keeps one constant from being either
+// noise on a short schedule or blind on a long one. It picks the actual shortest
+// and longest schedules in the battery and asserts that the SAME lateness is
+// judged differently, which is the whole reason the budget is a ratio.
+func TestPunctualityBudgetScalesWithThePeriod(t *testing.T) {
+	shortest, longest := "", ""
+	for dag, p := range cadenceExpectations {
+		if shortest == "" || p < cadenceExpectations[shortest] {
+			shortest = dag
+		}
+		if longest == "" || p > cadenceExpectations[longest] {
+			longest = dag
+		}
+	}
+	if cadenceExpectations[shortest] == cadenceExpectations[longest] {
+		t.Skip("every schedule has the same period; there is no ratio to test")
+	}
+	// Between the two budgets: over half the short DAG's interval, a fraction of
+	// the long one's.
+	late := float64(cadenceExpectations[shortest])*60*latenessBudgetOfPeriod + 1
+
+	if got := violationsFor(t, sample{WindowMin: 120, WorstLatenessS: map[string]float64{shortest: late}}, "schedule_late"); got == 0 {
+		t.Errorf("%.0fs late on the %d-minute schedule was accepted; the budget is not scaling down", late, cadenceExpectations[shortest])
+	}
+	if got := violationsFor(t, sample{WindowMin: 120, WorstLatenessS: map[string]float64{longest: late}}, "schedule_late"); got != 0 {
+		t.Errorf("%.0fs late on the %d-minute schedule was reported; a fixed threshold would be noise on the long schedules", late, cadenceExpectations[longest])
+	}
+}
+
+// TestPunctualityIsSilentDuringAFault keeps the check honest about injected
+// outages: being late while the database is down is the correct behavior, and
+// reporting it would train an operator to ignore the signal.
+func TestPunctualityIsSilentDuringAFault(t *testing.T) {
+	s := sample{
+		WindowMin:      60,
+		InFaultWindow:  true,
+		WorstLatenessS: map[string]float64{"soak_ingest": 9000},
+	}
+	if got := violationsFor(t, s, "schedule_late"); got != 0 {
+		t.Errorf("reported %d lateness violations inside a fault window", got)
 	}
 }

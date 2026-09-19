@@ -112,6 +112,7 @@ func (c *checker) Check(s sample) []violation {
 	c.checkWedges(s, add)
 	c.checkLiveness(s, add)
 	c.checkCadence(s, add)
+	c.checkPunctuality(s, add)
 	return out
 }
 
@@ -224,6 +225,45 @@ func (c *checker) checkCadence(s sample, add addFunc) {
 		}
 	}
 }
+
+// checkPunctuality catches the scheduler that honors every schedule LATE.
+//
+// checkCadence asks whether the runs exist, and a scheduler twenty minutes
+// behind still creates every run it owes, so volume alone reports that
+// deployment as healthy. Lateness is the thing an operator actually feels: a
+// pipeline due at 02:00 that starts at 02:40 has missed its window even though
+// nothing failed.
+//
+// The threshold is a MULTIPLE of each DAG's own period rather than one constant.
+// Thirty seconds late is nothing for an hourly DAG and is most of the interval
+// for a two-minute one, so a single number would either be noise on the short
+// schedules or blind on the long ones.
+//
+// Skipped inside a fault window, where being late is the correct behavior, and
+// while the window is too short to have produced a scheduled run at all.
+func (c *checker) checkPunctuality(s sample, add addFunc) {
+	if s.InFaultWindow || s.WindowMin < float64(minCadencePeriodMin) {
+		return
+	}
+	for dagID, periodMin := range cadenceExpectations {
+		worst, ok := s.WorstLatenessS[dagID]
+		if !ok || worst <= 0 {
+			continue
+		}
+		budget := float64(periodMin) * 60 * latenessBudgetOfPeriod
+		if worst > budget {
+			add("schedule_late",
+				fmt.Sprintf("%s created a scheduled run %.0fs after it was due; its schedule is every %d min, so the budget is %.0fs. Runs exist, which is what the cadence check sees, and they are arriving late",
+					dagID, worst, periodMin, budget), worst, budget)
+		}
+	}
+}
+
+// latenessBudgetOfPeriod is how much of a DAG's own interval a run may burn
+// before it is late. Half an interval is generous: past that the schedule is
+// closer to the next slot than to its own, and two consecutive such runs would
+// start colliding with each other.
+const latenessBudgetOfPeriod = 0.5
 
 // cadenceExpectations maps each soak DAG to its cron period in minutes. It is a
 // literal rather than something read out of the database on purpose: the check

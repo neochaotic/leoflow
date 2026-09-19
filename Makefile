@@ -165,6 +165,12 @@ chaos-runtime: ## Runtime fault-injection chaos e2e (#231 Phase 2): kill schedul
 soak: ## Long-running resilience soak (test/soak): 30 min by default, local Postgres + Lite, asserts invariants continuously. Bounded and safe to leave unattended.
 	bash test/soak/soak.sh
 
+.PHONY: soak-credential-ceiling
+soak-credential-ceiling: ## Prove the credential-renewal ceiling is enforced: lowers it below soak_token's runtime and REQUIRES the task to fail for that reason.
+	@SOAK_CREDENTIAL_CEILING=4m SOAK_TOKEN_SECONDS=540 \
+	  bash test/soak/soak.sh --duration 20m --mode credential-ceiling \
+	    --label credential-ceiling --out .soak/credential-ceiling
+
 .PHONY: soak-selftest
 soak-selftest: ## Prove the soak's assertions can fail: injects a real outage that outlives its declared window. MUST exit 1 with recorded violations.
 	@bash test/soak/soak.sh --duration 6m --faults selftest-red --label selftest-red --out .soak/selftest-red; \

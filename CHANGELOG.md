@@ -6,6 +6,8 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-09-19
+
 ### Added
 
 - **SSO is configurable from the chart (`auth.oidc.*`).** The server has had OIDC

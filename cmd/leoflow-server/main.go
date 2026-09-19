@@ -411,6 +411,9 @@ func warnStartup(cfg *config.ServerConfig, logger *slog.Logger) {
 		oidcWarnings = append(oidcWarnings, oidcClientSecretWarnings(cfg.Auth)...)
 		oidcWarnings = append(oidcWarnings, oidcJITWarnings(cfg.Auth)...)
 		oidcWarnings = append(oidcWarnings, oidcBreakGlassWarnings(cfg.Auth)...)
+		// Not OIDC-specific, but API-side for the same reason: the process that
+		// serves the sign-in page and the callback is the one that sets the cookie.
+		oidcWarnings = append(oidcWarnings, sessionCookieWarnings(cfg.Auth)...)
 		for _, w := range oidcWarnings {
 			logger.Warn(w.Msg, "config_key", w.Key, "value", w.Value, "missing_config_key", w.MissingKey)
 		}
@@ -835,6 +838,28 @@ func quotedList(names []string) string {
 	return strings.Join(quotedNames, ", ")
 }
 
+// sessionCookieWarnings reports the session cookie running without Secure. It
+// is a documented setting, not an error, so boot proceeds: a deployment served
+// over plain http to a name that is not loopback has no other way to sign
+// anybody in, because a browser refuses a Secure cookie from such an origin
+// outright. The WARN is the only operator-visible signal that the session token
+// is now carried in the clear, and it carries the key and the value as fields
+// so an alert rule does not have to substring-match prose.
+func sessionCookieWarnings(c config.AuthSection) []configWarning {
+	const key = "auth.session_cookie_insecure"
+	if !c.SessionCookieInsecure {
+		return nil
+	}
+	return []configWarning{{
+		Msg: key + " is on, so the browser session cookie and the OIDC state cookie are sent without Secure: " +
+			"the session token travels over plain http and anything on the path can read it and replay it. " +
+			"Set this only on a deployment that genuinely cannot be reached over https; a loopback deployment " +
+			"(localhost, 127.0.0.1) does not need it, because browsers accept a Secure cookie there already",
+		Key:   key,
+		Value: "true",
+	}}
+}
+
 // oidcBreakGlassWarnings reports an SSO deployment with no way back in.
 //
 // Under provider: oidc, newBreakGlass with an empty allowlist returns a gate that
@@ -1248,11 +1273,6 @@ func discoverOIDCFlow(ctx context.Context, cfg *config.ServerConfig, logger *slo
 }
 
 func buildAPIServer(cfg *config.ServerConfig, tel *observability.Telemetry, authn *auth.JWTAuthenticator, pg *storage.Postgres, repo *storage.Repository, xcomReader *storage.XComReader, logSink logs.Sink, logTailer logs.Tailer, checks map[string]api.HealthChecker, executorInfo api.ExecutorInfo, schedulerHealth api.Heartbeater, oidcFlow *oidc.Flow) *http.Server {
-	if cfg.Auth.SessionCookieInsecure {
-		tel.Logger.Warn("session cookie will be sent without the Secure attribute (auth.session_cookie_insecure): " +
-			"the browser will carry the session token over plain http, where anything on the path can read it. " +
-			"Set this only on a plain-http deployment that cannot be reached over https; a loopback deployment does not need it")
-	}
 	if cfg.Auth.DevNoAuth {
 		tel.Logger.Warn("AUTHENTICATION DISABLED (auth.dev_no_auth): every request is treated as admin. Dev only — NEVER use in production")
 	}

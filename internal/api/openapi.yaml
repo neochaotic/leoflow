@@ -43,7 +43,15 @@ paths:
                 `access_token` from the body; a browser is signed in by it from
                 this response onward and never has to write it from script.
                 Secure is dropped only when the operator sets
-                `auth.session_cookie_insecure`.
+                `auth.session_cookie_insecure`. It is omitted when the browser
+                reports the request as cross-origin (`Sec-Fetch-Site` other than
+                `same-origin` or `none`), so a page on another origin cannot
+                sign this browser in as an account it holds credentials for; the
+                body is unchanged in that case. A caller that sends no
+                `Sec-Fetch-Site` at all always receives it: that is every
+                non-browser client, which keeps no cookie jar, and also a
+                browser on a plain-http origin that is not loopback, since
+                fetch metadata is only sent to potentially trustworthy URLs.
               schema:
                 type: string
           content:

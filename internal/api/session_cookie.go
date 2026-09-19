@@ -34,6 +34,54 @@ import (
 // session alive behind a redirect that claims it ended.
 const sessionCookiePath = "/"
 
+// secFetchSiteHeader is the browser's own statement of where a request came
+// from. A script cannot set it and a proxy has no reason to rewrite it, which
+// is why the check below reads it rather than comparing Origin against Host:
+// behind an ingress that rewrites Host, an Origin comparison would refuse the
+// sign-in page's own login and land it back on itself with no error, which is
+// the exact failure mode this file exists to remove.
+const secFetchSiteHeader = "Sec-Fetch-Site"
+
+// browserMaySetSession reports whether a credential POST may establish this
+// browser's session, as opposed to only answering with a token in the body.
+//
+// Setting the cookie server-side is what makes the password path work at all,
+// and it also turns /auth/token into a login-CSRF target it was not while it
+// only returned a body. The handler binds JSON without looking at Content-Type,
+// so a page on another origin can POST here with a CORS-safelisted type and no
+// preflight, or with a plain form and enctype=text/plain. It cannot read the
+// answer and does not need to: the Set-Cookie lands in the victim's jar and the
+// victim is signed in as the attacker, entering connection credentials into an
+// account somebody else owns.
+//
+// So the cookie is written only for a request the browser calls same-origin.
+// An absent header is allowed, and that covers two callers. One is every
+// non-browser client (the CLI, curl, the typed client), none of which keeps a
+// cookie jar, and refusing there would break the credential contract for the
+// callers that never had this risk. The other is a browser on a plain-http
+// origin that is not loopback: fetch metadata is only sent to a potentially
+// trustworthy URL, so exactly the deployment auth.session_cookie_insecure
+// exists for sends no Sec-Fetch-Site and therefore keeps no protection here.
+// That is the right trade rather than a gap worth closing with an Origin/Host
+// comparison: such a deployment already hands the session token to anyone on
+// the path, and behind an ingress that rewrites Host an Origin comparison would
+// refuse the sign-in page's own login and land it back on itself with no error.
+// same-site is refused with cross-site, because a sibling subdomain is exactly
+// the origin an attacker gets to control first.
+//
+// The OIDC callback is deliberately not subject to this. It is a top-level
+// cross-site navigation from the IdP by construction, and what binds it to a
+// flow this browser actually started is the signed single-use state cookie, not
+// a fetch-metadata header.
+func browserMaySetSession(c *gin.Context) bool {
+	switch c.GetHeader(secFetchSiteHeader) {
+	case "", "same-origin", "none":
+		return true
+	default:
+		return false
+	}
+}
+
 // setSessionCookie writes the _token session cookie server-side. Both login
 // paths call it, so both get HttpOnly, SameSite=Lax and the same path and
 // lifetime, and clearSessionCookie deletes exactly what it wrote.

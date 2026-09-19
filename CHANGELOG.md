@@ -46,6 +46,22 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   other API client are unaffected; logout clears through the same helper, so the
   deletion cannot drift from what the login set.
 
+  Setting a cookie there also had to be kept from becoming a login-CSRF hole,
+  which `/auth/token` did not have while it answered with a body only. The
+  handler binds JSON without looking at `Content-Type`, so a page on another
+  origin can POST credentials it controls with no preflight and, if the response
+  set a cookie unconditionally, plant its own session in the visitor's browser.
+  The cookie is therefore written only for a request the browser itself reports
+  as same-origin (`Sec-Fetch-Site`); a cross-origin caller gets the body and no
+  cookie, and a caller that sends no such header keeps today's behavior. That
+  last group is every non-browser client, which holds no cookie jar, and also a
+  browser on a plain-http origin that is not loopback, which is sent no fetch
+  metadata at all and so gains nothing here; that deployment already carries the
+  session token in the clear, which is what `auth.session_cookie_insecure` says
+  on the tin. The OIDC callback is deliberately exempt: it is a
+  cross-site navigation from the IdP by construction, and its signed single-use
+  state cookie is what binds it to a flow this browser started.
+
 ### Added
 
 - **`auth.session_cookie_insecure`** (default `false`), the one escape hatch the

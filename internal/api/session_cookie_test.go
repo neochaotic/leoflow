@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -254,5 +255,80 @@ func TestStateCookieIsHardenedAndClearedOnTheSamePath(t *testing.T) {
 	if cleared.Path != st.cookie.Path || cleared.Secure != st.cookie.Secure || cleared.MaxAge >= 0 {
 		t.Errorf("the callback clears %q but the login sets %q; the browser will not match them",
 			cleared.String(), st.cookie.String())
+	}
+}
+
+// doFrom is do() with the browser's own statement of where the request came
+// from. A non-browser client sends no Sec-Fetch-Site at all, which is site "".
+func doFrom(srv *gin.Engine, site, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/auth/token", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if site != "" {
+		req.Header.Set("Sec-Fetch-Site", site)
+	}
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	return rec
+}
+
+// Making /auth/token a cookie-setting endpoint made it a login-CSRF target, a
+// hazard it did not have while it only returned a body. A page on another
+// origin can POST here without a preflight (the handler binds JSON regardless
+// of Content-Type, so text/plain, a CORS-safelisted type, is enough, and a form
+// with enctype=text/plain needs no fetch at all). It cannot read the answer, and
+// it does not need to: the Set-Cookie lands in the victim's jar and the victim
+// is now signed in as the attacker, typing connection credentials into an
+// account somebody else owns.
+//
+// The OIDC callback is the same kind of cross-site arrival and is NOT covered by
+// this: its signed single-use state cookie is what binds it to a flow this
+// browser started, and it has to keep working, since it is a top-level
+// navigation from the IdP.
+func TestCrossSiteLoginDoesNotPlantASessionCookie(t *testing.T) {
+	for _, site := range []string{"cross-site", "same-site"} {
+		t.Run(site, func(t *testing.T) {
+			rec := doFrom(cookieLoginServer(false), site, goodCreds)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("login = %d, want 200: the credential contract is unchanged for API clients", rec.Code)
+			}
+			var body tokenResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.AccessToken == "" {
+				t.Fatalf("the body no longer carries access_token (%v, %s)", err, rec.Body.String())
+			}
+			if ck := namedCookie(rec, authTokenCookie); ck != nil {
+				t.Errorf("a %s login planted the session cookie (%q): a page on another origin can sign this "+
+					"browser in as whoever it has credentials for", site, ck.String())
+			}
+		})
+	}
+}
+
+// The other side of the same guard: the sign-in page's own fetch, and every
+// non-browser client, must still be signed in by the response. The empty case
+// is load-bearing twice over. It is the CLI, and it is also a browser on a
+// plain-http origin that is not loopback, which sends no fetch metadata at all
+// (the headers go only to potentially trustworthy URLs). Refusing there would
+// break the sign-in page on exactly the deployment
+// auth.session_cookie_insecure exists for, in exactly the silent way this file
+// exists to remove.
+func TestSameOriginAndNonBrowserLoginsStillSetTheCookie(t *testing.T) {
+	for _, site := range []string{"", "same-origin", "none"} {
+		name := site
+		if name == "" {
+			name = "no Sec-Fetch-Site (cli)"
+		}
+		t.Run(name, func(t *testing.T) {
+			rec := doFrom(cookieLoginServer(false), site, goodCreds)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("login = %d, want 200", rec.Code)
+			}
+			ck := namedCookie(rec, authTokenCookie)
+			if ck == nil {
+				t.Fatal("the login set no session cookie, so the sign-in page lands back on itself with no error")
+			}
+			if !ck.HttpOnly || !ck.Secure {
+				t.Errorf("session cookie = %q, want HttpOnly and Secure", ck.String())
+			}
+		})
 	}
 }

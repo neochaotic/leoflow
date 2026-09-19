@@ -1,0 +1,62 @@
+# Dedicated Postgres for the soak battery.
+#
+# Deliberately NOT docker-compose.dev.yaml: a soak left running over a weekend
+# must not share a database, a port or a volume with the machine's development
+# stack, or the first `leoflow db reset` in another terminal destroys the
+# evidence. Everything here is namespaced `leoflow-soak`.
+#
+# The resource limits are part of the cost budget, not decoration. The soak has
+# to leave the laptop usable, so Postgres is capped at 1 CPU and 1 GiB and tuned
+# for a small working set rather than for throughput.
+name: leoflow-soak
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: leoflow-soak-postgres
+    restart: unless-stopped
+    environment:
+      # The credentials and database name are the ones `leoflow lite` hard-wires
+      # for its own datastore (internal/cli/dsn.go). Lite overrides
+      # LEOFLOW_DATABASE_URL with that DSN unconditionally, so a soak cannot
+      # simply point it at an arbitrary Postgres. Isolation is bought instead by
+      # running Lite under a private HOME with a `db-port` file naming the port
+      # below, which is what keeps this database off the developer's 5432.
+      POSTGRES_USER: leoflow
+      POSTGRES_PASSWORD: leoflow
+      POSTGRES_DB: leoflow_dev
+    ports:
+      # Not 5432: that is the development Postgres. A soak that can be reached
+      # on the conventional port is a soak that will be reset by accident.
+      - "127.0.0.1:55433:5432"
+    command:
+      - postgres
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - max_connections=50
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=64MB
+      # Autovacuum matters more than usual here: the soak's whole point is to run
+      # long enough for table growth to show, and a starved autovacuum would make
+      # the tick-cost curve measure bloat rather than design.
+      - -c
+      - autovacuum_naptime=30s
+      - -c
+      - log_min_duration_statement=2000
+    cpus: 1.0
+    mem_limit: 1g
+    memswap_limit: 1g
+    volumes:
+      - soak-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U leoflow -d leoflow_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  soak-pgdata:
+    name: leoflow-soak-pgdata

@@ -301,3 +301,53 @@ config-file-only), and `LEOFLOW_CONFIG` is pointed at it. A Helm install can set
 both settings today; see
 [SSO with Google Workspace](/operate/sso-google-workspace/) and
 `helm/leoflow/examples/values-oidc-google.yaml` for the resulting values shape.
+
+## Amendment (2026-09-19): what the tenant pin proves when the IdP is single-tenant
+
+A production Cognito deployment reported that D6's tenant pin, which the chart
+refuses to render without, has nothing honest to bind to behind an IdP that
+issues no tenant claim. The report is correct, and the fix is smaller than it
+first looked, so this records what the pin means in that shape rather than
+changing the decision.
+
+**The tautology is real.** A Cognito user-pool ID token carries no claim naming
+the upstream domain. The obvious reach is `aud`, and `aud` is already validated
+as the audience against the client id by go-oidc before `resolveTenant` runs
+(`internal/oidc/verify.go`, `newVerifierWithProvider`). Pinning on it therefore
+reproves what has been proven, and leaves a setting that reads as an access
+control and is not one. The reporter's phrasing is the one worth keeping: anyone
+reading those values later has to reconstruct the argument to know it is a
+tautology, and the obvious reading is that a real boundary exists.
+
+**The answer already existed and was not findable.** D6 does not require a
+DOMAIN claim, only an IdP-issued one, and `iss` qualifies: it is unique per
+Cognito user pool, per Okta org and per Keycloak realm. The Okta and Keycloak
+guidance already says to pin on `iss` and describes the result honestly, as
+"redundant with, rather than weaker than, the issuer check". That sentence is
+the correct description for Cognito too. What was missing was a Cognito page
+saying so, not a new mechanism.
+
+**So D6 stands, with its scope stated.** The pin's job is to make the tenant an
+IdP-attested fact rather than a deployment assumption, and to fail closed when a
+token carries a value nobody mapped. On a multi-tenant issuer that is a real
+boundary. On a single-tenant issuer it is a restatement of the issuer pin, and
+the boundary that decides who may log in is `allowed_email_domains` plus
+`email_verified`. Both are honest configurations; only one of them was written
+down.
+
+**A dedicated single-tenant mode is deliberately NOT adopted.** `auth.oidc.tenant:
+default`, accepted instead of the pin, would let the config state the truth
+directly, and it was proposed. It is declined for now because it buys a clearer
+spelling of something that already works, at the cost of a second code path
+through the one decision that decides which tenant's data a session reaches, and
+because a required field that is sometimes optional is exactly the shape an
+operator half-configures. If the redundant pin proves to be a recurring
+misconfiguration rather than a recurring confusion, that trade changes.
+
+**One thing did change in code.** `resolveTenant` read the claim as a string and
+nothing else, so an IdP emitting `aud` as an array (which OpenID Connect
+permits) rejected every login as `tenant_not_allowed`: a message that sends the
+operator to inspect a map that is correct. A string or an array is accepted now;
+an array naming two accepted tenants is `tenant_ambiguous` rather than resolved
+to one, because it identifies neither and the choice would decide which tenant's
+data the session reaches.

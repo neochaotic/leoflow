@@ -41,6 +41,9 @@ Google-specific about the mechanism:
 
 - **Microsoft Entra ID**: set `tenantClaim: tid`. The value is the Entra tenant
   GUID, not a domain, so `tenantClaims` maps that GUID to a Leoflow tenant name.
+- **Amazon Cognito**: see [SSO with Amazon Cognito](/operate/sso-cognito/). The
+  short version is that a user-pool token carries no domain claim, so pin on
+  `iss` and do not reach for `aud`, which is already validated as the audience.
 - **Okta, Keycloak, or another single-tenant IdP**: these do not emit an
   org/tenant claim by default the way Entra emits `tid`. Because the claim can
   be any string claim already present on the token, the common way to pin a

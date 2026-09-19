@@ -70,7 +70,7 @@ func TestCorrectnessInvariantsFireEvenInsideAFaultWindow(t *testing.T) {
 	}{
 		{"active task on a terminal run", func(s *sample) { s.TerminalRunsWithActiveTIs = 1 }, "terminal_run_with_active_task"},
 		{"try number past max tries", func(s *sample) { s.OverRetriedTIs = 1 }, "retry_budget_exceeded"},
-		{"success archived into history", func(s *sample) { s.SuccessInHistory = 1 }, "success_replayed"},
+		{"success archived into history", func(s *sample) { s.SuccessInHistory = 1 }, "success_archived"},
 		{"upstream-failed task ran", func(s *sample) { s.UpstreamFailedExecuted = 1 }, "upstream_failed_task_ran"},
 		{"dag import error", func(s *sample) { s.ImportErrors = 1 }, "import_error"},
 		{"leader stepped down", func(s *sample) { s.StepDowns = 1 }, "leader_churn"},

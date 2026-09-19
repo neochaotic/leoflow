@@ -50,7 +50,7 @@ instant they are non-zero, fault window or not:
 |---|---|---|
 | C1 | No task instance is still active on a run the control plane already called terminal | `task_instances` in a non-terminal state joined to a `dag_runs` row in `success`/`failed` |
 | C2 | No task instance exceeded its retry budget | `try_number > max_tries` |
-| C3 | No successful attempt was archived | any `task_instance_history` row in state `success` |
+| C3 | No successful attempt was archived (reported as `success_archived`) | any `task_instance_history` row in state `success` |
 | C4 | No task whose upstream always fails ever executed | `soak_flaky.never_runs` with `started_at IS NOT NULL` |
 
 C1 is the "the dashboard is lying about what is running" class.

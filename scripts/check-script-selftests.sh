@@ -11,7 +11,8 @@
 # cut it was globbed into.
 #
 # Discovery is by the `self_test()` definition rather than a hand-kept list, so
-# a new script's self-test joins this gate by existing — the same property that
+# a new script's self-test joins this gate by existing (anywhere under scripts/
+# or test/) — the same property that
 # makes cut-release.sh's run_gates() glob scripts/check-*.sh.
 #
 # run_gates() globs scripts/check-*.sh, so this is also part of the cut's own
@@ -19,8 +20,12 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# scripts/ AND test/, because a self-test nothing runs is the defect this gate
+# exists to prevent, and it does not stop being that defect because the script
+# lives one directory over. test/gcp/provision.sh and test/gcp/teardown.sh both
+# shipped with a passing self-test that this loop could not see.
 found=0 failed=0
-for f in "$ROOT"/scripts/*.sh; do
+for f in "$ROOT"/scripts/*.sh $(find "$ROOT/test" -name '*.sh' -type f 2>/dev/null | sort); do
 	grep -qE '^self_test\(\)' "$f" || continue
 	found=$((found + 1))
 	if out="$(bash "$f" --self-test 2>&1)"; then

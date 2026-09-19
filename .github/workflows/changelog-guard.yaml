@@ -12,8 +12,12 @@ on:
     branches: [main]
     types: [opened, synchronize, reopened, labeled, unlabeled]
 
+# pull-requests: read is what lets the exemption step ask the API for the
+# CURRENT labels instead of trusting the event payload, which is a snapshot from
+# before a label applied at creation time can land.
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   changelog-guard:
@@ -32,20 +36,60 @@ jobs:
     # four ecosystem blocks keeps one mechanism instead of two, and survives a
     # label being removed. pull_request.user.login is the PR's author, unlike
     # github.actor, which on a `labeled` event is whoever applied the label.
-    if: >-
-      ${{ !contains(github.event.pull_request.labels.*.name, 'skip-changelog')
-          && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    #
+    # The exemption is evaluated INSIDE the job and not as a job-level `if:`,
+    # and that is the whole point. A job-level condition skips the job, and a
+    # skipped job reports nothing, so a `failure` already recorded on that
+    # commit by an earlier run stays red forever: rerunning a `pull_request`
+    # run replays the ORIGINAL event payload, which has no label, so the
+    # condition evaluates the same way every time and the documented remedy
+    # (apply the label) can never clear the failure.
+    #
+    # That is not hypothetical. The v0.4.7 cut created its docs-promotion PR
+    # WITH the label, and the guard still failed it, because the `opened` event
+    # raced the label. The cut stopped at that step and left the documentation
+    # root serving the previous GA while the release was already published,
+    # which is exactly the state that step exists to prevent (#1176).
+    #
+    # Running always and exiting 0 costs one runner start per PR and makes this
+    # check report on every event, which is what a check has to do to be
+    # required and to be clearable.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Re-read the labels from the API rather than the event payload: the
+      # payload is a snapshot of when the event fired, and a label applied at
+      # creation time can land after it.
+      - name: Exempt when skip-changelog is set, or the author is dependabot
+        id: exempt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -euo pipefail
+          if [ "$AUTHOR" = "dependabot[bot]" ]; then
+            echo "exempt=true" >> "$GITHUB_OUTPUT"
+            echo "author is dependabot: a dependency bump carries no user-facing change"
+            exit 0
+          fi
+          labels=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json labels -q '.labels[].name')
+          if printf '%s\n' "$labels" | grep -qx 'skip-changelog'; then
+            echo "exempt=true" >> "$GITHUB_OUTPUT"
+            echo "skip-changelog is set: no CHANGELOG entry required"
+          else
+            echo "exempt=false" >> "$GITHUB_OUTPUT"
+          fi
       # base_ref goes through the environment rather than into the command text:
       # ${{ }} is substituted before the shell sees it, and git refnames permit
       # ';', '$(' and backticks. Unreachable while `branches: [main]` pins it,
       # but nothing would catch it if that pin were widened (#970).
       - name: Fetch the base branch tip
+        if: steps.exempt.outputs.exempt != 'true'
         env:
           BASE_REF: ${{ github.base_ref }}
         run: git fetch --no-tags --depth=1 origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
       - name: Require a CHANGELOG [Unreleased] entry (or the skip-changelog label)
+        if: steps.exempt.outputs.exempt != 'true'
         env:
           BASE_REF: ${{ github.base_ref }}
         run: bash scripts/check-changelog-entry.sh "origin/$BASE_REF"

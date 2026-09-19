@@ -36,6 +36,7 @@ was chosen over an alternative that is listed in [Rejected signals](#rejected-si
 | # | Signal | Measured as | Red when |
 |---|---|---|---|
 | S1 | **A task stopped moving** | age of the oldest `task_instances` row in `queued`, and separately in `scheduled` | queued > 180 s, scheduled > 300 s |
+| | *note on the queued threshold* | 180 s is also the product's own dispatch-lost threshold (`internal/executor/reaper.go` `defaultDispatchLostThreshold`), and the reaper runs every tick while the monitor samples every 10 s. So in a healthy control plane the reaper always gets there first and this check is really "the dispatch was lost AND the reaper did not act". That is a useful thing to assert and it is not the same thing as "a task stopped moving"; the re-placements the reaper does perform are recorded as `infra_replacements_total` and asserted on by nothing, because a stalled laptop can cause one |
 | S2 | **A run stopped moving** | age of the oldest `dag_runs` row in `running` | > 30 min |
 | S3 | **The scheduler stopped being the scheduler** | `.scheduler.status` from `GET /api/v2/monitor/health`, which reads the advisory-lock leader liveness | not `healthy` outside a declared fault window |
 | S4 | **The scheduler kept its heartbeat but stopped creating work** | runs created per DAG in a rolling window, against the DAG's declared cron period | fewer than half the due runs |

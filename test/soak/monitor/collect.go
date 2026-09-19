@@ -65,6 +65,15 @@ type sample struct {
 	// them. Counted so the growth model in the README is measured, not guessed.
 	TotalAudit        int64 `json:"total_audit_log"`
 	TotalStateHistory int64 `json:"total_task_state_history"`
+	// InfraReplacements is the total number of off-budget re-placements the
+	// infra-fault rail has performed (ADR 0051: an agent-lost or dispatch-lost
+	// attempt is re-placed without consuming a retry). It is RECORDED, not
+	// asserted: a stalled laptop can miss a 90 s heartbeat, which is the same
+	// class of laptop-dominated noise as throughput. It is here because a soak
+	// in which every task is silently re-placed looks identical to a healthy one
+	// in every other column, and because the number is the input to deciding
+	// whether this can become an assertion.
+	InfraReplacements int64 `json:"infra_replacements_total"`
 
 	// The tick-cost probe: the wall time of SchedulerStore.ActiveRuns, which is
 	// a scheduler tick's dominant read. See the README for why this stands in
@@ -311,10 +320,11 @@ SELECT (SELECT count(*) FROM dag_runs),
        (SELECT count(*) FROM dag_runs WHERE state = 'success'),
        (SELECT count(*) FROM dag_runs WHERE state = 'failed'),
        (SELECT count(*) FROM audit_log),
-       (SELECT count(*) FROM task_state_history)`
+       (SELECT count(*) FROM task_state_history),
+       (SELECT COALESCE(sum(infra_attempts), 0) FROM task_instances)`
 	if err := c.pool.QueryRow(ctx, q).Scan(
 		&s.TotalRuns, &s.TotalTIs, &s.TotalHistory, &s.TotalXCom, &s.ImportErrors,
-		&s.RunsSuccess, &s.RunsFailed, &s.TotalAudit, &s.TotalStateHistory,
+		&s.RunsSuccess, &s.RunsFailed, &s.TotalAudit, &s.TotalStateHistory, &s.InfraReplacements,
 	); err != nil {
 		return fmt.Errorf("totals: %w", err)
 	}

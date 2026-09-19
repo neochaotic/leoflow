@@ -149,7 +149,11 @@ test/gcp/teardown.sh --leftovers                        # disks/LBs/registries a
 ```
 
 `teardown.sh --all` removes every cluster this repo labelled, and is the thing
-to run when you are not sure.
+to run when you are not sure. It selects them with a gcloud `--filter`, which is
+documented as a word match rather than an exact one for some APIs, so anything
+it selects is checked again against the whole `purpose=leoflow-experiment` pair
+before it is deleted. A cluster that fails that check is skipped and named, not
+deleted and not fatal, so one lookalike cannot abort the sweep.
 
 ## What is not here yet
 

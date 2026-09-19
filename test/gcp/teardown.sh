@@ -201,7 +201,16 @@ delete_one() { # <cluster>
       ok "$c is already gone"
       return 0 ;;
     refuse)
-      die "$c does not carry $LABEL_SELECTOR (labels: ${labels:-none}). This script only deletes clusters it created; delete it by hand if you are sure." ;;
+      # A refusal returns rather than exits, so one foreign lookalike cannot
+      # abort a --all sweep half way through. The caller decides: naming a
+      # cluster explicitly and being refused is fatal, being refused inside a
+      # sweep is a skip. It matters because the label filter that selects the
+      # sweep is not exact: gcloud documents `key = value` as equivalent to the
+      # word-match `:` for some APIs, so a cluster labelled
+      # purpose=leoflow-experiment-something can be selected and must then be
+      # stepped over rather than kill the run.
+      warn "$c does not carry $LABEL_SELECTOR (labels: ${labels:-none}); leaving it alone"
+      return 1 ;;
   esac
 
   log "deleting $c"
@@ -265,8 +274,13 @@ case "${1:-}" in
     names="$(gcloud container clusters list --project "$PROJECT" --zone "$ZONE" \
                --filter "resourceLabels.purpose=leoflow-experiment" --format='value(name)' 2>/dev/null || true)"
     [ -n "$names" ] || { ok "nothing labelled $LABEL_SELECTOR in $PROJECT/$ZONE"; exit 0; }
-    for n in $names; do delete_one "$n"; done
+    skipped=0
+    for n in $names; do delete_one "$n" || skipped=$((skipped + 1)); done
     rm -f .gcp-experiment-cluster
+    if [ "$skipped" != "0" ]; then
+      warn "$skipped cluster(s) were left alone because they are not labelled as ours. They are still billing; --list shows them."
+      exit 1
+    fi
     exit 0 ;;
   "")
     [ -f .gcp-experiment-cluster ] || die "no cluster named and no .gcp-experiment-cluster file. Try --list."
@@ -274,7 +288,7 @@ case "${1:-}" in
   *) CLUSTER="$1" ;;
 esac
 
-delete_one "$CLUSTER"
+delete_one "$CLUSTER" || die "$CLUSTER was not deleted (see above). Delete it by hand if you are sure it is yours."
 rm -f .gcp-experiment-cluster
 
 echo

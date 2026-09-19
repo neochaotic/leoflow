@@ -664,9 +664,14 @@ var serverDefaults = map[string]any{
 	"auth.oidc.allowed_email_domains": []string{},
 	"auth.oidc.break_glass_emails":    []string{},
 	"auth.oidc.jit_provisioning":      false,
-	"auth.oidc.clock_skew_seconds":    60,
-	"scheduler.loop_interval_ms":      1000,
-	"scheduler.enabled":               true,
+	// Registered so viper binds LEOFLOW_AUTH_OIDC_AUTO_REDIRECT from the
+	// environment. Without an entry here the chart would render the variable and
+	// the server would ignore it, which is a setting that looks configured and is
+	// not. TestDocumentedEnvVarsBind exists for exactly this and caught it.
+	"auth.oidc.auto_redirect":      false,
+	"auth.oidc.clock_skew_seconds": 60,
+	"scheduler.loop_interval_ms":   1000,
+	"scheduler.enabled":            true,
 	// Default: synchronous dispatch (BufferSize=0). Safe and zero-overhead for
 	// Lite. Pro deployments should set buffer_size>=1 + workers>=1 in their
 	// values.yaml so K8s API latency does not stretch the tick (#127, ADR 0031).

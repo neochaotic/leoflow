@@ -381,7 +381,7 @@ before enabling it in production.
 | Variable | Default | Edition | Purpose |
 |---|---|---|---|
 | `LEOFLOW_UI_INSTANCE_NAME` | `Leoflow` | both | UI navbar label (`leoflow lite` sets it to mark the environment). |
-| `LEOFLOW_UI_AUTO_REFRESH_INTERVAL_SECONDS` | `0` | both | SPA polling cadence for DAG / DagRun / task-instance state. `0` falls back to the production-safe 30s default; `leoflow lite` sets 1s for a snappy inner loop. |
+| `LEOFLOW_UI_AUTO_REFRESH_INTERVAL_SECONDS` | `0` | both | SPA polling cadence for DAG / DagRun / task-instance state. `0` falls back to the production-safe 30s default; `leoflow lite` sets 1s for a snappy inner loop. Helm: `ui.autoRefreshIntervalSeconds`, which the chart omits entirely when unset so the server default decides. |
 | `LEOFLOW_UI_EDITION` | _(empty)_ | both | Edition badge in the UI shell: `lite` shows the silver LITE badge, `pro` the gold PRO badge (independent of the auth mode; also gates `auth.provider: oidc`). Empty/other shows no badge. |
 | `LEOFLOW_UI_WORKSPACE` | _(empty)_ | both | DAG project directory the Lite web editor edits ([ADR 0025](/project/adrs/0025-lite-embedded-web-editor/)). Empty disables the editor. |
 | `LEOFLOW_UI_MONACO_DIR` | _(empty)_ | both | Where the pinned Monaco bundle was fetched by `leoflow setup`; the editor page is served Monaco from it. Empty shows a setup hint. |

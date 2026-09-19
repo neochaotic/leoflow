@@ -48,7 +48,7 @@ usage() {
   cat <<'USAGE'
 
 Flags:
-  --duration D      wall-clock ceiling (default 30m, hard max 72h)
+  --duration D      wall-clock ceiling as Ns/Nm/Nh/Nd (default 30m, hard max 72h)
   --faults PLAN     none | standard | selftest-red | "kind:dur:offset,..."
   --label NAME      label recorded in every sample (default soak)
   --out DIR         evidence directory (default .soak/<timestamp>)
@@ -109,6 +109,12 @@ API="http://127.0.0.1:${API_PORT}"
 
 LITE_PID=""; FIXTURE_PID=""; MONITOR_PID=""; FAULT_PID=""; WATCHDOG_PID=""
 VERDICT_CODE=2
+# Teardown only tears down what THIS invocation started. Without that, a second
+# harness that dies in preflight (a port already taken, docker not running)
+# still runs the trap, and `docker compose down` would stop the Postgres of the
+# soak that is already running, at hour 30 of a weekend, from a process that
+# never provisioned anything. Scheduled runs make that collision routine.
+OWNS_STACK=0
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m    ok\033[0m %s\n' "$*"; }
@@ -119,18 +125,32 @@ die()  { printf '\033[1;31mFATAL:\033[0m %s\n' "$*" >&2; exit 2; }
 cleanup() {
   local code=$?
   log "tearing down"
-  for pid in "$WATCHDOG_PID" "$FAULT_PID" "$MONITOR_PID" "$LITE_PID" "$FIXTURE_PID"; do
+  # Resolve the control plane's children FIRST. `leoflow lite` supervises the
+  # leoflow-server that actually holds the API port, the database connections and
+  # the scheduler; once the supervisor is killed its child is reparented and
+  # pgrep -P can no longer find it, so an orphaned server would survive the
+  # harness. A CONT goes with the TERM because a fault injector interrupted
+  # mid-SIGSTOP leaves that child stopped, and a stopped process never acts on a
+  # SIGTERM at all.
+  local children=""
+  [ -n "$LITE_PID" ] && children="$(pgrep -P "$LITE_PID" 2>/dev/null | tr '\n' ' ')"
+  for pid in $children; do
+    kill -CONT "$pid" 2>/dev/null
+  done
+  for pid in "$WATCHDOG_PID" "$FAULT_PID" "$MONITOR_PID" "$LITE_PID" "$FIXTURE_PID" $children; do
     [ -n "$pid" ] && kill "$pid" 2>/dev/null
   done
   # A paused container would survive the harness and hold its memory, so always
-  # unpause before stopping, whatever state the fault injector left it in.
-  docker unpause leoflow-soak-postgres >/dev/null 2>&1
+  # unpause before stopping, whatever state the fault injector left it in. Only
+  # when this invocation owns the container: unpausing another run's database
+  # mid-fault would corrupt ITS experiment, not ours.
+  [ "$OWNS_STACK" = "1" ] && docker unpause leoflow-soak-postgres >/dev/null 2>&1
   sleep 1
-  for pid in "$MONITOR_PID" "$LITE_PID" "$FIXTURE_PID"; do
+  for pid in "$MONITOR_PID" "$LITE_PID" "$FIXTURE_PID" $children; do
     [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null
   done
   collect_evidence
-  if [ "$KEEP_DB" = "0" ]; then
+  if [ "$OWNS_STACK" = "1" ] && [ "$KEEP_DB" = "0" ]; then
     if [ "$PURGE" = "1" ]; then
       docker compose -f "$COMPOSE" down -v >/dev/null 2>&1 && ok "postgres stopped and volume removed"
     else
@@ -157,12 +177,18 @@ collect_evidence() {
     echo "duration=$DURATION faults=$FAULTS label=$LABEL"
     echo "rows=$ROWS fanout_rows=$FANOUT_ROWS long_seconds=$LONG_SECONDS"
   } > "$OUT_DIR/environment.txt" 2>/dev/null
-  curl -fsS --max-time 5 "$API/metrics" > "$OUT_DIR/metrics-final.prom" 2>/dev/null
+  # The metrics listener, not the API port: Lite serves /metrics on --port + 1010
+  # (internal/cli/dev.go devMetricsPort) and the API router deliberately does not
+  # serve it at all (internal/api/server.go).
+  curl -fsS --max-time 5 "http://127.0.0.1:$((API_PORT + 1010))/metrics" > "$OUT_DIR/metrics-final.prom" 2>/dev/null
   curl -fsS --max-time 5 "http://127.0.0.1:${FIXTURE_PORT}/fixture/stats" > "$OUT_DIR/fixture-stats.json" 2>/dev/null
   docker exec leoflow-soak-postgres psql -U leoflow -d leoflow_dev -At -c \
     "SELECT relname, n_live_tup, pg_total_relation_size(relid) FROM pg_stat_user_tables ORDER BY 3 DESC" \
     > "$OUT_DIR/pg-table-sizes.txt" 2>/dev/null
-  du -sk "$SOAK_DATA_DIR" "$SOAK_HOME/.leoflow/dev/venvs" 2>/dev/null > "$OUT_DIR/disk-usage.txt"
+  # Every tree the soak writes into, including the two the first cost budget
+  # omitted: Lite's task logs and the evidence directory itself.
+  du -sk "$SOAK_DATA_DIR" "$SOAK_HOME/.leoflow/dev/venvs" "$SOAK_HOME/.leoflow/dev/logs" "$OUT_DIR" \
+    2>/dev/null > "$OUT_DIR/disk-usage.txt"
 }
 
 # ── Preflight. Refuse early and loudly rather than half-provisioning. ─────────
@@ -171,9 +197,20 @@ for tool in docker go python3 curl jq; do
   command -v "$tool" >/dev/null || die "missing required tool: $tool"
 done
 docker info >/dev/null 2>&1 || die "docker is not running"
-for port in "$API_PORT" "$FIXTURE_PORT"; do
+case "$PG_PORT" in
+  ''|*[!0-9]*) die "SOAK_PG_PORT must be a positive integer, got '$PG_PORT'" ;;
+esac
+[ "$PG_PORT" -gt 0 ] || die "SOAK_PG_PORT must be a positive integer, got '$PG_PORT'"
+export SOAK_PG_PORT="$PG_PORT"
+# Lite derives its gRPC and metrics ports from --port (internal/cli/dev.go:
+# +1011 and +1010) and refuses to boot if either is taken. The monitor reads two
+# of its invariants from the metrics listener, so a busy port there is a run with
+# two checks that cannot fire, which is worse than not starting.
+METRICS_PORT=$((API_PORT + 1010))
+GRPC_PORT_LITE=$((API_PORT + 1011))
+for port in "$API_PORT" "$FIXTURE_PORT" "$PG_PORT" "$METRICS_PORT" "$GRPC_PORT_LITE"; do
   if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
-    die "port $port is already in use; set SOAK_API_PORT / SOAK_FIXTURE_PORT"
+    die "port $port is already in use; set SOAK_API_PORT / SOAK_FIXTURE_PORT / SOAK_PG_PORT (Lite also takes --port +1010 for metrics and +1011 for gRPC)"
   fi
 done
 # The wall-clock ceiling is enforced twice: here, and inside the monitor. A soak
@@ -186,6 +223,14 @@ n,u=int(m.group(1)),m.group(2)
 print(n*{"s":1,"m":60,"h":3600,"d":86400}[u])
 ' "$DURATION")" || die "bad --duration $DURATION"
 [ "$DURATION_S" -le 259200 ] || die "--duration exceeds the 72h ceiling"
+# A live soak owns the API port, so the loop above has already refused (and
+# refused without touching anything, because teardown is gated on ownership). A
+# container that is up with the port free is the other case: a leftover from a
+# harness that was SIGKILLed. Say so and adopt it, rather than blocking every
+# scheduled run from then on.
+if docker ps --filter name=leoflow-soak-postgres --filter status=running --format '{{.Names}}' 2>/dev/null | grep -q leoflow-soak-postgres; then
+  warn "leoflow-soak-postgres is already running and no soak holds $API_PORT: adopting it as a leftover from an interrupted run"
+fi
 ok "preflight passed (duration ${DURATION_S}s)"
 
 log "building binaries"
@@ -206,6 +251,8 @@ log "starting the soak Postgres (dedicated container, 1 CPU / 1 GiB)"
 # reports ready a second or two too early.
 docker compose -f "$COMPOSE" up -d --wait >/dev/null 2>&1 \
   || warn "docker compose --wait did not report healthy; falling back to the probe below"
+# From here on this invocation owns the container and the teardown may stop it.
+OWNS_STACK=1
 
 # Belt and braces, because neither of the obvious probes is sufficient on its own:
 # `pg_isready` answers on the bootstrap socket, and a TCP connect to the published
@@ -237,6 +284,40 @@ ok "postgres up on 127.0.0.1:${PG_PORT}, warehouse database present"
 
 export SOAK_DATABASE_URL="$DB_URL"
 
+# ── Isolation, asserted BEFORE anything destructive runs. ────────────────────
+#
+# `leoflow db reset --yes` always drops the database named `leoflow_dev` on the
+# port in <HOME>/.leoflow/dev/db-port (internal/cli/db.go dropDevDatabase ->
+# devDSNs -> devDBPort), and it ignores LEOFLOW_DATABASE_URL entirely (#1185).
+# So the only thing standing between this harness and the developer's own
+# database is that file, under a HOME that is not the developer's. Re-reading
+# the file the script just wrote proves nothing; these four checks are the ones
+# that can actually fail, and they run before the drop, not after it.
+assert_isolation() {
+  [ "$SOAK_HOME" != "$HOME" ] \
+    || die "isolation: SOAK_HOME is the developer's own HOME; a reset here would drop the developer's leoflow_dev"
+  local written
+  written="$(cat "$SOAK_HOME/.leoflow/dev/db-port" 2>/dev/null || true)"
+  [ "$written" = "$PG_PORT" ] \
+    || die "isolation: $SOAK_HOME/.leoflow/dev/db-port reads '$written', not '$PG_PORT'; a reset would target whatever that resolves to (an unreadable file falls back to the default dev port)"
+  # The developer's own datastore must not be on the port we are about to reset.
+  if [ -f "$HOME/.leoflow/dev/db-port" ]; then
+    local devport; devport="$(cat "$HOME/.leoflow/dev/db-port" 2>/dev/null || true)"
+    [ "$devport" != "$PG_PORT" ] \
+      || die "isolation: the developer's own datastore is on port $PG_PORT; choose another with SOAK_PG_PORT"
+  fi
+  # And the thing listening on that port must be the soak container, not some
+  # other Postgres that happens to answer there.
+  local published
+  published="$(docker inspect -f '{{range $p, $conf := .NetworkSettings.Ports}}{{range $conf}}{{.HostPort}} {{end}}{{end}}' leoflow-soak-postgres 2>/dev/null || true)"
+  case " $published " in
+    *" $PG_PORT "*) : ;;
+    *) die "isolation: leoflow-soak-postgres does not publish $PG_PORT (it publishes '$published'); something else answers there" ;;
+  esac
+}
+assert_isolation
+ok "isolation asserted: private HOME, db-port $PG_PORT, published by leoflow-soak-postgres"
+
 if [ "$FRESH" = "1" ]; then
   log "resetting the soak database (under the private HOME, so the developer's leoflow_dev is untouched)"
   # The output is captured rather than discarded: a fatal that will not say why
@@ -265,12 +346,9 @@ else
   HOME="$SOAK_HOME" "$BIN/leoflow" db migrate > "$OUT_DIR/db-migrate.log" 2>&1 || true
   ok "database kept (--no-fresh)"
 fi
-# A guard, not a formality: if HOME isolation ever stops working, this catches it
-# before the soak writes a weekend of evidence into the wrong database.
-actual_port="$(HOME="$SOAK_HOME" python3 -c '
-import sys
-print(open(sys.argv[1]).read().strip())' "$SOAK_HOME/.leoflow/dev/db-port")"
-[ "$actual_port" = "$PG_PORT" ] || die "db-port isolation guard failed: $actual_port != $PG_PORT"
+# Re-asserted after the reset, because `db reset` recreates the dev directory and
+# a regression there would send everything after this line somewhere else.
+assert_isolation
 
 log "materializing the workspace"
 rm -rf "$WORKSPACE"; mkdir -p "$WORKSPACE"
@@ -423,8 +501,9 @@ run_fault_plan() {
 log "starting the monitor (samples every $SAMPLE_INTERVAL, ceiling $DURATION)"
 "$BIN/soak-monitor" \
   --db "$DB_URL" --api "$API" --out "$OUT_DIR" \
-  --duration "$DURATION" --interval "$SAMPLE_INTERVAL" \
-  --faults "$FAULTS_FILE" --data-dir "$SOAK_DATA_DIR" --label "$LABEL" \
+  --duration "${DURATION_S}s" --interval "$SAMPLE_INTERVAL" \
+  --metrics "http://127.0.0.1:${METRICS_PORT}" \
+  --faults "$FAULTS_FILE" --data-dir "$SOAK_DATA_DIR,$SOAK_HOME/.leoflow/dev/logs,$OUT_DIR" --label "$LABEL" \
   --max-db-bytes "$MAX_DB_BYTES" --max-data-bytes "$MAX_DATA_BYTES" --min-free-bytes "$MIN_FREE_BYTES" \
   > "$OUT_DIR/monitor.log" 2>&1 &
 MONITOR_PID=$!

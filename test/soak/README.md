@@ -19,7 +19,7 @@ bash test/soak/soak.sh                                    # 30 min, no faults
 bash test/soak/soak.sh --duration 12h --faults standard   # overnight with faults
 bash test/soak/soak.sh --duration 6m  --faults selftest-red   # must go RED
 make soak            # the default run
-make soak-selftest   # proves the assertions can fail
+make soak-selftest   # proves the assertions can fail: must exit exactly 1
 ```
 
 Everything runs locally: one Postgres container and one `leoflow lite` process.
@@ -40,7 +40,7 @@ was chosen over an alternative that is listed in [Rejected signals](#rejected-si
 | S3 | **The scheduler stopped being the scheduler** | `.scheduler.status` from `GET /api/v2/monitor/health`, which reads the advisory-lock leader liveness | not `healthy` outside a declared fault window |
 | S4 | **The scheduler kept its heartbeat but stopped creating work** | runs created per DAG in a rolling window, against the DAG's declared cron period | fewer than half the due runs |
 | S5 | **A tick started costing more than it used to** | wall time of `storage.SchedulerStore.ActiveRuns`, recorded against both the active-run count and the total historical row count | reported as a curve, not a threshold (see [Scalability](#3-scalability-the-shape-of-the-curve-not-the-size-of-n)) |
-| S6 | **The leader churned** | `leoflow_scheduler_step_downs_total` | any non-zero value |
+| S6 | **The leader churned** | `leoflow_scheduler_step_downs_total`, scraped from the control plane's **metrics listener** (Lite: `--port + 1010`; the API port does not serve `/metrics` at all) | any non-zero value |
 
 Plus four correctness invariants that carry no timing at all. These are wrong the
 instant they are non-zero, fault window or not:
@@ -49,13 +49,32 @@ instant they are non-zero, fault window or not:
 |---|---|---|
 | C1 | No task instance is still active on a run the control plane already called terminal | `task_instances` in a non-terminal state joined to a `dag_runs` row in `success`/`failed` |
 | C2 | No task instance exceeded its retry budget | `try_number > max_tries` |
-| C3 | No successful attempt was ever replayed | any `task_instance_history` row in state `success`. History is written only when an attempt is reset for retry, so a success in there means a success was re-run |
-| C4 | No task whose upstream always fails ever executed | `soak_flaky.never_runs` in state `success` |
+| C3 | No successful attempt was archived | any `task_instance_history` row in state `success` |
+| C4 | No task whose upstream always fails ever executed | `soak_flaky.never_runs` with `started_at IS NOT NULL` |
 
-C1 is the "the dashboard is lying about what is running" class. C3 is the
-at-most-once probe: it is cheap, it is a pure SQL predicate, and it is the one
-thing a long run is uniquely good at catching, because a replay needs a crash at
-an unlucky moment and those are rare per hour but common per weekend.
+C1 is the "the dashboard is lying about what is running" class.
+
+**C3 is weaker than it looks, and the honest statement of its scope is this.**
+Four queries archive into `task_instance_history` (`internal/storage/queries/runs.sql`):
+the retry rail (`ResetTaskInstanceForRetry`, guarded to `up_for_retry`), the infra
+re-placement rail (guarded to `failed` + `last_failure_kind='infra'`), the
+clear-failed rails (guarded to `failed`/`upstream_failed`/`up_for_retry`), and the
+UNGUARDED admin clear (`ResetTaskInstanceToNone`, reachable only through the
+clear-task API). So a `success` row can appear only when an operator clears a
+successful task, which this battery never does. And the replay shape it was meant
+to catch (the same attempt executed twice without a reset in between) writes no
+history row at all. C3 therefore costs nothing and holds, but it is **not** an
+at-most-once proof and no soak result should be quoted as one. A reachable
+at-most-once probe needs a per-attempt execution ledger written by the task
+itself, compared against `try_number + infra_attempts`; the DAGs already write
+half of it (`soak_flaky` counts its own attempts on disk) and nothing reads it
+yet.
+
+C4 keys on `started_at`, not on a state, and that is deliberate: `never_runs`
+raises on entry, so it can never reach `success` even when the scheduler wrongly
+dispatches it. A query for a successful `never_runs` is a query whose answer is
+always zero. The durable evidence that it executed is that the control plane
+stamped it running.
 
 ### Why the tick-cost probe is a probe and not a metric
 
@@ -85,12 +104,23 @@ include (the per-run advance and the dispatch enqueue).
   than no number.
 * **Wall-clock duration per DAG run.** Same problem as throughput, with the extra
   flaw that the long-running DAG dominates the distribution.
-* **Prometheus histogram quantiles from `/metrics`.** Attractive, but the two
+* **Prometheus histogram quantiles from the metrics listener.** Attractive, but the two
   histograms that would matter (`leoflow_scheduler_loop_duration_seconds`,
   `leoflow_task_cold_start_seconds`) are not observed in Lite's hot path, so they
   would report empty. The soak reads the three *counters* that are wired
   (`step_downs_total`, `tasks_undispatchable_total`, `dispatch_at_capacity_total`)
   and gets everything else from the database, which cannot lie about state.
+
+  Where they are read from is not a detail. `/metrics` is served on the metrics
+  listener and deliberately **not** on the API port
+  (`internal/api/server.go`: "/metrics is intentionally NOT served here"), and
+  Lite puts that listener on `--port + 1010` (`internal/cli/dev.go`
+  `devMetricsPort`). Scraping the API port returns a 404 whose body parses to no
+  samples, which reads as three zeros and makes S6 and `undispatchable_task`
+  permanently unfalsifiable. The monitor therefore takes `--metrics`, derives it
+  from `--api` with that same offset when it is not given, and **refuses to
+  start** unless the endpoint answers 200 with at least one `leoflow_` family. An
+  unreadable counter is recorded as JSON `null`, never as 0.
 * **Log-line scraping.** Considered for the reaper decisions (`reap_settling_skip`
   and friends). Rejected because the decisions are metered by label on a metric
   Lite does not expose on a path the soak can reach, and because an assertion
@@ -103,8 +133,9 @@ include (the per-run advance and the dispatch enqueue).
 
 If nothing can make it red, it is decoration. Three things can.
 
-**a. The unconditional invariants.** C1 through C4 need no fault at all. They go
-red the moment the database says something impossible.
+**a. The unconditional invariants.** C1, C2 and C4 need no fault at all. They go
+red the moment the database says something impossible. C3 holds unconditionally
+too, but read its scope above before counting it as coverage.
 
 **b. Injected faults, with recovery as the assertion.** `--faults standard`
 injects three real faults, spread across the run:
@@ -296,9 +327,12 @@ derived from a measured number, and the derivation is stated.
 | SaaS / API quota | **0** | No public endpoint is contacted. This is checked by reading the DAGs: `grep -r 'https\?://' test/soak/dags` returns nothing but loopback |
 
 The one place a paid service could sneak in is the k3d warm-pool experiment, if
-somebody pointed it at a remote registry. It uses `k3d image import` (no registry)
-and refuses to start if `KUBECONFIG` names a context that is not the local k3d
-cluster it created.
+somebody pointed it at a remote registry. It uses `k3d image import` (no registry), and
+it neither reads nor writes the operator's kubeconfig: it warns when `KUBECONFIG`
+is set, creates the cluster with `--kubeconfig-update-default=false
+--kubeconfig-switch-context=false` (k3d otherwise merges the throwaway cluster
+into `~/.kube/config` and switches the current context to it), and exports its
+own kubeconfig file for the duration.
 
 ### 6.2 Disk, which is the line that actually bites
 
@@ -312,6 +346,8 @@ Measured on the first smoke run (macOS, 6 DAGs, default volumes):
 | DuckDB scratch data | **7.4 MiB** | **bounded by design.** Each DAG writes to one fixed path per DAG and overwrites it every run, so the parquet files do not accumulate. What does grow is one small JSON receipt per run: on the order of 100 bytes per run, so under 1 MiB at 72 h |
 | Soak Postgres | see below | the real variable |
 | Evidence (`samples.jsonl`) | **1.4 KiB per sample** (measured over 109 samples) | at 10 s sampling, **11.5 MiB per 24 h**, 35 MiB at 72 h |
+| Lite task logs (`<soak HOME>/.leoflow/dev/logs`) | not measured on the first runs | one log per attempt at roughly 420 attempts/hour. Now sized every sample and counted against the scratch budget, because nothing else bounds it |
+| Harness process logs (`lite.log` in the evidence directory) | not measured on the first runs | append-only for the whole run. Also counted against the scratch budget now |
 
 **Fixed floor before a single run: about 1.9 GiB.** That floor, not the growth,
 is what a laptop actually has to have free.
@@ -327,14 +363,19 @@ baseline run (109 samples, no faults, default volumes):
 | archived attempts (`task_instance_history`) | 30 / hour |
 | xcom rows | 170 / hour |
 | `audit_log` rows | **0 / hour** (nothing in the workload writes audit entries) |
-| `pg_database_size()` | **0.61 MB / hour**, about 1.4 KB per task instance |
+| `pg_database_size()` of the metadatabase | **0.61 MB / hour**, about 1.4 KB per task instance |
 
 Projected: **29 MB at 48 h, 44 MB at 72 h.** The 4 GiB database cap is therefore
-roughly 270 days of headroom at this cadence, which means **Postgres is not the
-binding disk constraint and the 1.9 GiB fixed floor is.** Two caveats on the
+roughly 280 days of headroom at this cadence, which means **Postgres is not the
+binding disk constraint and the 1.9 GiB fixed floor is.** Three caveats on the
 number: Postgres allocates in 8 KiB pages and 1 MiB extents, so a 12-minute window
-measures a step function, and nothing here runs `VACUUM FULL`, so a genuine
-multi-day run is the only way to see whether autovacuum keeps up. Both are
+measures a step function; nothing here runs `VACUUM FULL`, so a genuine multi-day
+run is the only way to see whether autovacuum keeps up; and the 0.61 MB/h is a
+12-minute slope extrapolated 240-fold, which assumes a linearity that only a long
+run can establish. The measurement also covered the metadatabase only, while the
+operator leg writes into a second database (`soak_warehouse`) on the same volume;
+the monitor now records `db_cluster_bytes` and the cap is applied to the larger of
+the two, so the budget covers the disk rather than one database. All of which are
 reasons to re-derive the slope from a real long run rather than to trust this
 line, which is why the monitor records the inputs on every sample:
 
@@ -353,8 +394,8 @@ The monitor stops the run **cleanly** and writes `stop_reason` into
 
 | Condition | Default | Flag |
 |---|---|---|
-| soak database exceeds | 4 GiB | `--max-db-bytes` |
-| DAG scratch directory exceeds | 4 GiB | `--max-data-bytes` |
+| any database on the soak volume exceeds (summed) | 4 GiB | `--max-db-bytes` |
+| the directories the soak writes into exceed (summed: DuckDB scratch, Lite's task logs, the evidence directory) | 4 GiB | `--max-data-bytes` |
 | free space on the evidence filesystem drops below | 10 GiB | `--min-free-bytes` |
 
 The stop is checked every sample, before the next sample is taken, and the latch
@@ -393,7 +434,9 @@ by 44%, and a weekly cadence would bill roughly `4 x 2880 - 2000 = 9520`
 billable minutes per month. At the published Linux rate of USD 0.008 per minute
 that is about **USD 76 per month, for the soak alone**, on a personal card, for a
 job whose whole point is that it runs on hardware we already own and pay nothing
-for. Even the 6 h variant is about USD 8 per month. A hosted runner also gives a
+for. A weekly 6 h variant is 1440 minutes a month, which fits inside the
+allowance only if nothing else in the repository uses it, and the repository uses
+it. A hosted runner also gives a
 *worse* measurement: the runner is destroyed and recreated per job, so nothing
 about long-lived process behavior survives.
 
@@ -416,7 +459,9 @@ Three independent stops, because an unattended run must not be able to become an
 open-ended one:
 
 1. **The monitor's own `--duration`.** Refuses a non-positive value and refuses
-   anything above **72 h**. Default **30 min**.
+   anything above **72 h**. Default **30 min**. The harness parses its own
+   `--duration` (which accepts `2d`) and hands the monitor seconds, because Go's
+   `time.ParseDuration` has no day unit and would reject `2d` outright.
 2. **The harness watchdog.** A background timer that sends `SIGTERM` to the
    harness at `duration + 5 min`, so a hung monitor cannot hold the run open.
 3. **`trap cleanup EXIT INT TERM`.** Idempotent teardown on every exit path:
@@ -483,6 +528,11 @@ than one with an honest gap list.
   here, which is the Lite path, not the Pro path.
 * **External secret backends.** ADR 0060 resolution is gated by
   `test/e2e/secrets-localstack.sh` and needs LocalStack.
+* **At-most-once, as an assertion.** C3 is in the battery and holds, but it
+  cannot fire on anything this workload does (see section 1). Until a per-attempt
+  execution ledger exists, the suite does not prove at-most-once and must not be
+  described as proving it. `test/e2e/chaos-runtime.sh` is what owns that property
+  today.
 * **Any claim about a weekend that was not run.** The harness reports what it
   measured. Numbers in a PR body that were not produced by a `samples.jsonl` in
   the tree are not results.
@@ -524,7 +574,7 @@ autovacuum keeps up) need hours the harness has not yet been given.
 
 | Run | Duration | Faults | Verdict | What it establishes |
 |---|---|---|---|---|
-| baseline | 18 min, 109 samples | none | **PASS**, 0 violations | the harness boots, all six DAGs register and run, every task type executes, and none of the ten invariants fires under a healthy control plane |
+| baseline | 18 min, 109 samples | none | **PASS**, 0 violations | the harness boots, all six DAGs register and run, every task type executes, and none of the invariants fires under a healthy control plane. Read with the review caveat below: three of those invariants could not have fired in that run |
 | selftest-red | 8 min, 34 samples | `selftest-red` | **FAIL**, 8 violations, exit 1 | the assertions fire: a 300 s Postgres outage declared as a 45 s window produced 4 `scheduler_unhealthy` and 4 `cadence_starved` violations, the first landing 160 s after the declared window closed, which is the 120 s recovery budget plus sampling lag: with the database paused, every query waited out its timeout and the sampling interval stretched from 10 s to about 22 s |
 | verify | 7 min, 43 samples | none | **PASS**, 0 violations | the same result after the code was refactored for lint, so the PASS is reproducible and not a one-off |
 
@@ -548,6 +598,49 @@ runs. But 27 runs is not a test of the history hypothesis: it takes a multi-hour
 run to move that column by an order of magnitude, and until one has been done the
 honest statement is that the soak found no drift in the range it observed, not
 that there is none.
+
+### What those tick-probe numbers can and cannot support
+
+Four limits, all of them structural rather than fixable by running longer:
+
+* **It is a proxy, not the loop.** The probe times `SchedulerStore.ActiveRuns`
+  from a second process on its own pool. It excludes the per-run advance, the
+  dispatch enqueue, the write half of a tick and any lock wait the scheduler's
+  own transaction takes, and it runs on a connection nothing is contending for.
+  It is the read half of a tick measured under better conditions than a tick has.
+* **The two conclusions come from one correlated sample.** "Falls with fewer
+  active runs" and "flat against total runs" were read off the same 109 samples,
+  in which the active-run count and the total-run count both co-vary with elapsed
+  time. A single run cannot separate those axes; only holding one constant while
+  moving the other can, and this workload holds neither.
+* **The range is 8 to 27 runs, a factor of 3.4.** Every table involved fits in
+  `shared_buffers` throughout, so an index or scan cost that appears at a working
+  set larger than memory cannot appear here at all.
+* **Nothing controlled for the machine.** The first samples of a run pay pgx's
+  statement preparation, autovacuum can land inside any sample, and a laptop
+  doing other work is not excluded, because CPU and RSS were deliberately not
+  collected. The statement-cache effect in particular makes early samples slower,
+  which biases a run *towards* looking flat. The monitor now also times a trivial
+  `SELECT 1` in the same sample and prints it beside the probe, so a reader can
+  tell "ActiveRuns got more expensive" from "everything did"; the runs above
+  predate that column and have no such control.
+
+The defensible reading of the baseline is: at an active set under 4 and a history
+under 30 runs, `ActiveRuns` cost about 2 ms, moved with the active set in a way
+consistent with `1 + 2N`, and showed no trend against history over a range too
+small for one to show. Nothing beyond that.
+
+### Review caveat on the three runs above
+
+Those runs were made with the monitor scraping `/metrics` from the API port,
+which does not serve it. The scrape returned 404 on every sample and was read as
+three zeros, so `leader_churn` and `undispatchable_task` could not have fired in
+any of them, and `dispatch_at_capacity_total` was recorded as 0 rather than as
+unread. `upstream_failed_task_ran` keyed on a state `never_runs` cannot reach, so
+it could not have fired either. All three are fixed in the current tree (the
+monitor refuses to start unless the metrics listener answers), but the PASS
+verdicts above were produced before the fixes and cover fewer invariants than
+their "0 violations" suggests. They should be re-run before anyone cites them.
 
 One observation worth following up, from the selftest-red evidence: the
 `scheduler_unhealthy` streak reset to 0 s mid-outage (violations at 348 s, 370 s,

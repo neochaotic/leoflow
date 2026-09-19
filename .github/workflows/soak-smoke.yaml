@@ -54,6 +54,10 @@ jobs:
           gofmt -l test/soak | tee /tmp/fmt.out
           test ! -s /tmp/fmt.out
           go vet ./test/soak/...
+          # The monitor's unit tests are the only place the invariants themselves
+          # are exercised: the 6-minute run below is a healthy system, so it
+          # proves the harness works and nothing about whether a check can fail.
+          go test ./test/soak/...
           go build -o /dev/null ./test/soak/monitor
           go build -o /dev/null ./test/soak/fixture
           bash -n test/soak/soak.sh
@@ -103,6 +107,14 @@ jobs:
                   problems.append(f"task type {want!r} never ran; observed {sorted(ops)}")
           if v["verdict"] != "PASS":
               problems.append(f"verdict was {v['verdict']}: {v['violations_by_check']}")
+          # Two invariants (leader_churn, undispatchable_task) are read only from
+          # the metrics listener, which Lite serves on a different port from the
+          # API. A scrape that silently fails reads as three zeros forever, so the
+          # smoke asserts the monitor really saw an exposition page.
+          if any(s.get("scheduler_step_downs_total") is None for s in samples):
+              problems.append("samples carry no scheduler_step_downs_total field")
+          if all(s.get("scheduler_step_downs_total") in (None, "NaN") for s in samples):
+              problems.append("the metrics listener was never scraped: leader_churn and undispatchable_task could not have fired")
           if problems:
               print("\n".join("  - " + p for p in problems))
               sys.exit(1)

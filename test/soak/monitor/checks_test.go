@@ -1,7 +1,11 @@
 package main
 
 import (
-	"math"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -67,7 +71,7 @@ func TestCorrectnessInvariantsFireEvenInsideAFaultWindow(t *testing.T) {
 		{"active task on a terminal run", func(s *sample) { s.TerminalRunsWithActiveTIs = 1 }, "terminal_run_with_active_task"},
 		{"try number past max tries", func(s *sample) { s.OverRetriedTIs = 1 }, "retry_budget_exceeded"},
 		{"success archived into history", func(s *sample) { s.SuccessInHistory = 1 }, "success_replayed"},
-		{"upstream-failed task ran", func(s *sample) { s.UpstreamFailedSuccesses = 1 }, "upstream_failed_task_ran"},
+		{"upstream-failed task ran", func(s *sample) { s.UpstreamFailedExecuted = 1 }, "upstream_failed_task_ran"},
 		{"dag import error", func(s *sample) { s.ImportErrors = 1 }, "import_error"},
 		{"leader stepped down", func(s *sample) { s.StepDowns = 1 }, "leader_churn"},
 		{"task had no executor", func(s *sample) { s.Undispatchable = 1 }, "undispatchable_task"},
@@ -211,7 +215,7 @@ func TestCadenceIsSilentBeforeTheWindowIsMeaningful(t *testing.T) {
 func TestCountersAreNotAssertedWhenTheScrapeFailed(t *testing.T) {
 	c := newChecker(defaultOptions())
 	s := healthySample()
-	s.StepDowns, s.Undispatchable, s.DispatchAtCap = math.NaN(), math.NaN(), math.NaN()
+	s.StepDowns, s.Undispatchable, s.DispatchAtCap = nanMetric(), nanMetric(), nanMetric()
 	if vs := c.Check(s); len(vs) != 0 {
 		t.Fatalf("a failed metrics scrape produced %v", checkNames(vs))
 	}
@@ -327,5 +331,149 @@ func TestCadenceExpectationsCoverEveryShippedDag(t *testing.T) {
 			t.Errorf("%s declares a %d-minute period, shorter than minCadencePeriodMin (%d), so the cadence check would wait too little",
 				dag, period, minCadencePeriodMin)
 		}
+	}
+}
+
+// TestNeverRunsInvariantKeysOnExecutionNotOnSuccess is a contract between two
+// files that have to agree or the invariant is decoration: soak_flaky.never_runs
+// raises on entry, so it can NEVER reach `success`, and a query that looks for a
+// successful never_runs is a query whose answer is always zero. The invariant is
+// "it executed", and the durable evidence of execution is started_at.
+func TestNeverRunsInvariantKeysOnExecutionNotOnSuccess(t *testing.T) {
+	dag, err := os.ReadFile(filepath.Join("..", "dags", "soak_flaky", "dag.py"))
+	if err != nil {
+		t.Fatalf("reading the soak_flaky DAG: %v", err)
+	}
+	body := string(dag)
+	if !strings.Contains(body, "def never_runs(") {
+		t.Fatal("soak_flaky no longer defines never_runs; the invariant has no subject")
+	}
+	// The task raises, so `state = 'success'` is unreachable for it by construction.
+	if !strings.Contains(body, "raise AssertionError") {
+		t.Fatal("never_runs no longer raises; re-derive which states the query may key on")
+	}
+	if !strings.Contains(correctnessQuery, "task_id = 'never_runs' AND started_at IS NOT NULL") {
+		t.Errorf("the never_runs invariant does not key on started_at; a task that raises can only be caught by evidence that it ran:\n%s", correctnessQuery)
+	}
+	if strings.Contains(correctnessQuery, "task_id = 'never_runs' AND state = 'success'") {
+		t.Error("the never_runs invariant keys on success, which never_runs cannot reach: the check can never fire")
+	}
+}
+
+// TestCadenceExpectationsMatchTheShippedSchedules closes the gap the literal
+// table opens on purpose. Deriving the expectation from the database would let
+// the system under test agree with itself, so the table is hand-written; the
+// cost of that choice is that a DAG whose cron changes leaves the table wrong,
+// and a wrong table is either a false red or, worse, a cadence check that a
+// slower schedule can never trip. This asserts the two agree at build time,
+// which is the one place it can be done without asking the scheduler.
+func TestCadenceExpectationsMatchTheShippedSchedules(t *testing.T) {
+	entries, err := os.ReadDir(filepath.Join("..", "dags"))
+	if err != nil {
+		t.Fatalf("reading test/soak/dags: %v", err)
+	}
+	re := regexp.MustCompile(`schedule\s*=\s*"\*/(\d+) \* \* \* \*"`)
+	seen := map[string]bool{}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		src, rerr := os.ReadFile(filepath.Join("..", "dags", e.Name(), "dag.py"))
+		if rerr != nil {
+			t.Errorf("%s has no dag.py: %v", e.Name(), rerr)
+			continue
+		}
+		m := re.FindSubmatch(src)
+		if m == nil {
+			t.Errorf("%s does not declare a `*/N * * * *` schedule the cadence check can express", e.Name())
+			continue
+		}
+		period, cerr := strconv.Atoi(string(m[1]))
+		if cerr != nil {
+			t.Fatalf("%s: unparsable period %q", e.Name(), m[1])
+		}
+		seen[e.Name()] = true
+		want, ok := cadenceExpectations[e.Name()]
+		if !ok {
+			t.Errorf("%s ships in test/soak/dags but has no cadence expectation", e.Name())
+			continue
+		}
+		if want != period {
+			t.Errorf("%s runs every %d min but cadenceExpectations says %d", e.Name(), period, want)
+		}
+	}
+	for dag := range cadenceExpectations {
+		if !seen[dag] {
+			t.Errorf("cadenceExpectations names %s, which no longer ships in test/soak/dags", dag)
+		}
+	}
+}
+
+// TestStopConditionCountsEveryDatabaseInTheCluster pins the budget against what
+// is actually on the disk. `pg_database_size(current_database())` sees the
+// metadatabase only, while the operator leg writes into a second database
+// (soak_warehouse) in the same container and on the same volume. A cap that
+// measures one of the two is not the cap the README promises.
+func TestStopConditionCountsEveryDatabaseInTheCluster(t *testing.T) {
+	o := defaultOptions()
+	o.maxDBBytes = 1000
+	c := newChecker(o)
+	s := healthySample()
+	s.DBBytes = 400          // the metadatabase alone is under budget
+	s.DBClusterBytes = 1_400 // every database on the volume is not
+	if r := c.stopCondition(s); r == "" {
+		t.Fatal("did not stop when the cluster exceeded the database budget")
+	}
+}
+
+// TestStopConditionFallsBackToTheMetadatabase keeps the cap working when the
+// cluster-wide reading is unavailable (an unprivileged role, an old server):
+// an unknown total must never be read as zero.
+func TestStopConditionFallsBackToTheMetadatabase(t *testing.T) {
+	o := defaultOptions()
+	o.maxDBBytes = 1000
+	c := newChecker(o)
+	s := healthySample()
+	s.DBBytes = 1_400
+	s.DBClusterBytes = 0
+	if r := c.stopCondition(s); r == "" {
+		t.Fatal("did not stop on the metadatabase reading when the cluster reading was missing")
+	}
+}
+
+// TestEveryEarlyStopIsReportedAsAnEarlyStop pins the one thing an unattended
+// operator reads on Monday: whether the run they asked for actually ran. All
+// three stop conditions end the soak before its ceiling, so all three must be
+// annotated the same way and must not be reported as a completed clean run.
+func TestEveryEarlyStopIsReportedAsAnEarlyStop(t *testing.T) {
+	for _, reason := range []string{"db_budget_exceeded:2>1", "data_budget_exceeded:2>1", "disk_free_floor:1<2"} {
+		if !isEarlyStop(reason) {
+			t.Errorf("%q is a stop condition but is not reported as an early stop", reason)
+		}
+	}
+	for _, reason := range []string{"duration_reached", "signal"} {
+		if isEarlyStop(reason) {
+			t.Errorf("%q is not a budget stop but was reported as one", reason)
+		}
+	}
+}
+
+// TestShapeTableCarriesTheBaselineProbe pins the control that makes the headline
+// reading interpretable. The tick probe is timed from another process on a
+// laptop that is also doing other things, so a bucket where the probe rose is
+// ambiguous between "ActiveRuns got more expensive" and "everything did". A
+// trivial round trip taken in the same sample separates the two, and it has to
+// reach the table a reader actually looks at.
+func TestShapeTableCarriesTheBaselineProbe(t *testing.T) {
+	r := &reporter{o: defaultOptions()}
+	for i := 0; i < 8; i++ {
+		r.trend = append(r.trend, trendPoint{
+			elapsedS: float64(i * 10), tickProbe: 2.0, baseline: 0.4,
+			totalRuns: int64(i), activeRuns: 1,
+		})
+	}
+	md := r.renderShape()
+	if !strings.Contains(md, "baseline") {
+		t.Errorf("the shape table has no baseline column, so a reader cannot tell a slower ActiveRuns from a slower machine:\n%s", md)
 	}
 }

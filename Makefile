@@ -166,13 +166,20 @@ soak: ## Long-running resilience soak (test/soak): 30 min by default, local Post
 	bash test/soak/soak.sh
 
 .PHONY: soak-selftest
-soak-selftest: ## Prove the soak's assertions can fail: injects a real outage that outlives its declared window. MUST exit non-zero.
-	@bash test/soak/soak.sh --duration 6m --faults selftest-red --label selftest-red; \
+soak-selftest: ## Prove the soak's assertions can fail: injects a real outage that outlives its declared window. MUST exit 1 with recorded violations.
+	@bash test/soak/soak.sh --duration 6m --faults selftest-red --label selftest-red --out .soak/selftest-red; \
 	code=$$?; \
-	if [ $$code -eq 0 ]; then \
-	  echo "soak-selftest FAILED: the battery reported PASS through an undeclared outage"; exit 1; \
+	if [ $$code -ne 1 ]; then \
+	  echo "soak-selftest FAILED: expected exit 1 (violations), got $$code."; \
+	  echo "  exit 0 means the battery reported PASS through an undeclared outage;"; \
+	  echo "  exit 2 means the harness never ran, which proves nothing about the assertions."; \
+	  exit 1; \
 	fi; \
-	echo "soak-selftest OK: the battery went red (exit $$code) as designed"
+	python3 -c 'import json,sys; v=json.load(open(".soak/selftest-red/verdict.json")); \
+	by=v.get("violations_by_check") or {}; \
+	sys.exit(0) if v["verdict"].startswith("FAIL") and by else sys.exit("soak-selftest FAILED: exit 1 but verdict=%s violations=%s" % (v["verdict"], by))' \
+	  || exit 1; \
+	echo "soak-selftest OK: the battery went red (exit 1, violations recorded) as designed"
 
 .PHONY: soak-warmpool-ab
 soak-warmpool-ab: ## Warm-pool A/B on k3d (ADR 0058): same workload with pools off and on, interleaved. Needs k3d + docker. Written, not yet executed.

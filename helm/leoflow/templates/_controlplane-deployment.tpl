@@ -139,6 +139,14 @@ spec:
             # the served SPA shell, mirroring Lite's silver LITE pill.
             - name: LEOFLOW_UI_EDITION
               value: "pro"
+            {{- with .ctx.Values.ui.autoRefreshIntervalSeconds }}
+            # Omitted entirely when unset, so the server's own default decides.
+            # Rendering an empty string here would bind the variable to "" and
+            # send the operator looking at the chart for a value the chart did
+            # not actually choose.
+            - name: LEOFLOW_UI_AUTO_REFRESH_INTERVAL_SECONDS
+              value: {{ . | quote }}
+            {{- end }}
             - name: LEOFLOW_SERVER_HTTP_ADDR
               value: ":{{ .ctx.Values.ports.http }}"
             - name: LEOFLOW_SERVER_METRICS_ADDR

@@ -301,3 +301,43 @@ config-file-only), and `LEOFLOW_CONFIG` is pointed at it. A Helm install can set
 both settings today; see
 [SSO with Google Workspace](/operate/sso-google-workspace/) and
 `helm/leoflow/examples/values-oidc-google.yaml` for the resulting values shape.
+
+## Amendment (2026-09-19): D2's parenthetical described a hazard, not a hardening
+
+D2 sets the session cookie server-side, `HttpOnly; Secure; SameSite=Lax`, and
+adds "(hardened vs the credential login page's client-JS cookie)". The
+comparison is accurate and the conclusion drawn from it was wrong: it reads as
+though the credential path having a weaker cookie were a known, acceptable
+difference. It was neither, and #1191 is what it cost.
+
+Two paths set the same cookie by different mechanisms. **A script cannot
+overwrite an `HttpOnly` cookie**, so once an SSO session existed, the login
+page's `document.cookie` write was silently discarded by the browser: the server
+minted a token and answered `200`, the page navigated away, and the browser kept
+sending the old SSO `_token`. A break-glass login appeared to do nothing while
+every log recorded success, at the one moment break-glass exists for, when SSO
+is already broken and the operator is already unsure what works.
+
+The second consequence went unreported and is the wider one. A deployment on
+`provider: jwt` never reaches this callback, so its session cookie was **only
+ever** the page-set one: not `HttpOnly`, readable by anything running on the
+page. The posture of the session token was decided by which button the user
+pressed.
+
+`POST /auth/token` now sets the cookie itself, through the same helper this
+callback uses (`internal/api/session_cookie.go`), and the page's write is gone.
+The response body still carries `access_token` for the CLI, the SPA and every
+other API client; what changed is that the browser no longer depends on a script
+to establish its own session. D2 stands; the parenthetical is withdrawn, and the
+attributes it lists are now the attributes of both paths and of the logout that
+clears them.
+
+One knob came with it, `auth.session_cookie_insecure` (default `false`), because
+`Secure` is now on a path that previously decided it from `location.protocol`.
+A browser refuses a `Secure` cookie from a plain-http origin that is not
+loopback, so without an escape hatch a plain-http deployment would have been
+upgraded into a sign-in page that posts valid credentials and lands back on
+itself. It cannot be derived from the request: behind a TLS-terminating ingress
+the server sees plain http while the browser sees https, so request-derived
+`Secure` would strip it from exactly the deployment that most needs it.
+Operator-scoped, `WARN` at boot while it is on.

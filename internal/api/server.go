@@ -133,6 +133,11 @@ type Dependencies struct {
 	AuthAudit AuthAuditWriter
 	// JWTSecret is the HS256 secret the OIDC callback mints the app's _token with.
 	JWTSecret string
+	// SessionCookieInsecure drops the Secure attribute from the session and OIDC
+	// state cookies (auth.session_cookie_insecure). It is stated negatively so the
+	// zero value is the hardened one: a caller that forgets the field gets Secure.
+	// See cookieSecure for why this is a setting and not derived from the request.
+	SessionCookieInsecure bool
 }
 
 // NewServer builds the gin engine with the full middleware chain, health and
@@ -180,7 +185,7 @@ func NewServer(deps Dependencies) *gin.Engine {
 	// (all password logins rejected) — not ungated. In JWT mode the credential path
 	// is the primary auth, so newBreakGlass returns nil (unchanged).
 	bg := newBreakGlass(deps.OIDCSettings.BreakGlassEmails, deps.AuthAudit, deps.OIDCEnabled)
-	r.POST("/auth/token", authTokenHandler(deps.Authenticator, deps.RateLimiter, deps.TokenTTLSecs, bg))
+	r.POST("/auth/token", authTokenHandler(deps.Authenticator, deps.RateLimiter, deps.TokenTTLSecs, bg, deps.SessionCookieInsecure))
 	// Transparent renewal (aresta #5): a still-valid bearer is re-minted with a
 	// fresh short TTL, bounded by max_lifetime. Under the public /api/v2/auth/
 	// prefix like login, it is self-gating — only a valid signed bearer can be
@@ -190,14 +195,14 @@ func NewServer(deps Dependencies) *gin.Engine {
 	}
 	// The Airflow UI redirects unauthenticated users to GET /api/v2/auth/login.
 	r.GET("/api/v2/auth/login", loginPageHandler(deps.OIDCFlow != nil, len(deps.OIDCSettings.BreakGlassEmails) > 0))
-	r.GET("/api/v2/auth/logout", logoutHandler())
+	r.GET("/api/v2/auth/logout", logoutHandler(deps.SessionCookieInsecure))
 	// OIDC/SSO login flow (D1): registered only when a provider was discovered at
 	// boot. Both routes sit under the public /api/v2/auth/ prefix.
 	if deps.OIDCFlow != nil {
 		// Rate-limit the OIDC endpoints on their own per-IP limiter (separate from
 		// the /auth/token budget), bounding state-generation / callback spam.
 		oidcLimiter := auth.NewRateLimiter(30, time.Minute)
-		r.GET("/api/v2/auth/oidc/login", rateLimitByIP(oidcLimiter), oidcLoginHandler(deps.OIDCFlow, deps.Logger))
+		r.GET("/api/v2/auth/oidc/login", rateLimitByIP(oidcLimiter), oidcLoginHandler(deps.OIDCFlow, deps.Logger, deps.SessionCookieInsecure))
 		r.GET("/api/v2/auth/oidc/callback", rateLimitByIP(oidcLimiter), oidcCallbackHandler(oidcDeps{
 			flow:      deps.OIDCFlow,
 			users:     deps.OIDCUsers,
@@ -206,6 +211,8 @@ func NewServer(deps Dependencies) *gin.Engine {
 			jwtSecret: deps.JWTSecret,
 			tokenTTL:  time.Duration(deps.TokenTTLSecs) * time.Second,
 			logger:    deps.Logger,
+
+			insecureCookies: deps.SessionCookieInsecure,
 		}))
 	}
 	r.GET("/api/v2/monitor/health", monitorHealthHandler(deps.HealthChecks, deps.SchedulerHealth))

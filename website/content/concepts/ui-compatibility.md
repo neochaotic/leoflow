@@ -252,7 +252,13 @@ browser ──▶ static SPA assets (Airflow 3.2.1, unmodified)
     `/api/v2/auth/login` honoring that contract (no second SPA embedded), makes
     `/api/v2/auth/` public, and **accepts the `_token` cookie** as a fallback to
     the `Authorization` header across `/api/v2` and `/ui`. `/api/v2/auth/logout`
-    clears the cookie. So the prior dual-path question (`/auth/token` vs
+    clears the cookie. Leoflow departs from upstream on one point: **the cookie
+    is set by the response, not by the page.** `POST /auth/token` sets it
+    server-side, `HttpOnly`, exactly as the SSO callback does, and still returns
+    `access_token` in the body for API clients. A page-set cookie is one a script
+    can read, and, worse, one the browser silently discards when an `HttpOnly`
+    cookie of the same name is already there, which is what a break-glass login
+    over a live SSO session is. So the prior dual-path question (`/auth/token` vs
     `/ui/auth/token`) is settled: the credential endpoint is `/auth/token`;
     `/ui/auth/token` remains the authed re-mint.
   - **Browser walk findings (live, against the demo stack).** Logging in and

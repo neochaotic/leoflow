@@ -381,12 +381,23 @@ start_lite() {
   # HOME points at the soak home so Lite provisions its venvs there, reads no
   # developer config.yaml (hence loopback no-auth), and resolves its datastore
   # through the db-port file written above.
-  HOME="$SOAK_HOME" \
-  SOAK_DATA_DIR="$SOAK_DATA_DIR" \
-  SOAK_ROWS="$ROWS" SOAK_FANOUT_ROWS="$FANOUT_ROWS" SOAK_LONG_SECONDS="$LONG_SECONDS" \
-  SOAK_TOKEN_SECONDS="$TOKEN_SECONDS" \
-  ${CREDENTIAL_CEILING:+LEOFLOW_AUTH_MAX_ATTEMPT_CREDENTIAL_LIFETIME="$CREDENTIAL_CEILING"} \
-  PYTHONPATH="${PYTHONPATH:-$ROOT/parser}" \
+  # `env` with an array, not a prefix of assignments. A conditional
+  # ${VAR:+NAME=value} in the middle of an assignment prefix ends the prefix when
+  # it expands to nothing, so bash treats the NEXT assignment as the command
+  # name: with no credential ceiling set, which is the default, Lite never
+  # started and the whole soak died at boot with "PYTHONPATH=...: No such file
+  # or directory". An array holds the optional entry without that hazard.
+  local envv=(
+    "HOME=$SOAK_HOME"
+    "SOAK_DATA_DIR=$SOAK_DATA_DIR"
+    "SOAK_ROWS=$ROWS"
+    "SOAK_FANOUT_ROWS=$FANOUT_ROWS"
+    "SOAK_LONG_SECONDS=$LONG_SECONDS"
+    "SOAK_TOKEN_SECONDS=$TOKEN_SECONDS"
+    "PYTHONPATH=${PYTHONPATH:-$ROOT/parser}"
+  )
+  [ -n "$CREDENTIAL_CEILING" ] && envv+=("LEOFLOW_AUTH_MAX_ATTEMPT_CREDENTIAL_LIFETIME=$CREDENTIAL_CEILING")
+  env "${envv[@]}" \
     "$BIN/leoflow" lite --no-up --executor subprocess --port "$API_PORT" "$WORKSPACE" \
       >> "$OUT_DIR/lite.log" 2>&1 &
   LITE_PID=$!

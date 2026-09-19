@@ -191,3 +191,8 @@ docs/helm-chart.md
 # Node deps for the browser-driven e2e (test/e2e/ui-smoke.js and
 # test/e2e/sso-login-page.js tell you to `npm i playwright-core` at the root).
 node_modules/
+
+# The cluster name test/gcp/provision.sh leaves for test/gcp/teardown.sh. It is
+# written to the working directory and names a real, billing cluster; it belongs
+# to one run on one machine and must never be committed.
+.gcp-experiment-cluster

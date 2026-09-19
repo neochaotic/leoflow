@@ -157,6 +157,13 @@ func run() (int, error) {
 		s.Violations = len(vs)
 		rep.WriteSample(s, vs)
 
+		// The subject left. Keeping the loop alive would spend the remaining
+		// hours describing an absence, which is what turned one aborted weekend
+		// into 2332 meaningless violations.
+		if ck.Gone() {
+			stopReason = "control_plane_gone"
+			break
+		}
 		if r := ck.stopCondition(s); r != "" {
 			stopReason = r
 			break
@@ -176,6 +183,14 @@ done:
 	fmt.Printf("\nsoak monitor: stop_reason=%s samples=%d violations=%d verdict=%s\n",
 		stopReason, v.Samples, v.Violations, v.Verdict)
 	fmt.Printf("soak monitor: evidence in %s\n", o.outDir)
+	// A vanished control plane is a HARNESS failure (2), not a product one (1).
+	// Reporting it as a failing soak would put a red verdict on the product for
+	// something that happened to the experiment, and the operator reading it on
+	// Monday would have no way to tell the two apart.
+	if stopReason == "control_plane_gone" {
+		fmt.Println("soak monitor: the control plane disappeared; this is a harness failure, not a product verdict")
+		return 2, nil
+	}
 	if v.Verdict != "PASS" {
 		return 1, nil
 	}

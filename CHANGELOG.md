@@ -20,6 +20,17 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   local `hugo` build uses. The two had already drifted: one listed a release the
   other did not, so a local build and the published site disagreed about which
   releases exist.
+  **Upgrading a deployment served over plain http on a name that is not
+  localhost:** set `auth.session_cookie_insecure: true` BEFORE you upgrade. A
+  browser refuses a `Secure` cookie on such an origin, and it refuses the
+  `Secure` deletion too. So with the default, a new login is silently discarded
+  **and sign-out stops signing anybody out**: the pre-existing non-`Secure`
+  cookie from the old build stays in the jar, stays a valid session, and cannot
+  be cleared until its original lifetime runs out. Loopback is unaffected,
+  because browsers treat it as potentially trustworthy, and so is anything
+  behind TLS, which is every chart install.
+
+
 ### Fixed
 
 - **A password login could not replace a live SSO session, and a JWT-only

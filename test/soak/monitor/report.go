@@ -199,6 +199,7 @@ func (r *reporter) renderMarkdown(v verdict) string {
 		fmt.Fprintf(&b, "| runs total / success / failed | %d / %d / %d |\n", s.TotalRuns, s.RunsSuccess, s.RunsFailed)
 		fmt.Fprintf(&b, "| task instances / archived attempts / xcom rows | %d / %d / %d |\n", s.TotalTIs, s.TotalHistory, s.TotalXCom)
 		fmt.Fprintf(&b, "| state-history rows / audit rows | %d / %d |\n", s.TotalStateHistory, s.TotalAudit)
+		fmt.Fprintf(&b, "| off-budget infra re-placements (recorded, not asserted) | %d |\n", s.InfraReplacements)
 		fmt.Fprintf(&b, "| database size (metadatabase / whole cluster) | %s / %s |\n", humanBytes(s.DBBytes), humanBytes(s.DBClusterBytes))
 		fmt.Fprintf(&b, "| DAG scratch data | %s |\n", humanBytes(s.DataBytes))
 		fmt.Fprintf(&b, "| filesystem free | %s |\n\n", humanBytes(s.FreeBytes))

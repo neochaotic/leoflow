@@ -384,10 +384,12 @@ because a required field that is sometimes optional is exactly the shape an
 operator half-configures. If the redundant pin proves to be a recurring
 misconfiguration rather than a recurring confusion, that trade changes.
 
-**One thing did change in code.** `resolveTenant` read the claim as a string and
-nothing else, so an IdP emitting `aud` as an array (which OpenID Connect
-permits) rejected every login as `tenant_not_allowed`: a message that sends the
-operator to inspect a map that is correct. A string or an array is accepted now ([#1192](https://github.com/neochaotic/leoflow/pull/1192));
-an array naming two accepted tenants is `tenant_ambiguous` rather than resolved
-to one, because it identifies neither and the choice would decide which tenant's
-data the session reaches.
+**One thing still needs to change in code, tracked separately (#1192).**
+`resolveTenant` reads the claim as a string and nothing else today, so an IdP
+emitting `aud` as an array (which OpenID Connect permits) rejects every login as
+`tenant_not_allowed`: a message that sends the operator to inspect a map that is
+correct. The pending fix accepts a string or an array; an array naming two
+accepted tenants becomes `tenant_ambiguous` rather than resolved to one, because
+it identifies neither and the choice would decide which tenant's data the
+session reaches. `iss`, the claim this amendment recommends, is always a string
+on an ID token, so the pin this page describes is not exposed to the gap.

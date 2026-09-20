@@ -105,10 +105,11 @@ auth:
       - admin@leoflow.local
 ```
 
-Cognito app clients with a secret are confidential clients, so
-`clientSecret`/`existingSecret` is required: without it the authorization-code
-exchange is rejected with `invalid_client`. The server warns at boot when it is
-empty.
+Cognito lets you create an app client with or without a secret. If yours has one
+it is a confidential client, so `clientSecret`/`existingSecret` is required:
+without it the authorization-code exchange is rejected with `invalid_client`.
+The server warns at boot when it is empty; ignore the warning if you
+deliberately created a public client (no secret) instead.
 
 ## When it does not work
 

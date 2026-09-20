@@ -108,7 +108,14 @@ func (r execRunner) Run(ctx context.Context, argv, env []string, stdout, stderr 
 	// ESRCH is the expected answer when nothing survived, and killProcessGroup
 	// treats it as "nothing to do" rather than as a failure.
 	if cmd.Process != nil {
-		_ = killProcessGroup(cmd.Process)
+		// Logged rather than discarded: on a warm worker a failed reap means the
+		// survivors are still there for the next attempt, which is the whole
+		// condition this call exists to prevent. It is never fatal to the task,
+		// whose verdict was already decided by its own exit.
+		if kerr := killProcessGroup(cmd.Process); kerr != nil {
+			slog.Warn("could not reap the task's process group; a survivor may reach the next attempt on a warm worker",
+				"error", kerr)
+		}
 	}
 
 	var exitErr *exec.ExitError

@@ -1,6 +1,10 @@
 package agent
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 // TestOOMCounterParsing pins the two cgroup formats and, more importantly, the
 // UNKNOWN case.
@@ -71,5 +75,51 @@ func TestOOMKilledBetween(t *testing.T) {
 	// kill run in reverse.
 	if oomKilledBetween(known(5), known(1)) {
 		t.Error("a falling counter is a different cgroup, not an OOM")
+	}
+}
+
+// TestClassifyRun pins the decision execute delegates: did it fail, and is there
+// anything to call it beyond the exit code.
+func TestClassifyRun(t *testing.T) {
+	known := func(n int64) oomCounter { return oomCounter{kills: n, known: true} }
+	unknown := oomCounter{known: false}
+	oops := errors.New("agent-side failure")
+
+	// Success is success even if something ELSE in the cgroup was OOM-killed.
+	// A neighbor dying does not make this task's exit 0 a failure.
+	if failed, _ := classifyRun(0, nil, known(0), known(1)); failed {
+		t.Error("a task that exited 0 was called a failure because the cgroup OOM-killed something else")
+	}
+	if failed, reason := classifyRun(0, nil, known(0), known(0)); failed || reason != "" {
+		t.Errorf("a clean run classified as failed=%v reason=%q", failed, reason)
+	}
+
+	// The case this exists for: SIGKILL with the kernel's own evidence.
+	failed, reason := classifyRun(137, nil, known(0), known(1))
+	if !failed || reason == "" {
+		t.Fatalf("an OOM-killed task classified as failed=%v reason=%q", failed, reason)
+	}
+	if !strings.Contains(reason, "memory") {
+		t.Errorf("the OOM reason does not mention memory, so it does not tell the operator what to change: %q", reason)
+	}
+
+	// The same 137 WITHOUT evidence must not be called an OOM. This is the
+	// external-kill case, and mislabelling it sends someone to raise a memory
+	// limit that was never the problem.
+	if _, reason := classifyRun(137, nil, known(4), known(4)); reason != "" {
+		t.Errorf("a SIGKILL with no OOM event was labeled %q; 137 alone is not evidence", reason)
+	}
+	if _, reason := classifyRun(137, nil, unknown, unknown); reason != "" {
+		t.Errorf("a SIGKILL on a host with no readable cgroup counter was labeled %q", reason)
+	}
+
+	// An ordinary failure stays unclassified so the record renders its own
+	// "task failed (exit N)".
+	if failed, reason := classifyRun(1, nil, known(2), known(2)); !failed || reason != "" {
+		t.Errorf("an ordinary exit 1 classified as failed=%v reason=%q", failed, reason)
+	}
+	// An agent-side error with exit 0 is still a failure.
+	if failed, _ := classifyRun(0, oops, known(0), known(0)); !failed {
+		t.Error("an agent-side run error with exit 0 was not treated as a failure")
 	}
 }

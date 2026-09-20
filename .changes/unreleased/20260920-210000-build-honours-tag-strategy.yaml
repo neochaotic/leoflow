@@ -1,0 +1,18 @@
+kind: Fixed
+body: |-
+  **Building and deploying in separate steps could name the same image two
+  different ways** (#1227). A project that sets `registry.tag_strategy:
+  git_sha` had its image pushed under the DAG version by `leoflow compile
+  --build --push`, while `leoflow deploy` looked for it under the commit SHA,
+  because the build never consulted the strategy and the deploy did.
+
+  This only shows up when the two commands run separately, which is the normal
+  CI/CD shape: build in one job, deploy in another with `--skip-build`. A single
+  `leoflow deploy`, which does both, was never affected. With the default
+  strategy the two rules happen to agree, so the failure needed a non-default
+  setting as well.
+
+  The error made it worse by pointing elsewhere. It named the image it could not
+  find rather than the disagreement, which reads as a failed push and sends you
+  to check registry credentials that were never the problem.
+time: 2026-09-20T21:00:00.000000000-03:00

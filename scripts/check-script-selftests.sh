@@ -36,11 +36,17 @@ for f in "$ROOT"/scripts/*.sh $(find "$ROOT/test" -name '*.sh' -type f 2>/dev/nu
 	fi
 done
 
-# Python helpers under scripts/ get the same treatment, by the same
-# discovery-by-existence rule. Not every script here is shell, and a report
-# generator whose filter silently returns nothing fails exactly as quietly as a
-# gate that always passes. Scripts without a self_test are skipped, as above.
-for f in "$ROOT"/scripts/*.py; do
+# Python helpers get the same treatment, by the same discovery-by-existence
+# rule. Not every script here is shell, and a report generator whose filter
+# silently returns nothing fails exactly as quietly as a gate that always
+# passes. Scripts without a self_test are skipped, as above.
+#
+# test/ is walked here for the same reason the shell loop above walks it, and
+# because it was NOT walked here first: the shell loop grew a `find "$ROOT/test"`
+# and the Python loop kept its scripts/ glob, so a self-tested Python helper
+# under test/ was discovered by nobody and its gate existed only in its author's
+# head. That asymmetry is the whole failure mode this file exists to prevent.
+for f in "$ROOT"/scripts/*.py $(find "$ROOT/test" -name '*.py' -type f 2>/dev/null | sort); do
 	[ -f "$f" ] || continue
 	grep -qE '^def self_test\(' "$f" || continue
 	found=$((found + 1))

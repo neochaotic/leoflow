@@ -33,7 +33,6 @@ native `python` task to anchor the comparison inside the same run.
 """
 from __future__ import annotations
 
-import datetime as dt
 import os
 
 from airflow.sdk import DAG, task

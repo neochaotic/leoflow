@@ -120,6 +120,11 @@ account** in the same tenant collides on the users table's unique
 `(tenant, email)` and is denied `jit_failed`. Do not create local accounts for
 the addresses your users sign in with.
 
+If your Google client belongs to another team and adding a redirect URL is a
+ticket, federating Google behind Amazon Cognito is the usual way around it: see
+[SSO with Amazon Cognito](/operate/sso-cognito/), which also explains why the
+tenant pin works differently there.
+
 ## When a login is denied
 
 The user is returned to the sign-in page, which says that single sign-on did not

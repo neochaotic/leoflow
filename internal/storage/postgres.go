@@ -171,10 +171,15 @@ const healthPoolConns = 2
 //   - checkConnsHealth guards BOTH of its destroy branches with
 //     totalConns >= minConns, so with MinConns above MaxConns the pool was
 //     exempt from background lifetime and idle recycling entirely. Clamping
-//     re-enables both, which is the correct behavior and, for the leader pool,
-//     a no-op in practice: Acquire enforces MaxConnLifetime unconditionally, and
-//     watchLeadership acquires every 5s, so an expired connection was already
-//     being replaced within a tick of its deadline.
+//     re-enables both, which is the correct behavior.
+//
+// The second bullet used to end "and, for the leader pool, a no-op in practice:
+// Acquire enforces MaxConnLifetime unconditionally, and watchLeadership
+// acquires every 5s, so an expired connection was already being replaced within
+// a tick of its deadline." Every clause of that is true and the conclusion was
+// wrong. Replacing the connection is exactly the harm for the leader pool,
+// because the advisory lock is session-scoped and dies with it (#1199).
+// NewLeaderPool therefore sets its own lifetimes; see leaderConnLifetime.
 func smallPoolConfig(cfg config.DatabaseSection, n int32) (*pgxpool.Config, error) {
 	pc, err := poolConfig(cfg)
 	if err != nil {
@@ -222,13 +227,47 @@ func connectWithRetry(ctx context.Context, pingFn func(context.Context) error, b
 	}
 }
 
+// leaderConnLifetime is how long the leader pool's one connection may live.
+//
+// It is a very large finite duration and NOT zero, which is the whole point.
+// pgxpool computes a connection's deadline as time.Now().Add(MaxConnLifetime),
+// so zero expires it immediately and every Acquire opens a NEW session.
+// Measured against a real Postgres: at zero, 0 of 6 acquires kept the same
+// backend and 0 of 6 still held the advisory lock, which would turn an hourly
+// step-down into one per watch tick. Same arithmetic, same trap, for
+// MaxConnIdleTime.
+//
+// A century is "never" for a process that is restarted by every deploy, without
+// asking time.Time to represent something it cannot.
+const leaderConnLifetime = 100 * 365 * 24 * time.Hour
+
 // NewLeaderPool opens a dedicated single-connection pool for the scheduler
 // advisory lock, so the session holding the lock is stable (ADR 0009).
+//
+// "Stable" has to include not being recycled on a timer, and it did not.
+// pg_advisory_lock is SESSION-scoped: the lock lives and dies with the
+// connection. pgxpool.ParseConfig applies a default MaxConnLifetime of one hour
+// when the DSN carries no pool_max_conn_lifetime, and leoflow's DSNs do not, so
+// this pool's connection was replaced every hour and the leadership went with
+// it. HoldsLock then correctly reported the lock gone and watchLeadership
+// correctly stepped down: every layer did its job and the scheduler still gave
+// up leadership once an hour for no reason at all.
+//
+// It is not theoretical. A 15.7-hour soak recorded 15 step-downs, one per hour,
+// in a single-process deployment where nothing was contending for the lock
+// (#1199). On one replica the cost is a pause; on several it moves leadership,
+// and everything the leader was in the middle of, on a timer nobody chose.
+//
+// Recycling buys this pool nothing anyway. watchLeadership queries every 5s, so
+// a connection that really dies is caught within a tick and the step-down that
+// follows is a true one.
 func NewLeaderPool(ctx context.Context, cfg config.DatabaseSection) (*pgxpool.Pool, error) {
 	pc, err := smallPoolConfig(cfg, 1)
 	if err != nil {
 		return nil, err
 	}
+	pc.MaxConnLifetime = leaderConnLifetime
+	pc.MaxConnIdleTime = leaderConnLifetime
 	pool, err := pgxpool.NewWithConfig(ctx, pc)
 	if err != nil {
 		return nil, fmt.Errorf("creating leader pool: %w", err)

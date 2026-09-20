@@ -36,6 +36,27 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The scheduler handed back its own leadership once an hour** (#1199). The
+  advisory lock that makes one replica the scheduler is session-scoped: it lives
+  and dies with the connection holding it. pgxpool applies a default connection
+  lifetime of one hour when the database URL does not set one, and leoflow's do
+  not, so the leader pool's single connection was recycled every hour and the
+  leadership went with it.
+
+  Every layer below that behaved correctly, which is why it went unnoticed: the
+  lock check reported the lock gone, because it was, and the scheduler stepped
+  down, because a leader that cannot prove it holds the lock must not keep
+  scheduling. The split-brain guard worked exactly as designed and the scheduler
+  still gave up leadership hourly for no reason. A 15.7-hour soak recorded 15
+  step-downs in a single process with nothing contending.
+
+  On a single replica the cost is a pause in scheduling. On several it moves
+  leadership, and whatever the leader was in the middle of, on a timer nobody
+  chose. The leader pool now keeps its connection, which is the whole reason it
+  is a dedicated single-connection pool; a connection that really dies is still
+  caught within one 5-second watch tick, and the step-down that follows is a
+  real one.
+
 - **A password login could not replace a live SSO session, and a JWT-only
   deployment's session cookie was readable by any script** (#1191). The two
   login paths set the same `_token` cookie by different mechanisms: the OIDC

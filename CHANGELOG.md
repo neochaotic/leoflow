@@ -20,6 +20,10 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   local `hugo` build uses. The two had already drifted: one listed a release the
   other did not, so a local build and the published site disagreed about which
   releases exist.
+
+- **The session cookie is now `Secure` by default**, decided by the server
+  rather than by the page's `location.protocol` (see the fix below).
+
   **Upgrading a deployment served over plain http on a name that is not
   localhost:** set `auth.session_cookie_insecure: true` BEFORE you upgrade. A
   browser refuses a `Secure` cookie on such an origin, and it refuses the
@@ -29,7 +33,6 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   be cleared until its original lifetime runs out. Loopback is unaffected,
   because browsers treat it as potentially trustworthy, and so is anything
   behind TLS, which is every chart install.
-
 
 ### Fixed
 
@@ -74,6 +77,25 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   state cookie is what binds it to a flow this browser started.
 
 ### Added
+
+- **The UI refresh interval is settable from the chart
+  (`ui.autoRefreshIntervalSeconds`).** It was reported that the Pro UI feels far
+  slower to update than Lite, and it does: Pro polls every 30s and Lite every 1s,
+  a thirty-fold difference. The setting to change it already existed and was
+  documented, and the chart modelled nothing, so a Helm operator could reach it
+  only through `extraEnv`, which hides the behavior from anyone reading the
+  chart.
+
+  The chart omits the variable entirely when unset rather than rendering an empty
+  one, so the server's default stays in charge and nobody goes looking in the
+  chart for a number the chart did not choose.
+
+  **This exposes the choice; it does not change the default.** Copying Lite's 1s
+  would multiply request and query load by thirty per open tab, and Lite can
+  afford that only because it is one person against a local database. Choosing a
+  better default needs the cost of one refresh cycle measured, which is tracked
+  in [#1196](https://github.com/neochaotic/leoflow/issues/1196) along with the
+  question of whether polling is the right mechanism at all.
 
 - **`auth.session_cookie_insecure`** (default `false`), the one escape hatch the
   fix above needs. `Secure` is now decided by the server rather than by the

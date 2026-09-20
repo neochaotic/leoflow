@@ -371,7 +371,16 @@ self_test() {
 
 case "$EXPERIMENT" in
   pod-per-task|warm-pool-ab|netpol) ;;
-  "") die "--experiment is required (pod-per-task | warm-pool-ab | netpol)" ;;
+  # provision-probe is not an experiment about leoflow. It is for questions
+  # about THIS directory's own mechanism, which can only be answered on a real
+  # cluster: whether resize preserves the node TTL (#1207), whether a flag does
+  # what its help says, whether an expired node is replaced. Four of this
+  # directory's defects were found only by paying for a cluster, so having a
+  # sanctioned, labelled, TTL'd way to ask a small one is cheaper than the
+  # alternative, which is someone running gcloud by hand with none of the
+  # guardrails.
+  provision-probe) ;;
+  "") die "--experiment is required (pod-per-task | warm-pool-ab | netpol | provision-probe)" ;;
   *)  die "unknown experiment: $EXPERIMENT" ;;
 esac
 

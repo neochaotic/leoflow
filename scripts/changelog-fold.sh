@@ -94,12 +94,21 @@ merge_unreleased() { # <changelog> <rendered>
 		# script prints nothing at all.
 		FILENAME == rendered {
 			if ($0 ~ /^### /) { k = substr($0, 5); sub(/[ \t]+$/, "", k); next }
-			# A blank between two rendered kinds is layout, not part of an
-			# entry, so it is dropped here and re-added by emit(). The
-			# changeFormat in .changie.yaml is one line per fragment, so a
-			# rendered entry never contains a blank line of its own.
-			if ($0 == "") next
-			if (k != "") add(k, $0)
+			# A blank line inside a rendered entry is a paragraph break and is
+			# kept; entries in this file routinely run to several paragraphs.
+			# Before any heading it is layout, and there is no kind to keep it
+			# under anyway.
+			if ($0 == "") { if (k != "") add(k, ""); next }
+			if (k == "") next
+			# changie renders `- {{.Body}}`, so only the FIRST line of a body
+			# gets the bullet marker and every line after it comes back flush
+			# left. In markdown a flush-left line after a blank one ends the
+			# list item, which would drop the second paragraph of an entry out
+			# of its own bullet. Indent the continuations to the two spaces the
+			# rest of this CHANGELOG uses. A line the author already indented is
+			# left alone, and one that starts its own bullet is a sibling entry.
+			if ($0 !~ /^- / && $0 !~ /^[ \t]/) $0 = "  " $0
+			add(k, $0)
 			next
 		}
 		# From here on, the CHANGELOG itself.
@@ -193,6 +202,20 @@ self_test() {
 	got="$(merge_unreleased "$tmp/cl8.md" "$tmp/r8.md")"
 	_eq "$(printf '%s' "$got" | grep -c 'Second paragraph of the same entry.')" "1" "keeps a paragraph inside an entry"
 	_eq "$(printf '%s' "$got" | sed -n '/^### Changed/,/^## \[1/p' | grep -c '^$')" "5" "keeps the blank lines that separate paragraphs"
+
+	# 8b. A fragment body of several paragraphs, which is how entries in this
+	#     file are actually written. changie renders `- {{.Body}}`, so only the
+	#     first line carries the bullet and the rest come back flush left; a
+	#     flush-left line after a blank one ends the list item in markdown, and
+	#     the second paragraph falls out of its own entry. Every fixture above
+	#     is a one-line bullet, which is why none of them could see this.
+	printf '%s\n' '# Changelog' '' '## [Unreleased]' '' '## [1.0.0] - 2026-01-01' > "$tmp/cl8b.md"
+	printf '%s\n' '### Fixed' '- **A thing** (#1). First paragraph that wraps' 'onto a second line.' '' 'And a second paragraph.' > "$tmp/r8b.md"
+	got="$(merge_unreleased "$tmp/cl8b.md" "$tmp/r8b.md")"
+	_eq "$(printf '%s' "$got" | grep -c '^onto a second line.$')" "0" "indents a wrapped continuation line"
+	_eq "$(printf '%s' "$got" | grep -c '^  onto a second line.$')" "1" "keeps it inside the bullet"
+	_eq "$(printf '%s' "$got" | grep -c '^  And a second paragraph.$')" "1" "keeps the second paragraph inside the bullet"
+	_eq "$(printf '%s' "$got" | sed -n '/^### Fixed/,/^## \[1/p' | grep -c '^$')" "3" "keeps the paragraph break between them"
 
 	# 9. KINDS above is a second copy of the kind list in .changie.yaml, kept
 	#    because this script must order the headings without parsing YAML. Two

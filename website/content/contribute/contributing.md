@@ -171,6 +171,22 @@ helping make Leoflow better.
 
 ## Editing the docs
 
-This site is MkDocs Material — `mkdocs serve` to preview locally. The CLI and Go
-references are auto-generated (Cobra / gomarkdoc) and git-ignored, so **don't
-hand-edit `docs/cli/` or `docs/go/`** — change the source GoDoc/command instead.
+This site is Hugo + Docsy, and its source is `website/`. Install [Hugo
+extended](https://gohugo.io/installation/) (0.110.0 or newer; CI pins 0.165.0) and
+run `npm ci` once inside `website/` for the theme's PostCSS toolchain, then preview
+with live reload:
+
+```bash
+cd website
+hugo server     # serves at http://localhost:1313/leoflow/ (the subpath matters)
+```
+
+The CLI and Go references are **generated, not written**: `website/scripts/gen-cli.sh`
+renders `content/reference/cli/` from Cobra, and `gen-go.sh` renders
+`content/reference/go/` from gomarkdoc. Both trees are committed so a fresh clone can
+preview without those toolchains, but CI reruns every generator before it builds, so
+**a hand edit to either tree never reaches the published site**. Change the command
+definition or the GoDoc instead.
+
+[Build the docs](/contribute/build-docs/) covers the rest: the other two generators
+(OpenAPI and the Python runtime API), the redirect aliases, and the production build.

@@ -36,10 +36,9 @@ Do **not** run `hugo mod get -u` — that upgrades past the pinned Docsy version
 
 ## Generate the reference (do this before building)
 
-Four sections of the site are **generated from source**, mirroring the live MkDocs
-pipeline. The rendered trees are committed for preview convenience, but regenerate
-them whenever the source changes (and CI reruns all four before every build, so
-they can never drift):
+Four sections of the site are **generated from source**. The rendered trees are
+committed for preview convenience, but regenerate them whenever the source changes
+(and CI reruns all four before every build, so they can never drift):
 
 ```bash
 # run from the repo root
@@ -73,29 +72,9 @@ hugo --gc --minify          # output in website/public/
 ```
 
 `--gc` also flags broken internal reference links, so a clean build means the
-cross-references resolve.
-
-## Refresh the migrated pages
-
-Most content pages were mechanically migrated from the live MkDocs tree by the
-converters under `website/scripts/migration/`. When `docs/` changes upstream and you
-want to pull those edits into the Hugo tree, rerun them (they never touch
-hand-authored pages — see that directory's `README.md`):
-
-```bash
-cd website/scripts/migration
-python3 test_convert.py            # transforms are unit-tested (must pass)
-python3 build_site.py              # regenerates the bulk pages + link-map.csv
-python3 build_connections_index.py
-```
-
-{{% alert title="Redirect map (F4)" color="info" %}}
-`build_site.py` emits `website/scripts/migration/link-map.csv` — an
-**old-MkDocs-path → new-Hugo-URL** row for every migrated page. That file is the
-source for the redirect map added in migration phase **F4**, so that bookmarks and
-external links to the old flat URLs land on the right Hugo page after cutover. Keep
-it in sync when you move or rename pages.
-{{% /alert %}}
+cross-references resolve. CI goes further: `website-build.yml` runs lychee offline
+over the rendered `public/` tree and fails on any href or image src that does not
+resolve, so that is the check to reproduce when a link report surprises you.
 
 ## How it is wired
 
@@ -104,44 +83,42 @@ it in sync when you move or rename pages.
 - **`website/layouts/`** — the two local overrides: `index.html` (the landing page)
   and `baseof.html` (a one-line Mermaid cache fix; see the comment in the file).
 - **`website/content/`** — the docs tree, one directory per IA section.
-- **`website/scripts/`** — the four reference generators and, under `migration/`,
-  the MkDocs→Hugo converters.
-- **`.github/workflows/website-build.yml`** — CI: installs the toolchains, runs the
-  four generators, then `hugo --gc --minify`. It only builds an artifact; it never
-  deploys (the live MkDocs site still ships until cutover).
-- **`.github/workflows/website-deploy.yml.draft`** — the staged cutover deploy
-  workflow. It is a `.draft` file, so Actions ignores it; activating it (renaming
-  to `.yml`) is a deliberate maintainer step, documented in its header.
+- **`website/scripts/`** holds the four reference generators; `migration/` holds
+  `build_redirects.py` and the one-time converters kept from the Hugo migration.
+- **`.github/workflows/website-build.yml`** runs on every PR that touches
+  `website/`: it installs the toolchains, runs the four generators, builds with
+  `hugo --gc --minify`, then link-checks the rendered output with lychee. It
+  uploads the build as an artifact and never deploys.
+- **`.github/workflows/website-deploy.yml`** publishes to GitHub Pages on merge to
+  `main`. It builds one leg per version (the latest GA at the root, `main` at
+  `/dev/`, and a frozen tree per archived tag) and assembles them into a single
+  Pages deploy. Which tag is "latest" and which are archived is data, in
+  `website/scripts/ci/versions.json`.
 
 ## Redirects (old URLs keep working)
 
-The old MkDocs site serves flat `.html` URLs (`use_directory_urls: false`), and the
-Hugo IA moves most pages into sections. To keep bookmarks and external links alive,
-each moved page carries a **Hugo `aliases:`** block in its front matter — Hugo
-renders a redirecting stub at the old path, no server config needed (works on GitHub
-Pages under the `/leoflow/` subpath).
+The MkDocs site this one replaced served flat `.html` URLs
+(`use_directory_urls: false`), and the Hugo IA moved most pages into sections. To
+keep bookmarks and external links alive, each moved page carries a **Hugo
+`aliases:`** block in its front matter, so Hugo renders a redirecting stub at the
+old path with no server config needed (it works on GitHub Pages under the
+`/leoflow/` subpath).
 
 That block is generated, not hand-maintained:
 
 ```bash
 cd website
-python3 scripts/migration/build_redirects.py   # idempotent; ~211 aliases
-python3 scripts/migration/check_links.py        # 0 broken internal links
+python3 scripts/migration/build_redirects.py
 ```
 
 `build_redirects.py` reads `scripts/migration/link-map.csv` plus the generated
 CLI/Go trees; the marked `AUTO redirect aliases` block it writes is safe to
 regenerate. When you move or rename a page, update `link-map.csv` and rerun it.
 
-The **cutover runbook** — the exact steps to switch the published site from
-MkDocs+mike to this one — is documented in the header of
-`.github/workflows/website-deploy.yml.draft` (the committed source of truth), and
-mirrored as a longer local note at `website/spec/CUTOVER.md` (`spec/` is a
-local-only scratch dir, so that copy is not committed).
-
-{{% alert title="Parallel track" color="info" %}}
-This Hugo + Docsy site is migrated **in parallel** with the live MkDocs-Material
-site under `docs/` + `mkdocs.yml`. The MkDocs site keeps shipping until the Hugo
-site reaches full parity and we cut over. Edit `website/content/` for the new site;
-do not hand-edit the MkDocs tree for migration work.
+{{% alert title="Rerun it after the reference generators" color="warning" %}}
+`gen-cli.sh` and `gen-go.sh` rewrite each generated page's front matter from
+scratch, which drops the alias block. Rerun `build_redirects.py` after either one.
+CI runs the generators but not `build_redirects.py`, so the old `/cli/*.html` and
+`/go/*.html` URLs do not currently redirect on the published site. That gap is
+[#1122](https://github.com/neochaotic/leoflow/issues/1122).
 {{% /alert %}}

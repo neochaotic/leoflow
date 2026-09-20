@@ -1,4 +1,8 @@
-# Requires a CHANGELOG entry per PR (see scripts/check-changelog-entry.sh).
+# Requires a changelog entry per PR (see scripts/check-changelog-entry.sh).
+#
+# The entry is normally a fragment under `.changes/unreleased/` written by
+# `make changelog` (changie), which the release cut folds into CHANGELOG.md.
+# Editing CHANGELOG.md by hand also satisfies the guard.
 #
 # A standalone workflow — not a job in ci.yaml — so it can trigger on `labeled`
 # / `unlabeled` too: applying the `skip-changelog` label re-runs THIS guard (and
@@ -75,7 +79,7 @@ jobs:
           labels=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json labels -q '.labels[].name')
           if printf '%s\n' "$labels" | grep -qx 'skip-changelog'; then
             echo "exempt=true" >> "$GITHUB_OUTPUT"
-            echo "skip-changelog is set: no CHANGELOG entry required"
+            echo "skip-changelog is set: no changelog entry required"
           else
             echo "exempt=false" >> "$GITHUB_OUTPUT"
           fi
@@ -88,7 +92,7 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
         run: git fetch --no-tags --depth=1 origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
-      - name: Require a CHANGELOG [Unreleased] entry (or the skip-changelog label)
+      - name: Require a changelog fragment or [Unreleased] entry (or the skip-changelog label)
         if: steps.exempt.outputs.exempt != 'true'
         env:
           BASE_REF: ${{ github.base_ref }}

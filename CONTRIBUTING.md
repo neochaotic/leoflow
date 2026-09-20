@@ -52,7 +52,41 @@ CI enforces all of the above automatically. PRs that fail CI cannot be merged.
   - `chore: bump dependencies`
   - `refactor: extract scheduler decision logic`
 
-#### 4. Pull Request Process
+#### 4. Record the Change
+
+Every pull request that changes shipped behavior records what changed. It does
+**not** do that by editing `CHANGELOG.md`. It writes one small file instead:
+
+```bash
+make changelog          # or: changie new
+```
+
+`changie` asks for a kind (Added / Changed / Deprecated / Removed / Fixed /
+Security) and a one-line body, then writes `.changes/unreleased/<slug>.yaml`.
+Commit that file with your change. The release cut assembles every pending
+fragment into `CHANGELOG.md` under `## [Unreleased]`, so the entry reaches the
+published changelog without anyone hand-merging it.
+
+Write the body the way the existing CHANGELOG entries are written: what an
+operator or DAG author will notice, in the imperative, with the issue or PR
+number. `- **Pods no longer restart on an OOM kill.** ... (#1216)` rather than
+`- fix reconcile`.
+
+The point of the fragment is the conflict it does not cause. `CHANGELOG.md` has
+exactly one `## [Unreleased]` section, so every open PR edits the same handful
+of lines: each merge conflicts the others, each conflict costs a rebase, and
+each rebase re-runs a full CI matrix. Resolving those conflicts by keeping both
+sides also corrupted the file in practice, leaving five headings for three
+kinds. Two fragments are two different files and cannot conflict at all.
+
+Editing `CHANGELOG.md` by hand still passes the gate, because a change that is
+recorded is recorded. Prefer the fragment.
+
+If the PR has no user-facing change at all (release prep, a chore, a
+dependency bump, a docs-only edit), apply the **`skip-changelog`** label to the
+PR instead. Dependabot is exempt automatically.
+
+#### 5. Pull Request Process
 
 1. Fork the repository and create your branch.
 2. Make your changes following TDD discipline.

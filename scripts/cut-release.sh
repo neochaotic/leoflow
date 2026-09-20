@@ -19,6 +19,9 @@
 # A `-rc.N` version keeps CHANGELOG `[Unreleased]`; a GA version (no `-rc`) moves
 # `[Unreleased]` to `[X.Y.Z] - <date>` and opens a fresh `[Unreleased]`.
 #
+# Either way the cut first folds the pending `.changes/unreleased/*.yaml`
+# fragments into `[Unreleased]` and deletes them (scripts/changelog-fold.sh).
+#
 # Release-auth: the tag+push (the irreversible publish) NEVER happens without an
 # explicit confirmation — the interactive prompt, or `--yes` passed deliberately.
 set -uo pipefail
@@ -892,11 +895,22 @@ main() {
   log "prepare on $branch"
   git checkout -b "$branch" -q origin/main || die "could not create $branch off origin/main"
   bump_chart "$cv"
+  # Fold the pending per-PR fragments into [Unreleased] BEFORE dating it (#1200).
+  # Contributors write .changes/unreleased/<slug>.yaml instead of editing
+  # CHANGELOG.md, so two PRs never touch the same bytes; the cut is where those
+  # files become the changelog. On an rc they land in [Unreleased] and stay
+  # there; on a GA the dating below carries them into the version section.
+  bash "$ROOT/scripts/changelog-fold.sh" "$cv" || die "folding changelog fragments failed"
   is_rc "$version" || date_the_changelog "$cv"
   helm-docs --chart-search-root="$ROOT/helm" >/dev/null 2>&1 || die "helm-docs failed"
   run_gates "$tag" || die "mechanical gates failed — fix before cutting"
 
+  # -A on .changes because the fold deletes the fragments it consumed, and a
+  # plain `git add <dir>` stages additions but not removals: the prepare PR
+  # would merge the entries into the CHANGELOG and leave every fragment behind,
+  # to be folded in a second time at the next cut.
   git add helm/leoflow/Chart.yaml helm/leoflow/README.md CHANGELOG.md
+  git add -A .changes 2>/dev/null || true
   git commit -q -m "release: prepare $tag" || die "nothing to commit (already prepared?)"
   git push -u origin "$branch" -q || die "pushing $branch failed"
 

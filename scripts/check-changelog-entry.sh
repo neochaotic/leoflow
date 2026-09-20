@@ -20,6 +20,8 @@
 set -euo pipefail
 
 CHANGELOG="CHANGELOG.md"
+# Where changie writes one file per change. A git pathspec, so it stays relative.
+FRAGMENT_DIR=".changes/unreleased"
 
 # unreleased_section reads a CHANGELOG on stdin and prints the body of its
 # `## [Unreleased]` section (everything up to the next `## [` header). Kept as a
@@ -107,11 +109,28 @@ self_test() {
 	_case "skips with the cut's dirty worktree" 0 "gate skipped" -- \
 		bash -c 'git checkout -qb release/v9.9.9 main && printf "%s\n" "# Changelog" "" "## [Unreleased]" "" "## [9.9.9] - 2026-09-07" "- dated" > CHANGELOG.md'
 	# 3. A real branch that changes something else: must still FAIL.
-	_case "still fails a branch that adds no entry" 1 "does not add a CHANGELOG entry" -- \
+	_case "still fails a branch that adds no entry" 1 "records no changelog entry" -- \
 		bash -c 'git checkout -q main && git checkout -qb feature && git checkout -- CHANGELOG.md && echo x > other.txt && git add -A && git commit -qm other'
 	# 4. And pass, by comparison rather than by skipping, when it adds one.
 	_case "passes a branch that adds an entry" 0 "updated relative to" -- \
 		bash -c 'printf "%s\n" "# Changelog" "" "## [Unreleased]" "" "### Fixed" "- a thing (#1)" "- another (#2)" "" "## [1.0.0] - 2026-01-01" "- old" > CHANGELOG.md && git add -A && git commit -qm entry'
+	# 4b. A fragment under .changes/unreleased/, and nothing else, passes. This
+	#     is the shape every PR is meant to have after #1200.
+	_case "passes a branch that only adds a fragment" 0 "fragment(s) added under" -- \
+		bash -c 'git checkout -q main && git checkout -qb frag && mkdir -p .changes/unreleased && printf "%s\n" "kind: Fixed" "body: a thing" > .changes/unreleased/x.yaml && git add -A && git commit -qm frag'
+	# 4c. An uncommitted fragment counts too, so running this locally before the
+	#     commit gives the same verdict CI will.
+	_case "passes on an uncommitted fragment" 0 "fragment(s) added under" -- \
+		bash -c 'git checkout -q main && git checkout -qb fragdirty && echo x > other2.txt && git add other2.txt && git commit -qm other && mkdir -p .changes/unreleased && printf "%s\n" "kind: Fixed" "body: b thing" > .changes/unreleased/y.yaml'
+	# 4d. Fragments the BASE already carries must not approve a PR that adds
+	#     none of its own. Without this, the first merged fragment would
+	#     rubber-stamp every PR that followed it, forever.
+	_case "fails when the only fragments came from the base" 1 "records no changelog entry" -- \
+		bash -c 'git checkout -q main && git checkout -- . && git clean -qfd &&
+			mkdir -p .changes/unreleased && printf "%s\n" "kind: Fixed" "body: merged earlier" > .changes/unreleased/z.yaml &&
+			git add -A && git commit -qm "fragment on base" &&
+			git update-ref refs/remotes/origin/main refs/heads/main &&
+			git checkout -qb after-frag && echo x > other3.txt && git add -A && git commit -qm other'
 	# 5. A base ref that does not resolve must FAIL, never approve. Before this
 	#    it printed OK: git show of a missing ref yields an empty base section,
 	#    which differs from a non-empty head section.
@@ -129,7 +148,7 @@ self_test() {
 	)" || rc6=$?
 	_eq "$rc6" "1" "does not skip on the base branch when a pull request is in play (exit)"
 	case "$out6" in
-		*"does not add a CHANGELOG entry"*) echo "  ok   does not skip on the base branch when a pull request is in play (message)" ;;
+		*"records no changelog entry"*) echo "  ok   does not skip on the base branch when a pull request is in play (message)" ;;
 		*) printf '  FAIL pull_request_target shape was rubber-stamped\n    got: %q\n' "$out6"; fail=1 ;;
 	esac
 
@@ -174,16 +193,47 @@ if [ -z "${GITHUB_BASE_REF:-}" ] &&
 	exit 0
 fi
 
+# A fragment under .changes/unreleased/ satisfies this gate, and is the way to
+# satisfy it going forward (#1200).
+#
+# The CHANGELOG path below is kept, not replaced, for two reasons. A release in
+# flight may still carry a hand-written entry, and refusing it would fail PRs for
+# a reason unrelated to their content. And a contributor who edits CHANGELOG.md
+# by hand has still recorded the change, which is what the gate is actually for;
+# conflicts are a cost of that, not a correctness problem.
+#
+# "New" is the worktree's set of fragments minus the base's, not `ls | wc -l`:
+# once the first fragment lands, a non-empty directory is true for every PR
+# after it and the gate would approve them all. It is also not a `git diff` of
+# committed files, because the CHANGELOG path below reads the worktree, and a
+# contributor running this locally before committing should get the same answer
+# either way they record the change.
+fragments_now="$( { git ls-files -- "$FRAGMENT_DIR"
+	git ls-files --others --exclude-standard -- "$FRAGMENT_DIR"; } | sort -u)"
+fragments_base="$(git ls-tree -r --name-only "$base" -- "$FRAGMENT_DIR" 2>/dev/null | sort)"
+new_fragments="$(comm -23 \
+	<(printf '%s\n' "$fragments_now" | awk 'NF') \
+	<(printf '%s\n' "$fragments_base" | awk 'NF') | awk 'NF' | wc -l | tr -d ' ')"
+if [ "${new_fragments:-0}" -gt 0 ]; then
+	echo "OK: ${new_fragments} changelog fragment(s) added under ${FRAGMENT_DIR}."
+	exit 0
+fi
+
 base_section="$(git show "${base}:${CHANGELOG}" 2>/dev/null | unreleased_section || true)"
 head_section="$(unreleased_section <"$CHANGELOG")"
 
 if [ "$base_section" = "$head_section" ]; then
-	echo "FAIL: this PR does not add a CHANGELOG entry under '## [Unreleased]'."
+	echo "FAIL: this PR records no changelog entry."
 	echo
-	echo "Add a Keep-a-Changelog entry describing the user-facing change (Added /"
-	echo "Changed / Fixed / Security), or — if the PR has no user-facing change"
-	echo "(release-prep, chore, dependabot, docs-only) — apply the 'skip-changelog'"
-	echo "label to the PR."
+	echo "Preferred, and conflict-free because no two PRs touch the same file:"
+	echo
+	echo "    changie new"
+	echo
+	echo "which writes a fragment under ${FRAGMENT_DIR}/ that the release cut"
+	echo "assembles into CHANGELOG.md. Editing CHANGELOG.md by hand still passes."
+	echo
+	echo "If the PR has no user-facing change (release-prep, chore, dependabot,"
+	echo "docs-only), apply the 'skip-changelog' label to the PR instead."
 	exit 1
 fi
 

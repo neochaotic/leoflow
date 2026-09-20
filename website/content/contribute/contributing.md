@@ -136,7 +136,10 @@ git fetch upstream && git switch -c fix/clear-error-message upstream/main
 #    (commit the test, then the code — red → green → refactor)
 make lint test
 
-# 4. Push to your fork and open the PR
+# 4. Record what changed, as a fragment that cannot conflict with anyone else's
+make changelog          # or: changie new
+
+# 5. Push to your fork and open the PR
 git push -u origin fix/clear-error-message
 ```
 
@@ -147,6 +150,22 @@ git push -u origin fix/clear-error-message
 - **One logical change per PR.** If you write "and also…" in the description, split it.
 - Opening the PR loads a **template** — fill in what changed, how you tested, and
   tick the checklist (TDD, lint, GoDocs, ADR compliance).
+- **The changelog entry is a file, not an edit.** `make changelog` (a wrapper
+  around `changie new`) asks for a kind and a one-line body and writes
+  `.changes/unreleased/<slug>.yaml`. Commit it with your change; the release cut
+  assembles every pending fragment into `CHANGELOG.md`. Write the body for the
+  person who will read the release notes: what an operator or DAG author will
+  notice, with the issue number.
+
+  This exists because `CHANGELOG.md` has one `## [Unreleased]` section, so every
+  open PR edits the same few lines: each merge conflicts the rest, each conflict
+  costs a rebase, and each rebase re-runs the full CI matrix. Two fragments are
+  two different files and cannot conflict. Hand-editing `CHANGELOG.md` still
+  passes the gate; the fragment is the cheaper way to do the same thing.
+
+  A PR with no user-facing change (release prep, chore, dependency bump,
+  docs-only) takes the **`skip-changelog`** label instead. Dependabot PRs are
+  exempt without one.
 
 {{% alert title="Security-sensitive areas need extra review" color="danger" %}}
 Changes to `internal/auth/`, `internal/executor/`, `internal/storage/`,
@@ -158,7 +177,9 @@ accepted from first-time contributors** — open a discussion issue first.
 
 Every PR runs, and must pass: the **build + unit/integration tests** with the
 per-package coverage floor, **golangci-lint** (the A+ stack), and the
-**security** suite (govulncheck, gosec, Trivy, CodeQL, gitleaks). The same
+**security** suite (govulncheck, gosec, Trivy, CodeQL, gitleaks), and the
+**CHANGELOG guard** (a fragment, a hand-written entry, or the `skip-changelog`
+label). The same
 `make lint test` you run locally is the fast feedback loop; CI is the source of
 truth. Push fixes until everything is green, then a maintainer reviews — we aim
 for three business days.

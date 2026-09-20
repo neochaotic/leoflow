@@ -250,6 +250,11 @@ lint: ## Run golangci-lint and ruff
 fmt: ## Format Go code
 	gofmt -w .
 
+.PHONY: changelog
+changelog: ## Record this change as a CHANGELOG fragment (.changes/unreleased/), which never conflicts
+	@command -v changie >/dev/null || { echo "changie is not installed: brew install changie (or see https://changie.dev)"; exit 1; }
+	changie new
+
 .PHONY: reportcard
 reportcard: ## Verify the Go Report Card A+ floor (ADR 0012) with maintained tools
 	bash scripts/reportcard.sh

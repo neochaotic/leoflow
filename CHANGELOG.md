@@ -93,6 +93,12 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   nothing; a comparable tool against the same identity provider lands the user
   inside with no visible login step.
 
+  **Signing out reaches the page, not the flow.** `logoutHandler` redirected to
+  the bare sign-in URL, which with auto-redirect on is itself a redirect to the
+  identity provider. Our sign-out does not end the IdP session, so a user who
+  signed out would be signed straight back in and the button would appear to do
+  nothing, and the more reliable the SSO setup is, the more completely it fails.
+
   It is **suppressed on a refused sign-on**, and that guard is the feature. A
   denial answers a redirect back to the sign-in page, so redirecting it onward
   would bounce every refusal straight back to the identity provider: an infinite

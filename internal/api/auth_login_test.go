@@ -107,8 +107,11 @@ func TestLogoutClearsCookieAndRedirects(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("logout = %d, want 302", rec.Code)
 	}
-	if loc := rec.Header().Get("Location"); loc != "/api/v2/auth/login" {
-		t.Errorf("logout redirect = %q", loc)
+	// The marker is required, not incidental. With auto_redirect on, the bare
+	// sign-in URL is itself a redirect to the IdP, whose session our sign-out
+	// does not touch, so landing there would sign the user straight back in.
+	if loc := rec.Header().Get("Location"); loc != "/api/v2/auth/login?local=1" {
+		t.Errorf("logout redirect = %q, want the sign-in PAGE rather than a URL that can redirect back into the flow", loc)
 	}
 	if sc := rec.Header().Get("Set-Cookie"); !strings.Contains(sc, "_token=") || !strings.Contains(sc, "Max-Age=0") {
 		t.Errorf("logout should expire _token cookie, got %q", sc)

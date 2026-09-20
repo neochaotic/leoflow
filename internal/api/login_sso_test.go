@@ -384,3 +384,34 @@ func TestAutoRedirectNeedsAFlow(t *testing.T) {
 		t.Fatalf("a jwt-only deployment redirected (%d) to a route it does not serve", rec.Code)
 	}
 }
+
+// TestLogoutDoesNotBounceStraightBackIntoTheIdP covers the interaction between
+// sign-out and auto-redirect, which turns a working logout into a no-op.
+//
+// logoutHandler clears the session and redirects to the sign-in page. With
+// auto-redirect on, that page is itself a redirect to the IdP, and the IdP
+// session is untouched by our sign-out, so the user is signed straight back in.
+// From their side the button did nothing, and the more reliable the SSO setup
+// is, the more completely it fails.
+//
+// Sign-out therefore has to reach the PAGE rather than the flow.
+func TestLogoutDoesNotBounceStraightBackIntoTheIdP(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/api/v2/auth/logout", logoutHandler(false))
+	r.GET("/api/v2/auth/login", loginPageHandler(loginPageOpts{sso: true, breakGlass: true, autoRedirect: true}))
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v2/auth/logout", http.NoBody))
+	loc := rec.Header().Get("Location")
+
+	landed := httptest.NewRecorder()
+	r.ServeHTTP(landed, httptest.NewRequestWithContext(t.Context(), http.MethodGet, loc, http.NoBody))
+
+	if landed.Code == http.StatusFound && strings.Contains(landed.Header().Get("Location"), "/oidc/login") {
+		t.Fatalf("signing out landed on %q, which redirects back to the IdP; the IdP session is still live, so the user is signed straight back in and the button appears to do nothing", loc)
+	}
+	if landed.Code != http.StatusOK {
+		t.Fatalf("signing out reached %q, which answered %d instead of the sign-in page", loc, landed.Code)
+	}
+}

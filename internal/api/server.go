@@ -194,14 +194,12 @@ func NewServer(deps Dependencies) *gin.Engine {
 		r.POST("/api/v2/auth/token/renew", renewTokenHandler(deps.TokenRenewer, deps.TokenTTLSecs, deps.TokenMaxLifetimeSecs))
 	}
 	// The Airflow UI redirects unauthenticated users to GET /api/v2/auth/login.
-	r.GET("/api/v2/auth/login", loginPageHandler(deps.OIDCFlow != nil, len(deps.OIDCSettings.BreakGlassEmails) > 0))
 	r.GET("/api/v2/auth/logout", logoutHandler(deps.SessionCookieInsecure))
 	r.GET("/api/v2/auth/login", loginPageHandler(loginPageOpts{
 		sso:          deps.OIDCFlow != nil,
 		breakGlass:   len(deps.OIDCSettings.BreakGlassEmails) > 0,
 		autoRedirect: deps.OIDCSettings.AutoRedirect,
 	}))
-	r.GET("/api/v2/auth/logout", logoutHandler())
 	// OIDC/SSO login flow (D1): registered only when a provider was discovered at
 	// boot. Both routes sit under the public /api/v2/auth/ prefix.
 	if deps.OIDCFlow != nil {

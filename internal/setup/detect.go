@@ -53,11 +53,27 @@ type Report struct {
 	Libc            string // "glibc" or "musl" on linux; empty on darwin
 	PythonAvailable bool   // a usable Python 3.11+ interpreter is on PATH
 	PythonPath      string // path to the chosen interpreter; empty when none is on PATH
-	Docker          bool
-	K3d             bool
-	Kubectl         bool
-	UnderMnt        bool // cwd under /mnt (WSL 9p mount): inotify hot-reload is unreliable
-	Tier            Tier
+	// Python311Path is a host python3.11 SPECIFICALLY, empty when there is none.
+	//
+	// It is separate from PythonPath because the two answer different questions
+	// and the answers disagree on a very common machine. PythonPath answers
+	// "what can parse a dag.py", and 3.12 or 3.13 can, because the Lite parser
+	// shim is stdlib-only (ADR 0024). This field answers "will `leoflow setup`
+	// have to download a managed CPython", and only a 3.11 avoids that, because
+	// setup.EnsurePython resolves the host interpreter with LookPath("python3.11")
+	// and nothing else qualifies.
+	//
+	// Reporting only the first made `doctor` and `setup --dry-run` tell a host
+	// with just 3.12 that its system Python would be used and nothing
+	// downloaded, and then setup downloaded (#1224). Neither component was
+	// wrong on its own; they were answering different questions in the same
+	// sentence.
+	Python311Path string
+	Docker        bool
+	K3d           bool
+	Kubectl       bool
+	UnderMnt      bool // cwd under /mnt (WSL 9p mount): inotify hot-reload is unreliable
+	Tier          Tier
 }
 
 // pythonCandidates lists the interpreter binary names Detect probes for, in
@@ -128,6 +144,12 @@ func Detect(p Probe) Report {
 				r.PythonPath = path
 				break
 			}
+		}
+		// Probed separately rather than inferred from PythonPath's basename: the
+		// candidate order means a host with 3.11 reports it here anyway, and a
+		// host without one must report empty even though PythonPath is set.
+		if path, err := p.LookPath("python3.11"); err == nil {
+			r.Python311Path = path
 		}
 	}
 	if p.Getwd != nil {

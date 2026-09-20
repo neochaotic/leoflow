@@ -36,6 +36,19 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The first-run check said the system Python was fine and then setup
+  downloaded a different one** (#1224). `leoflow doctor` and `leoflow setup
+  --dry-run` reported a host Python 3.12 or 3.13 as the interpreter that would
+  be used, while `leoflow setup` looks for `python3.11` specifically and fetches
+  a managed CPython when it does not find one. Behind a proxy or offline that is
+  a hard failure at a step the check had just called green.
+
+  Neither half was wrong on its own, which is why it survived: the check answers
+  what can parse a DAG, and any 3.11 or newer can, while setup answers what the
+  runtime is pinned to. They were answering different questions in the same
+  sentence. Both now say when a download is coming and which interpreter would
+  avoid it, and the quickstart prerequisites name the network dependency.
+
 - **A warm worker carried one task's leftover processes into the next** (#1216).
   A process a task left behind kept running: the process group was killed only
   when the run was cancelled, never when the task simply exited. Under one pod

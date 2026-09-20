@@ -185,7 +185,7 @@ path with none of them.
 |---|---|---|
 | `netpol.sh` | #1089's §3b rows on a CNI that enforces | **yes**, see below |
 | `pod-per-task.sh` | rising concurrency until something saturates | partly: the Kubernetes half |
-| `warm-pool-ab.sh` | warm pools vs the coupled baseline | **no**, but it is runnable: see below for which half is proven |
+| `warm-pool-ab.sh` | warm pools vs the coupled baseline | **no**, and two known defects say not yet (#1203) |
 | `lib/experiment.sh` | the run directory and the teardown trap | |
 | `lib/stats.sh` | percentiles and what "saturated" means | |
 | `lib/stack.sh` | Postgres, Redis and `helm install` on the cluster | |
@@ -257,12 +257,28 @@ of the labels that make deleting a cluster safe.
 
 **What is still unproven is everything from the control-plane login onward**: the
 token, the deploy, the three arms, the drift check between the two arm-A
-measurements. That code is a specification that compiles. The defect class that
-has already bitten this directory four times (a flag on the wrong subcommand, a
-label split on the wrong separator, a missing release channel, an empty-array
-expansion under bash 3.2) is exactly the class that only a real run finds, so
-read the first run's output as a debugging session that might also produce a
-measurement.
+measurements. That code is a specification that compiles.
+
+**And two defects in it are already known, so do not run it yet** (#1203). Reading
+it against `internal/executor/warmpool.go` found both:
+
+- `wp_run_arm` measures each attempt from the POD (`PodScheduled` to
+  `state.running.startedAt`). That interval exists per attempt in arms A and A',
+  where dispatch is pod-per-task, and **does not exist per attempt in arm B**: a
+  warm attempt is pushed to a worker the reconciler created earlier to hold
+  `EffectiveMinIdle`, so those pods carry the pool fill's startup, sampled once
+  per worker. The two arms would be timing different events, and the resulting
+  speedup would look like a result. The interval defined identically under both
+  arms is the control plane's own, `queued_at` to `start_date` on the task
+  instance.
+- `wp_report` is unimplemented and returns non-zero, so a run ends with raw pod
+  JSON and no summary.
+
+The rest of the defect class that has already bitten this directory four times (a
+flag on the wrong subcommand, a label split on the wrong separator, a missing
+release channel, an empty-array expansion under bash 3.2) is the kind only a real
+run finds. These two were cheaper: they were found by reading, before a cluster
+was paid for.
 
 ### Run record: `netpol`, 2026-09-20, GKE Dataplane V2
 

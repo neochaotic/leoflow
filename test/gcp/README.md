@@ -98,6 +98,15 @@ directory got both wrong:
   The TTL is a backstop, the teardown is still the job, and `--list` is still
   the check.
 
+- **Applying it takes real time, and that time is a gap in the guardrail.**
+  `maxRunDuration` recreates every node one at a time. At ten nodes that ran over
+  thirty minutes and outran gcloud's own operation wait, which returned non-zero
+  with `NODES_FAILED: 0` at 9 of 10 nodes while the operation went on to finish
+  `DONE`. Until that roll completes there is a cluster with no expiry on it,
+  which is the state everything here exists to avoid. #1206 stops the script
+  mistaking a gcloud timeout for a failure; #1207 proposes applying the TTL to a
+  one-node pool and resizing afterwards, so the roll is one node instead of ten.
+
 On top of it:
 
 - **A hard refusal above 10 nodes**, because the failure mode of a fat-fingered

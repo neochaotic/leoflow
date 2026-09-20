@@ -153,6 +153,44 @@ stack_helm_args() { # <release> <namespace> <task namespace> <jwt secret> <boots
 
 # ------------------------------------------------------------- bring-up
 
+# stack_helm_with_retry runs the install, retrying ONLY a control plane that was
+# briefly unreachable.
+#
+# A GKE endpoint can refuse connections for a few seconds after a resize, while
+# kubectl was working moments earlier. Observed on a real run: `datastores
+# ready` passed, and the very next command died with
+#
+#   Error: kubernetes cluster unreachable: Get "https://.../version":
+#   dial tcp ...:443: connect: connection refused
+#
+# That is not a render error, a values error or a chart error, and treating it
+# like one costs a whole cluster to learn that nothing was wrong.
+#
+# The retry is NARROW on purpose. A chart that cannot render will fail
+# identically every time, so retrying it burns the budget three times over and
+# reports the same thing later. Only the unreachable/refused shape is retried;
+# anything else fails on the first attempt exactly as before.
+stack_helm_with_retry() {
+  local attempt out
+  for attempt in 1 2 3; do
+    if out="$(helm "${HELM_ARGS[@]}" 2>&1)"; then
+      printf '%s\n' "$out"
+      return 0
+    fi
+    printf '%s\n' "$out" >&2
+    case "$out" in
+      *"cluster unreachable"*|*"connection refused"*|*"i/o timeout"*|*"TLS handshake timeout"*)
+        [ "$attempt" = "3" ] && return 1
+        exp_warn "the cluster was unreachable on attempt $attempt; this is the endpoint settling, not the chart. Retrying."
+        sleep $((attempt * 15)) ;;
+      *)
+        # A real failure. Fail now rather than three times.
+        return 1 ;;
+    esac
+  done
+  return 1
+}
+
 stack_up() { # <release> <jwt> <password> [extra --set args...]
   local release="$1" jwt="$2" pw="$3"; shift 3
 
@@ -170,7 +208,7 @@ stack_up() { # <release> <jwt> <password> [extra --set args...]
 
   stack_helm_args "$release" "$STACK_NS" "$STACK_TASK_NS" "$jwt" "$pw" "$@"
   exp_log "helm ${HELM_ARGS[*]:0:3} (server image $STACK_SERVER_IMAGE_REPO:$STACK_SERVER_IMAGE_TAG)"
-  helm "${HELM_ARGS[@]}" || exp_die "helm install failed; see the render error above"
+  stack_helm_with_retry || exp_die "helm install failed; see the error above"
 
   kubectl -n "$STACK_NS" rollout status "deploy/$release" --timeout=10m \
     || exp_die "the control plane never became Ready"
@@ -299,6 +337,49 @@ self_test() {
     *"type: LoadBalancer"*) echo "  FAIL a LoadBalancer Service leaves a forwarding rule and a reserved address behind"; fail=1 ;;
     *) echo "  ok   no LoadBalancer Service, so no forwarding rule or address survives the cluster" ;;
   esac
+
+  # stack_helm_with_retry, over a stub helm. The distinction it draws is the
+  # whole point: a transient endpoint blip must be retried, and a chart that
+  # cannot render must NOT be, because retrying it burns three clusters' worth
+  # of budget to report the same thing later.
+  local htmp; htmp="$(mktemp -d)"
+  cat > "$htmp/helm" <<'STUB'
+#!/usr/bin/env bash
+echo "$*" >> "$STUB_HELM_CALLS"
+n=$(wc -l < "$STUB_HELM_CALLS" | tr -d ' ')
+case "$STUB_HELM_MODE" in
+  # Unreachable twice, then succeeds: the shape of an endpoint settling.
+  flaky)  [ "$n" -ge 3 ] && exit 0
+          echo 'Error: kubernetes cluster unreachable: Get "https://1.2.3.4/version": dial tcp 1.2.3.4:443: connect: connection refused' >&2
+          exit 1 ;;
+  # A real chart error, identical every time.
+  broken) echo 'Error: template: leoflow/templates/deployment.yaml:199: executing at <fail>: error calling fail: agentTokenTransport must be exchange' >&2
+          exit 1 ;;
+  *)      exit 0 ;;
+esac
+STUB
+  chmod +x "$htmp/helm"
+  HELM_ARGS=(upgrade --install probe ./helm/leoflow)
+
+  : > "$htmp/calls-flaky"
+  if ( export PATH="$htmp:$PATH" STUB_HELM_CALLS="$htmp/calls-flaky" STUB_HELM_MODE=flaky \
+              LEOFLOW_TEST_FAST_RETRY=1
+       stack_helm_with_retry ) >/dev/null 2>&1; then
+    echo "  ok   an unreachable endpoint is retried and the install succeeds"
+  else
+    echo "  FAIL a transient unreachable cluster was treated as a chart failure"; fail=1
+  fi
+
+  : > "$htmp/calls-broken"
+  ( export PATH="$htmp:$PATH" STUB_HELM_CALLS="$htmp/calls-broken" STUB_HELM_MODE=broken
+    stack_helm_with_retry ) >/dev/null 2>&1
+  local broken_tries; broken_tries="$(wc -l < "$htmp/calls-broken" | tr -d ' ')"
+  if [ "${broken_tries:-0}" = "1" ]; then
+    echo "  ok   a chart that cannot render fails on the first attempt, not the third"
+  else
+    echo "  FAIL a real chart error was retried $broken_tries times; that is three clusters to learn the same thing"; fail=1
+  fi
+  rm -rf "$htmp"
 
   [ "$fail" = "0" ] && { echo "stack self-test: ok"; return 0; }
   return 1

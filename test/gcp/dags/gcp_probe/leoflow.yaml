@@ -1,0 +1,42 @@
+schema_version: "1.0"
+dag_id: gcp_probe
+description: "Cloud experiments: the smallest DAG that still exercises pod-per-task end to end."
+owner: gcp-experiments
+tags:
+  - gcp-experiment
+
+# NO dependencies on purpose. The experiments measure how long it takes to GET A
+# POD RUNNING, not what the pod then computes, and every megabyte of wheel in
+# this image is a megabyte of image pull that lands in the `pull` phase and
+# dominates it. The soak DAGs pull duckdb; that is right for a soak and wrong
+# here, because a fat image would make `pull` saturate first in every run by
+# construction rather than by discovery.
+#
+# The consequence is stated in the runners: a speedup measured against a small
+# image is a LOWER bound for a real DAG image, and says nothing about whether
+# small images are representative.
+
+# No python_version: the image must build on whatever CPython the base provides.
+
+registry:
+  # Artifact Registry in the same region as the cluster, so the pull is
+  # intra-region. A cross-region registry would put egress and distance into the
+  # `pull` phase and none of it would be visible in the number.
+  #
+  # THE REPOSITORY SURVIVES THE CLUSTER. Deleting a GKE cluster does not delete
+  # an Artifact Registry repository, nothing in test/gcp/ labels it, and
+  # teardown.sh --leftovers can therefore only LIST it. It is a deliberate,
+  # known line on the bill rather than something a teardown will ever collect.
+  #
+  # ${GCP_PROJECT} is substituted by the runner: a project id is an account
+  # identifier and is never committed (test/gcp/README.md).
+  url: us-central1-docker.pkg.dev/${GCP_PROJECT}/leoflow-validate
+  image_name: gcp-probe
+  tag_strategy: git_sha
+
+build:
+  # The cluster's nodes are amd64 (e2-standard-4) and the build host is very
+  # likely an arm64 Mac. Without this the image builds for the host and every
+  # task pod fails with an exec format error AFTER the cluster is paid for.
+  platforms:
+    - linux/amd64

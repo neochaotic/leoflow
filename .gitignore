@@ -196,3 +196,18 @@ node_modules/
 # written to the working directory and names a real, billing cluster; it belongs
 # to one run on one machine and must never be committed.
 .gcp-experiment-cluster
+
+# The shared shell libraries the cloud experiment runners source. They are NOT
+# a Python distribution artifact, but the stock "Distribution" block above
+# ignores `lib/` unanchored, which matches at any depth: without this negation
+# test/gcp/lib/ is silently excluded, the three runners are committed WITHOUT
+# the code they source, and every one of them breaks on a fresh checkout while
+# still passing locally where the files are present. `git add` reports nothing
+# and the omission is invisible until someone else clones.
+!test/gcp/lib/
+!test/gcp/lib/*.sh
+
+# Raw series, verdicts and reports from one cloud experiment run. These are
+# timings from a real billing cluster on one machine at one moment: they belong
+# to that run, not to the repository. test/gcp/lib/experiment.sh writes them.
+test/gcp/runs/

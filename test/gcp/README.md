@@ -72,13 +72,31 @@ directory got both wrong:
   call, **reads it back**, and deletes the cluster immediately if it is not
   there. A cluster whose nodes have no expiry is the one outcome this directory
   exists to prevent, so it is not left standing on a hope.
-- **What expiry means has not been verified on a live cluster.** The API says
-  `NodeConfig.maxRunDuration` is "the maximum duration for the nodes to exist. If
-  unspecified, the nodes can exist indefinitely." Whether GKE then replaces an
-  expired node to hold the pool at its target count is not documented anywhere we
-  could check, and the first real run is what will answer it. Until then the TTL
-  is a backstop, not a substitute for the teardown, and `--list` is still the
-  check.
+- **What expiry means is now VERIFIED on a live cluster, and it is the good
+  outcome.** The API says `NodeConfig.maxRunDuration` is "the maximum duration
+  for the nodes to exist. If unspecified, the nodes can exist indefinitely."
+  What it does not say is whether GKE then replaces an expired node to hold the
+  pool at its target count. It does not.
+
+  Observed 2026-09-20 on `leoflow-exp-netpol-09192248` (1 node, `--ttl 30m`,
+  created `01:48:43Z`), inspected an hour later at `02:48Z`:
+
+  | | |
+  |---|---|
+  | node pool `default-pool` | `status: RUNNING`, `initialNodeCount: 1`, `maxRunDuration: 1800s` |
+  | its managed instance group | **`size 0`, `targetSize 0`** |
+  | GCE instances in the project | **none** |
+  | the cluster object | still `RUNNING` |
+
+  So the expensive part really does remove itself and is **not** recreated: the
+  MIG target is taken to zero rather than the node being replaced. That is the
+  guardrail working exactly as this directory needs it to.
+
+  **And it confirms the other half.** The cluster was still `RUNNING` an hour
+  later with zero nodes, billing the control-plane fee (~USD 0.10/h) the whole
+  time. The TTL bounds the node bill; only deleting the CLUSTER stops the rest.
+  The TTL is a backstop, the teardown is still the job, and `--list` is still
+  the check.
 
 On top of it:
 
@@ -155,17 +173,170 @@ it selects is checked again against the whole `purpose=leoflow-experiment` pair
 before it is deleted. A cluster that fails that check is skipped and named, not
 deleted and not fatal, so one lookalike cannot abort the sweep.
 
-## What is not here yet
+## The runners
 
-The three runners. `provision.sh` and `teardown.sh` are the safe part and are
-done; the experiments themselves need the DAG images built and pushed to a
-registry the cluster can pull from, which is the step `warmpool-ab.sh` never
-had. Until a runner exists, `provision.sh` gives you a cluster that expires on
-its own, which is the right order: the guardrails before the spending.
+Three, one per experiment, plus the harness they share. Every one of them
+provisions through `provision.sh` and tears down through `teardown.sh`, and
+neither of those is ever bypassed: the guardrails, the cost plan and the node
+TTL all live there, and a second path to creating a cluster would be a second
+path with none of them.
 
-The registry is the part to design before writing the first runner, not after:
-an Artifact Registry repository outlives every cluster that pulled from it, is
-not labelled by anything here, and is the one resource in this story that a
-teardown will never find on its own. Decide whether the runners create a
-repository per run and delete it, or use one long-lived repository that is a
-deliberate, known line on the bill.
+| File | What it does | Has it run? |
+|---|---|---|
+| `netpol.sh` | #1089's §3b rows on a CNI that enforces | **yes**, see below |
+| `pod-per-task.sh` | rising concurrency until something saturates | partly: the Kubernetes half |
+| `warm-pool-ab.sh` | warm pools vs the coupled baseline | **no**, and it refuses to provision |
+| `lib/experiment.sh` | the run directory and the teardown trap | |
+| `lib/stats.sh` | percentiles and what "saturated" means | |
+| `lib/stack.sh` | Postgres, Redis and `helm install` on the cluster | |
+
+Each is `--self-test`able with no cloud, no cluster and no credentials, and
+`scripts/check-script-selftests.sh` finds them by the presence of a
+`self_test()` and runs them in CI. Run one with `--execute`; without it you get
+the cost plan and nothing is created.
+
+### The teardown is a trap, not a final line
+
+`lib/experiment.sh` installs the teardown on `EXIT`, `INT` and `TERM` *before*
+the cluster is created, and the trap is the only thing that deletes. A runner
+that reached its last line and called `teardown.sh` there would have one exit
+path that works and several that do not: a failed assertion, a `set -e` trip in
+a helper, an unbound variable, a Ctrl-C. All of those have now happened during
+development, and the cluster went away every time. That is checked by a
+self-test that drives a stub teardown through four shapes, including the one
+that matters most: **a teardown that itself fails turns a passing run red** and
+prints the manual delete command, because a teardown failure reported quietly is
+the only outcome the budget cannot absorb.
+
+### What "saturated" means was decided before the first run
+
+In `lib/stats.sh`, in code, self-tested: a level is saturated when its p95 is at
+least **3x** the p95 of the lowest level **and** the level before it was already
+at **2x**. The second clause is the whole point. One level out of line on shared
+cloud hardware is a neighbour's job, not a wall, and it is reported as a `spike`
+rather than a finding. A level with fewer than **20** observations is
+`inconclusive` whatever its p95 says.
+
+The answer is the phase whose wall appears at the lowest concurrency, and **a
+tie is reported as a tie**: "the API server and image pulls went together" is a
+real answer, and picking one of them would send an operator to fix the wrong
+thing with full confidence. No saturation at all is `no-saturation-observed`,
+which is *not* "it scales" and says so in those words.
+
+## What has actually been run
+
+**`netpol.sh`, on GKE Dataplane V2.** See the run record below. It needs no
+leoflow control plane at all: the chart's task NetworkPolicy selects pods by
+`leoflow.io/run-id`, so a probe pod wearing that label is subject to exactly the
+policy a task pod would be. That is a deliberate narrowing. It proves the
+**policy and the CNI**; it does not prove that the executor puts that label on a
+real task pod, which is a separate claim about `executor/kubernetes.go`.
+
+**`pod-per-task.sh --k8s-only`** drives pods directly, with no leoflow in the
+loop. It can rank three of the four candidate ceilings (API server, image pull,
+node capacity) and **cannot see the fourth**, the scheduler tick, which is the
+one that needs a control plane. It reports that phase as absent rather than as
+zero.
+
+**`warm-pool-ab.sh` has never run**, prints the banner saying so, and **refuses
+to provision**. The step it is missing is the same one `test/soak/warmpool-ab.sh`
+was missing: building and pushing the DAG images, without which every
+`trigger_and_wait` 404s against a dag_id the control plane was never told about.
+`test/gcp/dags/gcp_probe/` is the project it would push; the deploy wiring is
+not written. Refusing to provision is deliberate: a cluster that bills for
+twenty minutes and measures nothing is worse than no run.
+
+### Run record: `netpol`, 2026-09-20, GKE Dataplane V2
+
+Cluster `leoflow-exp-netpol-09192327`, 1 x `e2-standard-4`, `us-central1-a`,
+Kubernetes 1.35.7-gke.1222000, `--ttl 40m`, torn down and verified gone.
+
+**Gates, in the order they had to pass before any row was asserted:**
+
+| Gate | Result |
+|---|---|
+| `datapathProvider` | `ADVANCED_DATAPATH` |
+| Dataplane V2 node agent (`anetd`) Ready | 1/1 nodes |
+| Baseline, **no policy applied at all** | `169.254.169.254` ALLOWED, `8.8.8.8:53` ALLOWED, `169.254.170.23` **DROPPED** |
+| Enforcement, differential | selected=`DROPPED`, control=`ALLOWED` -> **ENFORCING** |
+
+**Rows:**
+
+| Row | Result | Evidence |
+|---|---|---|
+| **#958** metadata blocked with an empty hatch | **PASS** | baseline ALLOWED -> observed DROPPED |
+| **#958** the `/32` hatch restores that one host | **PASS** | observed ALLOWED |
+| egress outside the range still works | ALLOWED | so the block is scoped, not a blanket deny |
+
+The enforcement line is the one that matters. `probe-task` (carrying
+`leoflow.io/run-id`) lost the metadata server at the same instant `probe-plain`
+(carrying nothing) still reached it. That difference is what rules out "the
+metadata server went away" and "the node lost egress", neither of which a
+single-pod probe can separate from enforcement. On k3d this same assertion
+passes with the CNI doing nothing at all.
+
+**What this run could NOT see, and does not claim:**
+
+- **EKS.** §3b names `169.254.170.23` (EKS Pod Identity). On GKE that address
+  was **DROPPED at baseline, before any policy existed**, because it does not
+  exist on this cloud. Probing it here would "pass" the row while proving
+  nothing, so the runner reports it `UNPROVABLE` and the EKS half of #958
+  **remains unproven**. Copying the row's literal address into a GKE probe is
+  the specific mistake this is guarding against.
+- **Calico.** The row asks for three CNIs. One was exercised.
+- **A real task pod.** `probe-task` is a busybox pod wearing the label the
+  policy selects. This proves the **policy and the CNI**, not that
+  `executor/kubernetes.go` puts that label on a real task pod.
+- **The additivity concern beyond one host.** Showing that the `/32` hatch does
+  not reopen the whole range needs a *second* address in `169.254.0.0/16` that
+  answers at baseline. On this cluster there was none. That sub-claim is
+  **not re-proven** here.
+
+## Why `warm-pool-ab` has three arms and not two
+
+Turning warm pools on is not one flag. The chart refuses to render without
+`auth.agentTokenTransport=exchange` **and** `auth.secretLivenessMode=enforce`
+(`helm/leoflow/templates/deployment.yaml:199-201`), and the server enforces the
+same coupling at boot, so an install that moved one would CrashLoopBackOff. The
+reason is a real invariant (ADR 0058 D2): a warm pod outlives the attempt it was
+created for, so a credential that outlives an attempt would let a superseded
+attempt still resolve secrets.
+
+So "warm pools on" is three changes, and one of them, the exchange transport,
+adds a TokenReview round trip to **every** pod start, warm or not, pushing the
+measured number in the *opposite* direction to the one warm pools move it. A
+two-arm A/B across that bundle cannot attribute a difference to warm pools.
+
+Hence:
+
+| Arm | Settings | What it is |
+|---|---|---|
+| A | `envvar` + `observe` + warm off | today's default posture |
+| A' | `exchange` + `enforce` + warm off | the prerequisites **without** the feature |
+| B | `exchange` + `enforce` + warm **on** | the feature |
+
+`B vs A'` isolates warm pools, one variable. `B vs A` is what an operator
+experiences when they "turn on warm pools", bundle and all. `A' vs A` is the
+price of the prerequisites alone, which is the number nobody has. All three are
+reported separately and none of them is called "the warm pool speedup" on its
+own. The arms are self-tested to differ in exactly the settings they claim to,
+and the coupling is checked against the **real chart** across all eight
+combinations, so the day it changes this fails locally rather than mid-run.
+
+Arms run A, A', B, **A again**, and the two A measurements are compared. If they
+disagree by more than 1.5x the cluster drifted under the experiment and the
+comparison is reported `UNTRUSTWORTHY` rather than as a result. Drift in either
+direction invalidates: a cluster that got faster flatters whichever arm ran last.
+
+## What is still not here
+
+- **The DAG build-and-push pipeline.** `leoflow deploy` against
+  `test/gcp/dags/gcp_probe/` with a token from the bootstrap admin. Until it
+  exists, `warm-pool-ab.sh` cannot run and `pod-per-task.sh` measures only the
+  Kubernetes half.
+- **The registry decision, made but not automated.** The runners use the
+  existing long-lived `leoflow-validate` repository in `us-central1` rather than
+  creating one per run. It is the choice this README asked for: a deliberate,
+  known line on the bill. Nothing here deletes it, and nothing here can, because
+  it carries none of the labels that make deleting a cluster safe.
+- **EKS and Calico.** Every row below is GKE Dataplane V2 only.

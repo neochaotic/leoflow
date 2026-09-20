@@ -18,9 +18,17 @@
 #
 # What the API promises is that the nodes stop existing: NodeConfig.maxRunDuration
 # is documented as "the maximum duration for the nodes to exist. If unspecified,
-# the nodes can exist indefinitely." Whether GKE then replaces an expired node to
-# hold the pool at its target size has NOT been verified on a live cluster, so
-# treat the TTL as the backstop it is and not as a substitute for the teardown.
+# the nodes can exist indefinitely." Whether GKE then REPLACES an expired node to
+# hold the pool at its target size was the open question, and it is now answered
+# by observation: it does not. An hour after a 30m TTL expired, the node pool
+# still reported initialNodeCount 1 while its managed instance group was at
+# size 0 / targetSize 0 and the project had no GCE instances at all. The MIG
+# target is taken to zero rather than the node being recreated.
+#
+# The same observation confirms the limit of the guardrail: that cluster object
+# was still RUNNING, and billing the control-plane fee, an hour after its last
+# node was gone. The TTL bounds the NODE bill and nothing else, so treat it as
+# the backstop it is and not as a substitute for the teardown.
 # Everything else below is defense in depth on top of it.
 #
 # Nothing about the account is in this file. Project, zone and billing come from
@@ -136,11 +144,29 @@ forgotten_usd() { # <nodes> <machine> <spot 0|1>
 # NOT EXIST. It is a node-pool flag (`container node-pools create|update`), so
 # the create would have failed outright and the guardrail the whole directory is
 # built around was never going to be applied at all.
+# A RELEASE CHANNEL IS NOW MANDATORY. This create used to pass
+# --no-enable-autoupgrade --no-enable-autorepair and no channel at all, which
+# GKE refused outright on 2026-09-20:
+#
+#   code=400 ... not enrolling clusters in a release channel is now only allowed
+#   for existing customers. New customers can use a release channel ...
+#
+# So nothing could be provisioned at all, which is a defect only a real create
+# finds: the flags were individually valid and the argv self-test passed.
+# `--release-channel regular` replaces BOTH old flags rather than joining them,
+# because a channel enforces node auto-upgrade and GKE rejects the pair.
+#
+# The cost of that is real and worth stating: auto-upgrade and auto-repair are
+# now ON, so GKE may recreate a node mid-experiment. Over a window of a few
+# hours that is unlikely, but it is a CONFOUND for the saturation run rather
+# than a neutral setting, and a node replacement there would look exactly like
+# node capacity saturating. The saturation runner records node ages for that
+# reason.
 build_create_args() { # <cluster>
   CREATE_ARGS=(container clusters create "$1"
     --project "$PROJECT" --zone "$ZONE"
     --num-nodes "$NODES" --machine-type "$MACHINE"
-    --no-enable-autoupgrade --no-enable-autorepair
+    --release-channel regular
     --labels "purpose=leoflow-experiment,experiment=$EXPERIMENT,expires-after=$TTL")
   if [ "$SPOT" = "1" ]; then
     CREATE_ARGS+=(--spot)
@@ -274,6 +300,25 @@ argv_self_test() {
     fail=1
   else
     echo "  ok   autoscaling is never enabled, so the node count is the one that was priced"
+  fi
+
+  # The defect a real create found on 2026-09-20: GKE refuses a cluster with no
+  # release channel for new customers, so an argv without one provisions
+  # NOTHING. flags_known_to_gcloud cannot catch it, because every flag in the
+  # old argv existed; what was wrong was a flag that was ABSENT.
+  if has_flag --release-channel "${CREATE_ARGS[@]}"; then
+    echo "  ok   the create names a release channel, which GKE now requires"
+  else
+    echo "  FAIL the create names no release channel; GKE refuses that with a 400 and nothing is provisioned"
+    fail=1
+  fi
+  # A channel enforces node auto-upgrade, so GKE rejects the create if the old
+  # opt-out flags are still present alongside it.
+  if has_flag --no-enable-autoupgrade "${CREATE_ARGS[@]}"; then
+    echo "  FAIL the create combines --no-enable-autoupgrade with a release channel, which GKE rejects"
+    fail=1
+  else
+    echo "  ok   the create does not fight the channel over auto-upgrade"
   fi
 
   flags_known_to_gcloud "container clusters create" "${CREATE_ARGS[@]}" || fail=1

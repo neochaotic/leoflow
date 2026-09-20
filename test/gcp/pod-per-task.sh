@@ -433,6 +433,7 @@ K8SONLY
 run_experiment() {
   local out="$1"
   exp_require gcloud kubectl jq python3
+  exp_require_env
   [ "$K8S_ONLY" = "1" ] || exp_require helm
 
   # shellcheck disable=SC2086

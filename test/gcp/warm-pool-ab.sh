@@ -410,6 +410,7 @@ apply_arm() { # <arm>
 run_experiment() {
   local out="$1"
   exp_require gcloud kubectl helm jq python3
+  exp_require_env
 
   exp_arm_teardown "$HERE/teardown.sh"
   exp_provision "$HERE/provision.sh" warm-pool-ab "$NODES" "$TTL"

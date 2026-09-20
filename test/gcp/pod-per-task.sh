@@ -233,6 +233,44 @@ self_test() {
   _eq "$(saturating_component submit:0 schedule:0 pull:0 start:0)" "no-saturation-observed" \
       "a run that never saturates says so, rather than reporting the top level as the ceiling"
 
+  # drain_level, over a stub kubectl, because the bug it fixes is invisible in a
+  # passing run: the old code deleted and slept, and a level that had not
+  # finished dying just made the NEXT level look like node capacity (#1212).
+  local dtmp; dtmp="$(mktemp -d)"
+  cat > "$dtmp/kubectl" <<'STUB'
+#!/usr/bin/env bash
+# Answers "get pods" with a count that falls by one each call, so the drain loop
+# sees pods actually going away. Everything else succeeds silently.
+case "$*" in
+  *"get pods"*)
+    n=$(cat "$STUB_COUNT" 2>/dev/null || echo 0)
+    if [ "$n" -gt 0 ]; then seq 1 "$n" | sed 's/^/pod-/'; echo $((n - 1)) > "$STUB_COUNT"; fi
+    ;;
+esac
+exit 0
+STUB
+  chmod +x "$dtmp/kubectl"
+
+  _drain_case() { # <name> <starting pods> <ceiling> <want still_present>
+    local name="$1" start="$2" ceiling="$3" want="$4" got d
+    d="$(mktemp -d)"
+    echo "$start" > "$d/count"
+    ( export PATH="$dtmp:$PATH" STUB_COUNT="$d/count" \
+             LEVEL_DRAIN_CEILING="$ceiling" LEVEL_DRAIN_STEP=1
+      drain_level 42 "$d" ) >/dev/null 2>&1
+    got="$(awk '/^level 42 drained_in_s/ {print $NF}' "$d/facts.txt" 2>/dev/null)"
+    [ "$got" = "$want" ] && echo "  ok   $name" || { echo "  FAIL $name (still_present=$got want=$want)"; fail=1; }
+    rm -rf "$d"
+  }
+
+  _drain_case "a level that drains is recorded as empty"                3 120 0
+  _drain_case "a level already empty needs no waiting"                  0 120 0
+  # The case a fixed sleep could not tell apart: pods that outlive the budget.
+  # Recorded rather than swallowed, because the NEXT level is what they taint.
+  _drain_case "a level that outlives the ceiling records what was left"  9   3 6
+
+  rm -rf "$dtmp"
+
   [ "$fail" = "0" ] && { echo "pod-per-task self-test: ok"; return 0; }
   return 1
 }
@@ -356,8 +394,46 @@ run_level() { # <level> <count> <out dir>
   # Deleted between levels so the next level's scheduling is not competing with
   # this level's still-running pods, which would make every later level a
   # measurement of the levels before it rather than of its own concurrency.
+  #
+  # WAITED FOR, not slept through. This was `--wait=false` followed by a fixed
+  # 20s, and a pod in Terminating still holds its requests.cpu until it is
+  # actually gone. At the shipped ladder the last level asks for about 91% of a
+  # ten-node cluster's allocatable CPU, so a few dozen survivors from the level
+  # before are enough to push pods Pending, and Pending is exactly what this
+  # runner reports as NODE CAPACITY saturating.
+  #
+  # The failure that mattered was never a crash. It was a plausible wrong
+  # answer: "buy more nodes", when the cause was the harness not waiting (#1212).
+  drain_level "$level" "$out"
+}
+
+# drain_level deletes a level's pods and waits for them to be GONE, not merely
+# asked to go.
+#
+# Bounded, because an unbounded wait trades a bias for a hang. Hitting the
+# ceiling is recorded rather than swallowed: the next level's numbers were taken
+# on a cluster that still had this level on it, and a reader deciding whether to
+# believe a node-capacity verdict needs to know that.
+#
+# The elapsed time is recorded either way. A drain that takes a long time is a
+# fact about the cluster, not a detail of the harness.
+drain_level() { # <level> <out dir>
+  local level="$1" out="$2" left waited=0
+  local ceiling="${LEVEL_DRAIN_CEILING:-120}" step="${LEVEL_DRAIN_STEP:-3}"
   kubectl -n "$TASK_NS" delete pods -l "leoflow.io/level=$level" --wait=false >/dev/null 2>&1 || true
-  sleep "${INTER_LEVEL_SETTLE:-20}"
+  while [ "$waited" -lt "$ceiling" ]; do
+    left="$(kubectl -n "$TASK_NS" get pods -l "leoflow.io/level=$level" \
+             --no-headers 2>/dev/null | wc -l | tr -d ' ')"
+    [ "${left:-0}" = "0" ] && break
+    sleep "$step"
+    waited=$((waited + step))
+  done
+  left="$(kubectl -n "$TASK_NS" get pods -l "leoflow.io/level=$level" \
+           --no-headers 2>/dev/null | wc -l | tr -d ' ')"
+  printf 'level %s drained_in_s %s still_present %s\n' "$level" "$waited" "${left:-0}" >> "$out/facts.txt"
+  if [ "${left:-0}" != "0" ]; then
+    exp_warn "level $level still had ${left} pod(s) after ${waited}s; the NEXT level was measured on a cluster that was not empty, so treat a node-capacity verdict from it with suspicion (#1212)"
+  fi
 }
 
 analyze() { # <out dir>

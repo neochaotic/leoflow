@@ -214,7 +214,11 @@ self_test() {
   # else stays flat. This is the whole deliverable, so it is tested as a unit:
   # the answer must be `pull`, not merely "something saturated".
   local v_submit v_sched v_pull v_start
-  v_submit="ok $(level_verdict 1.1 1.0 1.0 50 0) $(level_verdict 1.2 1.1 1.0 50 0)"
+  # n=1 and floor=1, which is what a real run produces for this phase: one
+  # `kubectl apply` timing per level. The old fixture passed n=50 here, a count
+  # this phase can never have, so nothing noticed that the real one was below
+  # the floor and therefore always inconclusive.
+  v_submit="ok $(level_verdict 1.1 1.0 1.0 1 0 1) $(level_verdict 1.2 1.1 1.0 1 0 1)"
   v_sched="ok $(level_verdict 1.0 1.0 1.0 50 0) $(level_verdict 1.1 1.0 1.0 50 0)"
   v_pull="ok $(level_verdict 2.5 1.0 1.0 50 0) $(level_verdict 9.0 2.5 1.0 50 0)"
   v_start="ok $(level_verdict 1.0 1.0 1.0 50 0) $(level_verdict 1.0 1.0 1.0 50 0)"
@@ -378,7 +382,16 @@ analyze() { # <out dir>
       mx="$(max_of < "$f" 2>/dev/null || echo 0)"
       [ -z "$baseline" ] && baseline="$p95"
       local first=0; [ "$idx" = "1" ] && first=1
-      local v; v="$(level_verdict "$p95" "${prev:-0}" "$baseline" "$n" "$first")"
+      # submit has ONE observation per level by construction: it is the wall
+      # time of a single `kubectl apply` divided by the pods in it, so there is
+      # no distribution to take a percentile of. Holding it to the 20-sample
+      # percentile floor made the API-server ceiling permanently inconclusive,
+      # which is one of the four candidate ceilings this experiment exists to
+      # tell apart. The sustained clause still does the work the floor was doing
+      # here: one odd level is a spike, two in a row is a wall.
+      local floor="$MIN_SAMPLES"
+      [ "$phase" = "submit" ] && floor=1
+      local v; v="$(level_verdict "$p95" "${prev:-0}" "$baseline" "$n" "$first" "$floor")"
       verdicts="$verdicts $v"
       echo "$phase,$level,$n,$p50,$p95,$mx,$v" >> "$out/summary.csv"
       prev="$p95"

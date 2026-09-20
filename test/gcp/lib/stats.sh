@@ -86,9 +86,9 @@ MIN_SAMPLES="${MIN_SAMPLES:-20}"      # below this a level is inconclusive, neve
 #                 next level agrees with it.
 #   saturated     over the multiple, and the level before it was already
 #                 elevated. A wall, not a bump.
-level_verdict() { # <p95_here> <p95_prev> <baseline> <samples_here> <is_first_level 0|1>
-  local here="$1" prev="$2" base="$3" n="$4" first="$5"
-  if awk -v n="$n" -v m="$MIN_SAMPLES" 'BEGIN{exit !(n+0 < m+0)}'; then
+level_verdict() { # <p95_here> <p95_prev> <baseline> <samples_here> <is_first_level 0|1> [floor]
+  local here="$1" prev="$2" base="$3" n="$4" first="$5" floor="${6:-$MIN_SAMPLES}"
+  if awk -v n="$n" -v m="$floor" 'BEGIN{exit !(n+0 < m+0)}'; then
     echo inconclusive; return 0
   fi
   # The first level IS the baseline, so it cannot be a multiple of itself.
@@ -98,8 +98,22 @@ level_verdict() { # <p95_here> <p95_prev> <baseline> <samples_here> <is_first_le
     # divide by it rather than emit an infinity that reads as a finding.
     echo inconclusive; return 0
   fi
-  if awk -v h="$here" -v b="$base" -v m="$SAT_MULTIPLE" 'BEGIN{exit !(h+0 >= m+0 * b+0)}'; then
-    if awk -v p="$prev" -v b="$base" -v s="$SAT_SUSTAIN" 'BEGIN{exit !(p+0 >= s+0 * b+0)}'; then
+  # The parentheses are the point. `m+0 * b+0` is NOT (m)*(b): awk binds `*`
+  # tighter than `+`, so it reads as m + (0*b) + 0, which is m. The rule this
+  # file exists to state, "p95 at least SAT_MULTIPLE times the BASELINE", was
+  # comparing p95 against the bare number 3, with the baseline multiplied by
+  # nothing at all, and the sustain clause against the bare number 2.
+  #
+  # The two failures are opposite and both silent. For the phases measured in
+  # seconds it fires on any pod taking 3s to start, which is ordinary, so the
+  # experiment would have named a saturation point that is just "pods take a few
+  # seconds". For submit, measured in SECONDS PER POD, p95 never reaches 3, so
+  # the API-server ceiling could never be reported at all.
+  #
+  # Every self-test case passed because every one used baseline=1.0, the single
+  # value where the wrong expression and the right one agree.
+  if awk -v h="$here" -v b="$base" -v m="$SAT_MULTIPLE" 'BEGIN{exit !((h+0) >= (m+0) * (b+0))}'; then
+    if awk -v p="$prev" -v b="$base" -v s="$SAT_SUSTAIN" 'BEGIN{exit !((p+0) >= (s+0) * (b+0))}'; then
       echo saturated; return 0
     fi
     echo spike; return 0
@@ -220,6 +234,46 @@ self_test() {
   _eq "$(level_verdict 99.0 50.0 1.0 20 0)" "saturated" "the floor itself is enough"
   # A zero baseline would make every ratio infinite and every level a finding.
   _eq "$(level_verdict 5.0 5.0 0 50 0)" "inconclusive" "a zero baseline refuses to divide rather than reporting everything as saturated"
+
+  # EVERY case above uses baseline=1.0, and that is how a precedence bug lived
+  # here undetected: `m+0 * b+0` is m + (0*b) + 0, which equals m, and at
+  # baseline 1.0 the correct threshold m*b is ALSO m. The two expressions agree
+  # on exactly one baseline, and the suite only ever used that one.
+  #
+  # These cases use baselines that are not 1, so the multiplication has to
+  # actually happen. Each of them fails against the old expression.
+  #
+  # The seconds-scale case: a baseline of 2s and a level at 5s is 2.5x, under
+  # the 3x bar and therefore fine. The old rule said 5 >= 3 and called it a
+  # finding, which is how "pods take a few seconds" became "saturated".
+  _eq "$(level_verdict 5.0 4.0 2.0 50 0)" "ok" \
+      "2.5x a 2s baseline is not saturation, however large the absolute number looks"
+  _eq "$(level_verdict 6.0 4.0 2.0 50 0)" "saturated" \
+      "3x a 2s baseline with the level before it already at 2x IS saturation"
+  _eq "$(level_verdict 6.0 2.1 2.0 50 0)" "spike" \
+      "3x the baseline with a calm level before it is still only a spike"
+  # The sub-second case, which is the submit phase's whole scale. The old rule
+  # compared against the bare number 3, so nothing here could ever reach it and
+  # the API-server ceiling was invisible by construction.
+  _eq "$(level_verdict 0.030 0.020 0.010 50 0)" "saturated" \
+      "3x a 10ms baseline is saturation, even though the p95 is nowhere near 3"
+  _eq "$(level_verdict 0.020 0.015 0.010 50 0)" "ok" \
+      "2x a 10ms baseline is not"
+  # A large baseline: the old rule called everything saturated once the numbers
+  # were bigger than 3, so a slow-but-stable phase read as a wall.
+  _eq "$(level_verdict 12.0 11.0 10.0 50 0)" "ok" \
+      "a phase that is simply slow, and stable, is not saturating"
+
+  # The floor is overridable, because one phase measures a quantity that has one
+  # observation per level by construction (submit: seconds per pod for one
+  # batch). A 20-sample percentile floor applied to a scalar is a category
+  # error, and it made that phase permanently inconclusive.
+  _eq "$(level_verdict 6.0 4.0 2.0 1 0)" "inconclusive" \
+      "one observation is below the default floor"
+  _eq "$(level_verdict 6.0 4.0 2.0 1 0 1)" "saturated" \
+      "with a floor of one, a single per-level observation can still report"
+  _eq "$(level_verdict 6.0 2.1 2.0 1 0 1)" "spike" \
+      "and the sustain clause still separates a wall from one odd level"
 
   # -------------------------------------------------- first_saturated_level
   _eq "$(first_saturated_level ok ok saturated ok)" "3" "the FIRST saturated level is the one that counts"

@@ -16,7 +16,7 @@ func defaultOptions() options {
 	return options{
 		queuedWedge:    180 * time.Second,
 		scheduledWedge: 300 * time.Second,
-		runWedge:       30 * time.Minute,
+		runWedge:       90 * time.Minute,
 		recoveryBudget: 2 * time.Minute,
 		healthTolerate: 0,
 		maxDBBytes:     4 << 30,
@@ -135,7 +135,11 @@ func TestWedgeChecksFireOutsideAWindowAndAreSuppressedInside(t *testing.T) {
 	}{
 		{"queued past the dispatch-lost threshold", func(s *sample) { s.OldestQueuedS = 181 }, "queued_wedge"},
 		{"scheduled past its threshold", func(s *sample) { s.OldestScheduledS = 301 }, "scheduled_wedge"},
-		{"run running past its threshold", func(s *sample) { s.OldestRunningRun = 1801 }, "run_wedge"},
+		// Derived from the option rather than hardcoded: the threshold moved once
+		// already, when soak_token's forty-minute body turned 1800s into a
+		// permanent false positive, and a literal here would have to be chased
+		// every time it moves again.
+		{"run running past its threshold", func(s *sample) { s.OldestRunningRun = defaultOptions().runWedge.Seconds() + 1 }, "run_wedge"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -692,5 +696,38 @@ func TestPunctualityIgnoresABackdatedLogicalDate(t *testing.T) {
 	}
 	if got := violationsFor(t, genuine, "schedule_late"); got == 0 {
 		t.Error("an hours-late scheduler just under the ceiling was ignored; the backfill exclusion swallowed a real finding")
+	}
+}
+
+// TestRunWedgeClearsTheBatterysOwnLongestDag covers a threshold that measured
+// the fixture instead of the system.
+//
+// soak_token's body runs for forty minutes by design. The wedge threshold was
+// thirty, so the battery reported its own longest DAG as wedged on every sample
+// that DAG was alive: 1392 violations in one weekend run, every one of them a
+// task working exactly as written.
+//
+// A threshold below the longest legitimate run is not a loose threshold, it is a
+// different measurement.
+func TestRunWedgeClearsTheBatterysOwnLongestDag(t *testing.T) {
+	const soakTokenBodyS = 40 * 60
+
+	o := defaultOptions()
+	if o.runWedge.Seconds() <= soakTokenBodyS {
+		t.Fatalf("run-wedge default is %.0fs, at or below soak_token's %ds body; the DAG trips it while working", o.runWedge.Seconds(), soakTokenBodyS)
+	}
+
+	working := healthySample()
+	working.OldestRunningRun = soakTokenBodyS + 60 // finishing late, still not wedged
+	if vs := newChecker(o).Check(working); checkNames(vs)["run_wedge"] {
+		t.Error("the battery's own longest DAG reported as wedged while running normally")
+	}
+
+	// The threshold must still catch something genuinely stuck, or raising it
+	// traded a false positive for a blind spot.
+	stuck := healthySample()
+	stuck.OldestRunningRun = o.runWedge.Seconds() + 1
+	if vs := newChecker(o).Check(stuck); !checkNames(vs)["run_wedge"] {
+		t.Error("a run past the threshold was not reported; the fix removed the check rather than calibrating it")
 	}
 }

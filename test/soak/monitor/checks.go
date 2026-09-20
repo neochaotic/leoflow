@@ -223,7 +223,8 @@ func (c *checker) checkWedges(s sample, add addFunc) {
 		}
 		if s.OldestRunningRun > c.o.runWedge.Seconds() {
 			add("run_wedge",
-				fmt.Sprintf("a dag run has been `running` for %.0fs; the longest DAG in the battery finishes in minutes", s.OldestRunningRun),
+				fmt.Sprintf("a dag run has been `running` for %.0fs, past the %.0fs wedge threshold; the longest DAG in the battery (soak_token) is written to finish in forty minutes",
+					s.OldestRunningRun, c.o.runWedge.Seconds()),
 				s.OldestRunningRun, c.o.runWedge.Seconds())
 		}
 	}

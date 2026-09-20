@@ -89,7 +89,12 @@ func run() (int, error) {
 	flag.DurationVar(&o.latencyWindow, "latency-window", 10*time.Minute, "rolling window for the dispatch-latency percentiles")
 	flag.DurationVar(&o.queuedWedge, "queued-wedge", 180*time.Second, "a task instance in `queued` older than this is a wedge (default matches the dispatch-lost threshold)")
 	flag.DurationVar(&o.scheduledWedge, "scheduled-wedge", 300*time.Second, "a task instance in `scheduled` older than this is a wedge (generous: max_active_tasks legitimately holds ready siblings here)")
-	flag.DurationVar(&o.runWedge, "run-wedge", 30*time.Minute, "a dag run in `running` older than this is a wedge")
+	// 90m, not 30m. soak_token's body runs for forty minutes by design, so a
+	// thirty-minute threshold reported the battery's own longest DAG as wedged on
+	// every sample it was alive: 1392 violations in one weekend run, describing a
+	// task that was working exactly as written. The threshold has to clear the
+	// longest DAG by a margin, or it measures the fixture rather than the system.
+	flag.DurationVar(&o.runWedge, "run-wedge", 90*time.Minute, "a dag run in `running` older than this is a wedge")
 	flag.DurationVar(&o.recoveryBudget, "recovery-budget", 2*time.Minute, "after a declared fault window closes, how long the control plane gets to be healthy and drained again")
 	flag.DurationVar(&o.healthTolerate, "health-tolerance", 0, "grace applied to the scheduler-health check outside fault windows (0 = any unhealthy sample outside a window is a violation)")
 	flag.Int64Var(&o.maxDBBytes, "max-db-bytes", 8<<30, "stop cleanly when the soak database exceeds this size")

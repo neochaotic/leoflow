@@ -550,6 +550,28 @@ func TestClassifyPodPrefersPodOOMOverABareExitCode(t *testing.T) {
 		}}
 	}
 
+	// THE PRODUCTION SHAPE, and the fixture below used to hide a bug by not
+	// being it. On the path that reaches this branch the agent survived its
+	// child and exited on its own, so the CONTAINER exits 1 (the agent's clean
+	// exit) while the RECORD carries 255 (the task's clamped signal death). The
+	// first version of this test set the container to 137, a shape that only
+	// occurs in the narrow group-kill-during-report case, and asserted only that
+	// the string contained "OOMKilled" — so it passed while the message said
+	// "exit 1", presenting the agent's status as the task's.
+	realistic := &corev1.Pod{Status: corev1.PodStatus{
+		Phase: corev1.PodFailed,
+		ContainerStatuses: []corev1.ContainerStatus{{
+			Name: taskContainerName,
+			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+				Message:  mustEncode(t, taskoutcome.FailedBecauseWith(255, "")),
+				ExitCode: 1, Reason: "OOMKilled",
+			}},
+		}},
+	}}
+	if got := classifyPod(realistic); !strings.Contains(got.reason, "exit 255") {
+		t.Errorf("reason = %q; it reports the CONTAINER's exit code, which here is the agent's clean exit, not the task's", got.reason)
+	}
+
 	// The case that was broken: a record with an exit code and no classification,
 	// beside a pod that says OOMKilled.
 	got := classifyPod(oomPod(taskoutcome.FailedBecauseWith(255, ""), "OOMKilled"))
@@ -580,4 +602,13 @@ func TestClassifyPodPrefersPodOOMOverABareExitCode(t *testing.T) {
 	if strings.Contains(got.reason, "OOMKilled") {
 		t.Errorf("reason = %q; a pod that was not OOMKilled must not be described as one", got.reason)
 	}
+}
+
+func mustEncode(t *testing.T, rec taskoutcome.Record) string {
+	t.Helper()
+	enc, err := rec.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return enc
 }

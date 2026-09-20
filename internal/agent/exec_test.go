@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -88,11 +89,21 @@ func TestRunReapsSurvivingGrandchildren(t *testing.T) {
 		t.Skipf("unusable pid %q", strings.TrimSpace(string(raw)))
 	}
 
-	// Signal 0 asks "does this process exist" without touching it. Give the
-	// kernel a moment to finish reaping before concluding.
+	// Signal 0 asks "does this process exist" without touching it, and that is
+	// NOT enough on its own: it answers yes for a zombie too.
+	//
+	// That distinction is the whole difference between the two halves of this
+	// fix, and it is why this assertion nearly shipped meaning nothing. Run
+	// under `go test` the orphan reparents to a real init that reaps it, so
+	// kill(pid, 0) starts failing and a test that only checked liveness passed.
+	// Run as PID 1, which is production (runtime/Dockerfile ENTRYPOINT is the
+	// agent), the corpse stays in the table as a zombie, kill(pid, 0) keeps
+	// succeeding, and the same assertion fails. Measured: it did.
+	//
+	// So the state is read rather than inferred where the kernel exposes it.
 	alive := true
-	for range 20 {
-		if err := syscall.Kill(pid, 0); err != nil {
+	for range 40 {
+		if !processPresent(pid) {
 			alive = false
 			break
 		}
@@ -100,7 +111,7 @@ func TestRunReapsSurvivingGrandchildren(t *testing.T) {
 	}
 	if alive {
 		_ = syscall.Kill(pid, syscall.SIGKILL) // never leave the test's own mess behind
-		t.Fatalf("grandchild %d outlived the task; on a warm worker it would run into the next attempt holding that attempt's memory (#1216)", pid)
+		t.Fatalf("grandchild %d outlived the task and was not collected; on a warm worker it would run into the next attempt holding that attempt's environment (#1216)", pid)
 	}
 }
 
@@ -133,4 +144,29 @@ func TestCleanTaskLogsNoReapWarning(t *testing.T) {
 	if strings.Contains(logged.String(), "could not reap") {
 		t.Fatalf("a clean task warned about a failed reap; this fires on every successful task and trains the reader to ignore it:\n%s", logged.String())
 	}
+}
+
+// processPresent reports whether a pid is still a RUNNING process, treating a
+// zombie as absent.
+//
+// A zombie executes no code and holds no memory, so for the isolation claim it
+// is gone. It is not gone for the pid table, which is what the drain is about,
+// but conflating the two is what let the first version of this test pass
+// everywhere except production.
+//
+// On Linux the state comes from /proc. The third field of /proc/<pid>/stat is
+// the state character, read after the comm field, which is parenthesised and
+// may itself contain spaces and parentheses: splitting on whitespace from the
+// left is the classic way to get this wrong, so the scan starts after the LAST
+// ')'. Elsewhere (the maintainer's macOS) there is no /proc and signal 0 is all
+// there is; the assertion is weaker there and that is stated rather than
+// hidden.
+func processPresent(pid int) bool {
+	if b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid)); err == nil {
+		s := string(b)
+		if i := strings.LastIndex(s, ")"); i >= 0 && i+2 < len(s) {
+			return s[i+2] != 'Z'
+		}
+	}
+	return syscall.Kill(pid, 0) == nil
 }

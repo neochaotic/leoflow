@@ -133,30 +133,58 @@ func outcomeRecord(pod *corev1.Pod) (taskoutcome.Record, bool) {
 // when a shell sits between. So the exit code cannot be pattern-matched for
 // this, and the pod's own Reason is the only reliable signal.
 func failedReason(rec taskoutcome.Record, pod *corev1.Pod) string {
-	if rec.Reason == "" {
-		if oom := oomReasonFromPod(pod); oom != "" {
-			return oom
+	if rec.Reason == "" && podWasOOMKilled(pod) {
+		// The RECORD's exit code, not the container's, and the difference is the
+		// whole reason this takes an argument. On the path that reaches here the
+		// agent survived its child and exited on its own, so the CONTAINER's exit
+		// code is the agent's clean exit (1) and says nothing about the task.
+		// Measured against a production-shaped fixture, the container's code
+		// rendered "OOMKilled (exit 1)", which is the agent's status presented as
+		// the task's.
+		//
+		// podFailureReason is right to use the container's, because there the
+		// container IS the corpse. This caller inherited that line without
+		// inheriting the conditions that make it true.
+		if rec.ExitCode != nil {
+			return oomReason(*rec.ExitCode)
 		}
+		return oomReason(containerExitCode(pod))
 	}
 	return recordFailureReason(rec)
 }
 
-// oomReasonFromPod returns the OOM description when the task container's
-// terminated status says the kernel took it, and empty otherwise.
-func oomReasonFromPod(pod *corev1.Pod) string {
+// oomReason is the one place the operator-facing OOM string is built, so the
+// two callers cannot drift apart in wording while needing different exit codes.
+func oomReason(exitCode int32) string {
+	return boundReason(fmt.Sprintf(
+		"the task container was OOMKilled (exit %d); raise the task's memory limit.", exitCode))
+}
+
+// podWasOOMKilled reports whether the task container's terminated status says
+// the kernel took it.
+func podWasOOMKilled(pod *corev1.Pod) bool {
+	return taskTerminated(pod) != nil && taskTerminated(pod).Reason == "OOMKilled"
+}
+
+// containerExitCode is the fallback when the record carries none.
+func containerExitCode(pod *corev1.Pod) int32 {
+	if t := taskTerminated(pod); t != nil {
+		return t.ExitCode
+	}
+	return 0
+}
+
+// taskTerminated returns the task container's terminated state, or nil.
+func taskTerminated(pod *corev1.Pod) *corev1.ContainerStateTerminated {
 	if pod == nil {
-		return ""
+		return nil
 	}
 	for _, cs := range pod.Status.ContainerStatuses {
-		if cs.Name != taskContainerName {
-			continue
-		}
-		if t := cs.State.Terminated; t != nil && t.Reason == "OOMKilled" {
-			return boundReason(fmt.Sprintf(
-				"the task container was OOMKilled (exit %d); raise the task's memory limit.", t.ExitCode))
+		if cs.Name == taskContainerName {
+			return cs.State.Terminated
 		}
 	}
-	return ""
+	return nil
 }
 
 // recordFailureReason renders a failure reason from an outcome record. A record
@@ -202,8 +230,7 @@ func podFailureReason(pod *corev1.Pod) string {
 		}
 		switch {
 		case t.Reason == "OOMKilled":
-			return boundReason(fmt.Sprintf(
-				"the task container was OOMKilled (exit %d); raise the task's memory limit.", t.ExitCode))
+			return oomReason(t.ExitCode)
 		case t.Reason != "" && t.Reason != "Error":
 			return boundReason(fmt.Sprintf("the task container terminated: %s (exit %d).", t.Reason, t.ExitCode))
 		case t.ExitCode != 0:

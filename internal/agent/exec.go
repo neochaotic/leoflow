@@ -188,19 +188,46 @@ func reapProcessGroup(p *os.Process) {
 		slog.Warn("could not reap the task's process group; a survivor may reach the next attempt on a warm worker",
 			"error", err)
 	}
-	// Drain whatever the kill just orphaned onto us. Bounded rather than a bare
-	// loop: an unbounded reap here would hand a pathological task the ability to
-	// stall the worker between attempts.
-	for range maxZombieDrain {
+	// Drain what the kill just orphaned onto us.
+	//
+	// The obvious version of this does not work, and measurement is the only way
+	// to find that out. SIGKILL delivery is asynchronous, so a single WNOHANG
+	// pass immediately after the kill runs BEFORE the corpse exists: measured 0
+	// collections out of 200 attempts on both macOS and Linux. The corpse
+	// becomes reapable after a few hundred microseconds to a few milliseconds
+	// (worst observed 35 ms on Linux).
+	//
+	// So pid 0 is polled through rather than returned on. It is the correct
+	// reading of the POSIX return value, "children exist, none have exited yet",
+	// and returning on it treats "not yet" as "done", which is what made the
+	// first version collect nothing while claiming otherwise.
+	//
+	// Bounded twice, by iterations and by a deadline, because an unbounded reap
+	// hands a pathological task the ability to stall the worker between
+	// attempts. WNOHANG throughout for the same reason: a descendant stopped in
+	// D state or under ptrace would block a plain wait forever.
+	deadline := time.Now().Add(zombieDrainBudget)
+	for i := 0; i < maxZombieDrain; i++ {
 		var ws syscall.WaitStatus
 		pid, err := syscall.Wait4(-1, &ws, syscall.WNOHANG, nil)
-		// pid 0 means children exist but none have exited yet; ECHILD means none
-		// are left. Both end the drain.
-		if err != nil || pid <= 0 {
+		switch {
+		case pid > 0:
+			continue // collected one, there may be more
+		case errors.Is(err, syscall.EINTR):
+			continue // interrupted, not finished: retrying is the whole point
+		case err != nil:
+			return // ECHILD and anything else: nothing left to collect
+		}
+		// pid == 0: alive but not yet exited. Wait a little unless the budget is
+		// spent, in which case leaving a zombie is the lesser cost.
+		if time.Now().After(deadline) {
+			slog.Warn("gave up collecting the task's leftover processes; some may remain as zombies on this worker",
+				"budget", zombieDrainBudget)
 			return
 		}
+		time.Sleep(zombieDrainPoll)
 	}
-	slog.Warn("stopped reaping the task's leftover processes at the cap; some may remain as zombies on this worker",
+	slog.Warn("stopped reaping the task's leftover processes at the iteration cap; some may remain as zombies on this worker",
 		"cap", maxZombieDrain)
 }
 
@@ -208,3 +235,13 @@ func reapProcessGroup(p *os.Process) {
 // attempts. Far above any plausible descendant count for a single task, and
 // hitting it is itself worth a line in the log.
 const maxZombieDrain = 1024
+
+// zombieDrainBudget is how long the drain will wait for corpses that the kernel
+// has not produced yet. Measured worst case for one corpse to become reapable
+// was 35 ms on Linux; this leaves an order of magnitude of headroom and still
+// bounds the pause between attempts on a warm worker.
+const zombieDrainBudget = 300 * time.Millisecond
+
+// zombieDrainPoll is the gap between passes. Short enough that the common case
+// (hundreds of microseconds) costs one sleep, long enough not to spin.
+const zombieDrainPoll = 2 * time.Millisecond

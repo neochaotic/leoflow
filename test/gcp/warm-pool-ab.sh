@@ -767,6 +767,21 @@ if [ "$EXECUTE" != "1" ]; then
   exit 0
 fi
 
-exp_never_ran "warm-pool-ab, $NODES nodes for $TTL, $ATTEMPTS attempts per arm" \
-  "the DAG build-and-push step is not implemented, so no arm can produce a number. See run_experiment(). This runner REFUSES to provision rather than bill for a cluster it cannot measure anything on."
-exit 1
+# The refusal that used to sit here is gone, and the reason it gave is why.
+#
+# It was an unconditional exp_never_ran + exit 1, AFTER the --execute check, so
+# --execute did nothing and this runner could not be run at all. Its message said
+# "the DAG build-and-push step is not implemented", and that was true when it was
+# written and false by the time anyone read it: wp_build_and_push is implemented,
+# and the comment above it records the digest it pushed to Artifact Registry.
+#
+# A guard whose stated reason has stopped being true is worse than no guard. It
+# blocks the thing it names while the real limitation goes unstated, and it is
+# believed, because it is specific.
+#
+# What the refusal was protecting against still holds and is stated where it can
+# be acted on: everything from the control-plane login onward has never run, so a
+# first --execute should be read as a debugging session that may also produce a
+# measurement. That is in test/gcp/README.md, next to the run records, and it
+# does not need to be enforced by refusing, because the cost of finding out is
+# one bounded cluster with a TTL on it.

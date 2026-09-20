@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -100,5 +101,36 @@ func TestRunReapsSurvivingGrandchildren(t *testing.T) {
 	if alive {
 		_ = syscall.Kill(pid, syscall.SIGKILL) // never leave the test's own mess behind
 		t.Fatalf("grandchild %d outlived the task; on a warm worker it would run into the next attempt holding that attempt's memory (#1216)", pid)
+	}
+}
+
+// TestCleanTaskLogsNoReapWarning pins that the reap is silent when there was
+// nothing to reap.
+//
+// The first version of it warned on EVERY successful task and stayed silent on
+// the only case it exists to report. After cmd.Run the child is already
+// collected, so kill(-pgid) answers ESRCH and the fallback answers
+// ErrProcessDone; treating those as failures inverted the signal. Measured:
+//
+//	no survivor: err="os: process already finished"   (warned, wrongly)
+//	a survivor:  err=<nil>                            (silent, wrongly)
+//
+// A permanent false alarm in every agent log is worse than no log line at all,
+// because it trains whoever reads it to ignore the one that matters.
+func TestCleanTaskLogsNoReapWarning(t *testing.T) {
+	var logged bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	var out, errb bytes.Buffer
+	code, err := NewExecRunner().Run(context.Background(),
+		[]string{"sh", "-c", "echo fine"}, nil, &out, &errb)
+	if err != nil || code != 0 {
+		t.Fatalf("the fixture task must succeed: code=%d err=%v", code, err)
+	}
+
+	if strings.Contains(logged.String(), "could not reap") {
+		t.Fatalf("a clean task warned about a failed reap; this fires on every successful task and trains the reader to ignore it:\n%s", logged.String())
 	}
 }

@@ -608,12 +608,7 @@ func (r *Runner) execute(ctx context.Context, argv, env []string, timeout time.D
 	start := time.Now()
 	emitTaskStarted(r.Sink)
 	emitTaskBoot(r.Sink, argv, env)
-	// The kernel's OOM-kill counter, either side of the run. A rise is PROOF the
-	// kernel killed something in this cgroup; the exit code alone cannot say so,
-	// because 137 is SIGKILL and an external kill looks identical (#1216).
-	oomBefore := readOOMKills()
 	exitCode, runErr := r.Cmd.Run(timeoutCtx, argv, env, stdout, stderr)
-	oomAfter := readOOMKills()
 	stdout.flush()
 	stderr.flush()
 	emitTaskEnded(r.Sink, exitCode, runErr, time.Since(start))
@@ -641,13 +636,16 @@ func (r *Runner) execute(ctx context.Context, argv, env []string, timeout time.D
 			return r.reportReschedule(ctx, when)
 		}
 	}
-	if failed, reason := classifyRun(exitCode, runErr, oomBefore, oomAfter); failed {
-		if reason != "" {
-			return r.failWithReason(ctx, exitCode, reason, reason)
-		}
+	if runErr != nil || exitCode != 0 {
 		// An ordinary non-zero exit stays UNCLASSIFIED: the record's own
 		// "task failed (exit N)" rendering is the better operator string, and the
 		// cause is raw error text whose detail belongs in the task logs.
+		//
+		// An OOM is NOT classified here, deliberately. The agent cannot tell one
+		// apart from an external kill without reading its cgroup, and the pod
+		// status already carries the answer: the kubelet sets memory.oom.group on
+		// cgroup v2, so the container is marked OOMKilled whichever process the
+		// kernel picked. The reconciler reads that (#1216).
 		return r.fail(ctx, exitCode, runErr, "")
 	}
 	// The three output pushes below all run AFTER the user process exited 0, so a
@@ -676,47 +674,6 @@ func (r *Runner) execute(ctx context.Context, argv, env []string, timeout time.D
 // failreason.go — or "", which records no reason at all. A call site that has a
 // message but no classification for it passes "" and loses nothing: the record
 // then renders from the exit code, as it always did.
-// classifyRun decides whether the run failed and, when the cause is one only the
-// agent can see, what to call it.
-//
-// Pulled out of execute so the decision is testable on its own and so execute
-// keeps one branch where it had several: the OOM condition is three decision
-// points, and execute was already at the complexity limit.
-//
-// An empty reason means "failed, but nothing to add": the record renders
-// "task failed (exit N)", which is the better operator string when the real
-// detail is in the logs.
-func classifyRun(exitCode int, runErr error, before, after oomCounter) (failed bool, reason string) {
-	if runErr == nil && exitCode == 0 {
-		return false, ""
-	}
-	if oomKilledBetween(before, after) {
-		return true, oomFailureMessage
-	}
-	return true, ""
-}
-
-// oomFailureMessage is what an operator reads when the kernel killed the task
-// for memory.
-//
-// An OOM of the TASK is invisible to Kubernetes, so it never reaches the
-// reconciler's OOMKilled branch and would otherwise land in the generic path as
-// a bare "task failed (exit 137)". The agent is the container's PID 1 and the
-// task is its child, so the kernel kills the task and the agent survives to
-// report: the container exits with the AGENT's status and is never marked
-// OOMKilled. The agent is the only component that can tell the difference,
-// because it is the only one that saw the cgroup counter on both sides of the
-// run (#1216).
-//
-// It names DuckDB by example on purpose. An engine that sizes its own memory
-// budget from detected RAM will not spill to disk when it cannot see the
-// container's limit, so it goes straight to an OOM instead of degrading, and
-// raising resources.limits.memory alone may not be enough.
-const oomFailureMessage = "out of memory: the kernel killed this task's process. " +
-	"Raise the task's memory limit (resources.limits.memory); if it uses an engine " +
-	"with its own memory budget, such as DuckDB, set that budget too, because it " +
-	"sizes itself from detected RAM and may not see the container's limit."
-
 func (r *Runner) failWithReason(ctx context.Context, exitCode int, msg, reason string) error {
 	if rerr := r.reportClassified(ctx, agentv1.TaskState_TASK_STATE_FAILED, clampExit(exitCode), msg, reason); rerr != nil {
 		slog.Warn("reporting failed state", "error", rerr)

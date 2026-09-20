@@ -69,7 +69,7 @@ func classifyPod(pod *corev1.Pod) verdict {
 		case taskoutcome.Success:
 			return verdict{terminal: true, settle: settleSucceeded, fromRecord: true}
 		case taskoutcome.Failed:
-			return verdict{terminal: true, settle: settleFailed, reason: recordFailureReason(rec), fromRecord: true}
+			return verdict{terminal: true, settle: settleFailed, reason: failedReason(rec, pod), fromRecord: true}
 		case taskoutcome.Reschedule:
 			at, _ := rec.At() // Decode guaranteed a parseable time
 			return verdict{terminal: true, settle: settleReschedule, at: at, fromRecord: true}
@@ -109,6 +109,54 @@ func outcomeRecord(pod *corev1.Pod) (taskoutcome.Record, bool) {
 		}
 	}
 	return taskoutcome.Record{}, false
+}
+
+// failedReason picks the better of the two descriptions of one failure.
+//
+// The record wins when it carries a classification, because that is a cause the
+// control plane cannot otherwise observe. It LOSES to the pod when it carries
+// only an exit code and the pod says the container was OOMKilled, and that case
+// is the reason this function exists (#1216).
+//
+// A task killed for memory produced "task failed (exit 255)" while the pod
+// status next to it said OOMKilled. Both halves are needed to see why. On
+// cgroup v2 the kubelet sets memory.oom.group per container, so the kernel kills
+// the whole group and the agent usually dies with the task, leaving no record at
+// all: the pod-phase path below then runs and the operator gets the good
+// message. But when the agent DOES survive, which is cgroup v1 or
+// singleProcessOOMKill, it writes a record, the record wins, and the OOMKilled
+// branch it should have reached is never consulted. The pod knew and the
+// reconciler ignored it.
+//
+// It is not 137, either. Go reports a signaled child as ExitCode() -1, which
+// the agent clamps to 255; 128+signal is a shell convention and only appears
+// when a shell sits between. So the exit code cannot be pattern-matched for
+// this, and the pod's own Reason is the only reliable signal.
+func failedReason(rec taskoutcome.Record, pod *corev1.Pod) string {
+	if rec.Reason == "" {
+		if oom := oomReasonFromPod(pod); oom != "" {
+			return oom
+		}
+	}
+	return recordFailureReason(rec)
+}
+
+// oomReasonFromPod returns the OOM description when the task container's
+// terminated status says the kernel took it, and empty otherwise.
+func oomReasonFromPod(pod *corev1.Pod) string {
+	if pod == nil {
+		return ""
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name != taskContainerName {
+			continue
+		}
+		if t := cs.State.Terminated; t != nil && t.Reason == "OOMKilled" {
+			return boundReason(fmt.Sprintf(
+				"the task container was OOMKilled (exit %d); raise the task's memory limit.", t.ExitCode))
+		}
+	}
+	return ""
 }
 
 // recordFailureReason renders a failure reason from an outcome record. A record

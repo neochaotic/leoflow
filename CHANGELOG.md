@@ -36,6 +36,33 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A task killed for running out of memory was reported as a bare exit code,
+  and a warm worker carried one task's leftover processes into the next**
+  (#1216).
+
+  When the kernel kills a task for memory, the pod's own status says
+  `OOMKilled`. The reconciler had that and preferred the exit code anyway: an
+  outcome record is authoritative when present, a surviving agent always writes
+  one, so the branch that renders the OOM message was never reached. The
+  operator read "task failed (exit 255)" with the answer sitting beside it. A
+  record that carries no classification of its own now loses to a pod that says
+  the container was OOMKilled.
+
+  The exit code could not have carried this on its own: Go reports a process
+  killed by a signal as exit code -1, which is clamped to 255, and the familiar
+  137 only appears when a shell sits between the agent and the task.
+
+  Separately, a process a task left behind kept running. The process group was
+  killed only when the run was cancelled, never when the task simply exited.
+  Under one pod per task that is invisible, because the pod ends and takes
+  everything with it. On a warm worker, which serves attempt after attempt in
+  one container, a survivor reached the next attempt holding the previous one's
+  environment, including its secrets and its attempt token, with read and write
+  access to the next attempt's working directory. The scratch directory was
+  already wiped between attempts; the processes were not. They are now, and the
+  orphans that reparent onto the agent are collected rather than left as
+  zombies.
+
 - **A single sign-on deployment whose IdP stopped answering tied up a request
   goroutine per login attempt, with nothing on our side bounding it** (#1153).
   This package makes three outbound calls to the IdP: discovery at boot, the

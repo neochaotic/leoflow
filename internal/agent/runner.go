@@ -640,6 +640,12 @@ func (r *Runner) execute(ctx context.Context, argv, env []string, timeout time.D
 		// An ordinary non-zero exit stays UNCLASSIFIED: the record's own
 		// "task failed (exit N)" rendering is the better operator string, and the
 		// cause is raw error text whose detail belongs in the task logs.
+		//
+		// An OOM is NOT classified here, deliberately. The agent cannot tell one
+		// apart from an external kill without reading its cgroup, and the pod
+		// status already carries the answer: the kubelet sets memory.oom.group on
+		// cgroup v2, so the container is marked OOMKilled whichever process the
+		// kernel picked. The reconciler reads that (#1216).
 		return r.fail(ctx, exitCode, runErr, "")
 	}
 	// The three output pushes below all run AFTER the user process exited 0, so a

@@ -520,3 +520,95 @@ func TestRecordFailureReasonBoundsTheReason(t *testing.T) {
 		t.Errorf("recordFailureReason length = %d, want <= %d", len(got), taskoutcome.MaxReasonLen)
 	}
 }
+
+// TestClassifyPodPrefersPodOOMOverABareExitCode is the regression test for the
+// half of #1216 that turned out to be the real defect.
+//
+// A surviving agent always writes an outcome record, and the record won
+// unconditionally. So when the kernel killed the task for memory, the operator
+// read "task failed (exit 255)" while the pod status sitting next to it said
+// OOMKilled. The reconciler had the answer and preferred the number.
+//
+// 255 rather than 137 on purpose: Go reports a signaled child as ExitCode()
+// -1, which the agent clamps to 255. 128+signal is a shell convention and shows
+// up only when a shell sits between, so the exit code cannot be pattern-matched
+// for this and the pod's Reason is the only reliable signal.
+func TestClassifyPodPrefersPodOOMOverABareExitCode(t *testing.T) {
+	oomPod := func(rec taskoutcome.Record, podReason string) *corev1.Pod {
+		enc, err := rec.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &corev1.Pod{Status: corev1.PodStatus{
+			Phase: corev1.PodFailed,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name: taskContainerName,
+				State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+					Message: enc, ExitCode: 137, Reason: podReason,
+				}},
+			}},
+		}}
+	}
+
+	// THE PRODUCTION SHAPE, and the fixture below used to hide a bug by not
+	// being it. On the path that reaches this branch the agent survived its
+	// child and exited on its own, so the CONTAINER exits 1 (the agent's clean
+	// exit) while the RECORD carries 255 (the task's clamped signal death). The
+	// first version of this test set the container to 137, a shape that only
+	// occurs in the narrow group-kill-during-report case, and asserted only that
+	// the string contained "OOMKilled" — so it passed while the message said
+	// "exit 1", presenting the agent's status as the task's.
+	realistic := &corev1.Pod{Status: corev1.PodStatus{
+		Phase: corev1.PodFailed,
+		ContainerStatuses: []corev1.ContainerStatus{{
+			Name: taskContainerName,
+			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+				Message:  mustEncode(t, taskoutcome.FailedBecauseWith(255, "")),
+				ExitCode: 1, Reason: "OOMKilled",
+			}},
+		}},
+	}}
+	if got := classifyPod(realistic); !strings.Contains(got.reason, "exit 255") {
+		t.Errorf("reason = %q; it reports the CONTAINER's exit code, which here is the agent's clean exit, not the task's", got.reason)
+	}
+
+	// The case that was broken: a record with an exit code and no classification,
+	// beside a pod that says OOMKilled.
+	got := classifyPod(oomPod(taskoutcome.FailedBecauseWith(255, ""), "OOMKilled"))
+	if got.settle != settleFailed {
+		t.Fatalf("settle = %v, want settleFailed", got.settle)
+	}
+	if !strings.Contains(got.reason, "OOMKilled") {
+		t.Errorf("reason = %q; the pod said OOMKilled and the reconciler reported the exit code instead", got.reason)
+	}
+	if !strings.Contains(got.reason, "memory limit") {
+		t.Errorf("reason = %q; it must tell the operator what to change", got.reason)
+	}
+
+	// A classification the AGENT made still wins: it describes a cause the
+	// control plane cannot observe, and an execution_timeout that also tripped
+	// the memory ceiling is a timeout first.
+	const agentReason = "execution_timeout: task exceeded 30s limit"
+	got = classifyPod(oomPod(taskoutcome.FailedBecauseWith(255, agentReason), "OOMKilled"))
+	if got.reason != agentReason {
+		t.Errorf("reason = %q, want the agent's own classification %q", got.reason, agentReason)
+	}
+
+	// And an ordinary failure with no OOM on the pod keeps the exit-code string.
+	got = classifyPod(oomPod(taskoutcome.FailedBecauseWith(1, ""), "Error"))
+	if !strings.Contains(got.reason, "exit 1") {
+		t.Errorf("reason = %q, want the plain exit-code rendering for a non-OOM failure", got.reason)
+	}
+	if strings.Contains(got.reason, "OOMKilled") {
+		t.Errorf("reason = %q; a pod that was not OOMKilled must not be described as one", got.reason)
+	}
+}
+
+func mustEncode(t *testing.T, rec taskoutcome.Record) string {
+	t.Helper()
+	enc, err := rec.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return enc
+}

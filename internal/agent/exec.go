@@ -89,6 +89,37 @@ func (r execRunner) Run(ctx context.Context, argv, env []string, stdout, stderr 
 	cmd.WaitDelay = r.waitDelay
 
 	err := cmd.Run()
+
+	// Reap whatever the task left behind, on EVERY path out of Run and not only
+	// on cancellation.
+	//
+	// cmd.Cancel above is invoked by os/exec when the CONTEXT ends. A task that
+	// simply exits leaves its process group untouched, so a descendant that
+	// outlived its parent keeps running. Under pod-per-task that is invisible:
+	// the agent exits, the container ends, the runtime reaps it.
+	//
+	// Under warm pools it is an ISOLATION BREAK, which is the reason this is not
+	// optional. A WarmRunner serves attempt after attempt in one container
+	// ("a failed TASK is a normal outcome and never ends serve()"), same PID
+	// namespace and same uid, so a survivor from attempt N holds attempt N's
+	// environment (its secrets, its AIRFLOW_CONN_* values, its attempt token)
+	// and can read AND WRITE attempt N+1's scratch directory and /proc entries.
+	// resetScratch wipes the filesystem between attempts (#728); nothing wiped
+	// the processes (#1216). It also holds cgroup memory the next attempt was
+	// sized for, but that is the smaller half.
+	//
+	// SIGKILL with no SIGTERM first is correct HERE and would not be elsewhere:
+	// the task has already exited, so nothing is left to shut down gracefully,
+	// and anything still alive is by definition outside the task contract. Do
+	// not "improve" this into an escalation; it would add seconds per attempt to
+	// a path that must be fast.
+	//
+	// This kills one process group. A descendant that called setsid() escapes
+	// it, which is the same gap WaitDelay exists for above.
+	if cmd.Process != nil {
+		reapProcessGroup(cmd.Process)
+	}
+
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		return exitErr.ExitCode(), nil
@@ -133,3 +164,84 @@ func killProcessGroup(p *os.Process) error {
 	}
 	return p.Kill()
 }
+
+// reapProcessGroup kills a finished task's survivors and then collects them.
+//
+// Two halves, and the second is not optional. The agent is PID 1 of the pod's
+// PID namespace, so every orphaned descendant reparents to IT, and Go does not
+// reap arbitrary children. Killing without waiting therefore CREATES unreaped
+// zombies in a warm worker, one per survivor per attempt, each holding a pid
+// slot for the worker's whole life: a leak introduced by the fix for a leak.
+//
+// Wait4(-1) is safe at this call site specifically, and must not be lifted out
+// of it. It can steal an exit status from a concurrent os/exec, but attempts on
+// a warm worker are strictly sequential and cmd.Wait has already returned by
+// the time this runs. In a background goroutine it would be a bug.
+func reapProcessGroup(p *os.Process) {
+	// ESRCH and ErrProcessDone are the NORMAL answers, not failures: after
+	// cmd.Run the child is already reaped, so kill(-pgid) finds no group and the
+	// fallback finds no process. Warning on those meant warning on every clean
+	// task while staying silent on the one case this exists to report, which is
+	// a survivor, where the kill succeeds and returns nil.
+	if err := killProcessGroup(p); err != nil &&
+		!errors.Is(err, os.ErrProcessDone) && !errors.Is(err, syscall.ESRCH) {
+		slog.Warn("could not reap the task's process group; a survivor may reach the next attempt on a warm worker",
+			"error", err)
+	}
+	// Drain what the kill just orphaned onto us.
+	//
+	// The obvious version of this does not work, and measurement is the only way
+	// to find that out. SIGKILL delivery is asynchronous, so a single WNOHANG
+	// pass immediately after the kill runs BEFORE the corpse exists: measured 0
+	// collections out of 200 attempts on both macOS and Linux. The corpse
+	// becomes reapable after a few hundred microseconds to a few milliseconds
+	// (worst observed 35 ms on Linux).
+	//
+	// So pid 0 is polled through rather than returned on. It is the correct
+	// reading of the POSIX return value, "children exist, none have exited yet",
+	// and returning on it treats "not yet" as "done", which is what made the
+	// first version collect nothing while claiming otherwise.
+	//
+	// Bounded twice, by iterations and by a deadline, because an unbounded reap
+	// hands a pathological task the ability to stall the worker between
+	// attempts. WNOHANG throughout for the same reason: a descendant stopped in
+	// D state or under ptrace would block a plain wait forever.
+	deadline := time.Now().Add(zombieDrainBudget)
+	for i := 0; i < maxZombieDrain; i++ {
+		var ws syscall.WaitStatus
+		pid, err := syscall.Wait4(-1, &ws, syscall.WNOHANG, nil)
+		switch {
+		case pid > 0:
+			continue // collected one, there may be more
+		case errors.Is(err, syscall.EINTR):
+			continue // interrupted, not finished: retrying is the whole point
+		case err != nil:
+			return // ECHILD and anything else: nothing left to collect
+		}
+		// pid == 0: alive but not yet exited. Wait a little unless the budget is
+		// spent, in which case leaving a zombie is the lesser cost.
+		if time.Now().After(deadline) {
+			slog.Warn("gave up collecting the task's leftover processes; some may remain as zombies on this worker",
+				"budget", zombieDrainBudget)
+			return
+		}
+		time.Sleep(zombieDrainPoll)
+	}
+	slog.Warn("stopped reaping the task's leftover processes at the iteration cap; some may remain as zombies on this worker",
+		"cap", maxZombieDrain)
+}
+
+// maxZombieDrain bounds the reap so one task cannot stall the worker between
+// attempts. Far above any plausible descendant count for a single task, and
+// hitting it is itself worth a line in the log.
+const maxZombieDrain = 1024
+
+// zombieDrainBudget is how long the drain will wait for corpses that the kernel
+// has not produced yet. Measured worst case for one corpse to become reapable
+// was 35 ms on Linux; this leaves an order of magnitude of headroom and still
+// bounds the pause between attempts on a warm worker.
+const zombieDrainBudget = 300 * time.Millisecond
+
+// zombieDrainPoll is the gap between passes. Short enough that the common case
+// (hundreds of microseconds) costs one sleep, long enough not to spin.
+const zombieDrainPoll = 2 * time.Millisecond

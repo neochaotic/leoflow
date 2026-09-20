@@ -36,6 +36,27 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A warm worker carried one task's leftover processes into the next** (#1216).
+  A process a task left behind kept running: the process group was killed only
+  when the run was cancelled, never when the task simply exited. Under one pod
+  per task that is invisible, because the pod ends and takes everything with it.
+  On a warm worker, which serves attempt after attempt in one container, a
+  survivor reached the next attempt holding the previous one's environment,
+  including its secrets and its attempt token, with read and write access to the
+  next attempt's working directory. The scratch directory was already wiped
+  between attempts; the processes were not.
+
+- **An out-of-memory kill is described as one when the control plane has to
+  recover the outcome itself** (#1216). When a task is killed for memory the
+  pod's status says `OOMKilled`, and the reconciler preferred a bare exit code
+  from the agent's own record. It now prefers the pod's description when the
+  record carries no explanation of its own.
+
+  Scope worth stating: this is the recovery path only. When the agent's report
+  arrives normally, which is the common case, the task instance is already
+  settled and the reconciler's description is not applied. Recognising an
+  out-of-memory kill on that path is still open.
+
 - **A single sign-on deployment whose IdP stopped answering tied up a request
   goroutine per login attempt, with nothing on our side bounding it** (#1153).
   This package makes three outbound calls to the IdP: discovery at boot, the

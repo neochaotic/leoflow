@@ -36,6 +36,24 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A single sign-on deployment whose IdP stopped answering tied up a request
+  goroutine per login attempt, with nothing on our side bounding it** (#1153).
+  This package makes three outbound calls to the IdP: discovery at boot, the
+  JWKS fetch on any login whose signing key is not cached, and the code
+  exchange on every login. All three fell back to Go's default HTTP client,
+  which has no timeout.
+
+  Only the first was protected, by a deadline on the boot context. A deadline
+  cannot reach the second: the key set is built over a background context, so
+  the request's own deadline never applies to it, and the server sets no write
+  timeout. An IdP that accepted the connection and then went silent therefore
+  held a goroutine per attempt until the browser gave up.
+
+  Every call now goes through a client that carries a 15 second timeout, which
+  is the bound that applies whatever context the caller passes. It matches the
+  boot deadline so the two cannot drift into disagreeing about how patient a
+  deployment is.
+
 - **The scheduler handed back its own leadership once an hour** (#1199). The
   advisory lock that makes one replica the scheduler is session-scoped: it lives
   and dies with the connection holding it. pgxpool applies a default connection

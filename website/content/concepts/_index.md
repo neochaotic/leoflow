@@ -36,6 +36,12 @@ How Leoflow works, and why it is shaped the way it is.
     <span class="lf-card__desc">What the Airflow-compatible UI supports, and where it differs.</span>
     <span class="lf-card__more">Check compatibility →</span>
   </a>
+  <a class="lf-card" href="/concepts/airflow-language-sdks/">
+    <span class="lf-card__icon"><i class="fa-solid fa-code-compare"></i></span>
+    <span class="lf-card__title">Airflow's Language SDKs</span>
+    <span class="lf-card__desc">Airflow 3.3 runs task bodies in Go. What that changes, and what it does not.</span>
+    <span class="lf-card__more">Read the comparison →</span>
+  </a>
 </div>
 
 Looking for term definitions? See the [Glossary](/reference/glossary/) in Reference.

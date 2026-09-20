@@ -748,10 +748,11 @@ date_the_changelog() {
 # --label skip-changelog is load-bearing, not tidiness. changelog-guard.yaml
 # triggers on every pull_request to main and exempts only that label, and on an
 # rc the prepare PR touches Chart.yaml but deliberately leaves [Unreleased]
-# alone — so the guard compares equal sections and fails the PR. FLAKE_RE does
-# not match "does not add a CHANGELOG entry" (correctly: it is not a flake), so
-# wait_sha_green returns RED and the cut dies. Release-prep is exactly the case
-# the label documents.
+# alone, and it adds no fragment either: the fold consumes the pending ones
+# rather than creating any. So the guard finds nothing recorded and fails the
+# PR. FLAKE_RE does not match "records no changelog entry" (correctly: it is not
+# a flake), so wait_sha_green returns RED and the cut dies. Release-prep is
+# exactly the case the label documents.
 create_prepare_pr() { # <branch> <title> <body>
   gh pr create --repo "$REPO" --base main --head "$1" --title "$2" --body "$3" --label skip-changelog
 }

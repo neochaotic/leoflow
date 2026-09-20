@@ -18,9 +18,17 @@
 #
 # What the API promises is that the nodes stop existing: NodeConfig.maxRunDuration
 # is documented as "the maximum duration for the nodes to exist. If unspecified,
-# the nodes can exist indefinitely." Whether GKE then replaces an expired node to
-# hold the pool at its target size has NOT been verified on a live cluster, so
-# treat the TTL as the backstop it is and not as a substitute for the teardown.
+# the nodes can exist indefinitely." Whether GKE then REPLACES an expired node to
+# hold the pool at its target size was the open question, and it is now answered
+# by observation: it does not. An hour after a 30m TTL expired, the node pool
+# still reported initialNodeCount 1 while its managed instance group was at
+# size 0 / targetSize 0 and the project had no GCE instances at all. The MIG
+# target is taken to zero rather than the node being recreated.
+#
+# The same observation confirms the limit of the guardrail: that cluster object
+# was still RUNNING, and billing the control-plane fee, an hour after its last
+# node was gone. The TTL bounds the NODE bill and nothing else, so treat it as
+# the backstop it is and not as a substitute for the teardown.
 # Everything else below is defense in depth on top of it.
 #
 # Nothing about the account is in this file. Project, zone and billing come from

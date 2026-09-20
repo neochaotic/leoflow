@@ -72,13 +72,31 @@ directory got both wrong:
   call, **reads it back**, and deletes the cluster immediately if it is not
   there. A cluster whose nodes have no expiry is the one outcome this directory
   exists to prevent, so it is not left standing on a hope.
-- **What expiry means has not been verified on a live cluster.** The API says
-  `NodeConfig.maxRunDuration` is "the maximum duration for the nodes to exist. If
-  unspecified, the nodes can exist indefinitely." Whether GKE then replaces an
-  expired node to hold the pool at its target count is not documented anywhere we
-  could check, and the first real run is what will answer it. Until then the TTL
-  is a backstop, not a substitute for the teardown, and `--list` is still the
-  check.
+- **What expiry means is now VERIFIED on a live cluster, and it is the good
+  outcome.** The API says `NodeConfig.maxRunDuration` is "the maximum duration
+  for the nodes to exist. If unspecified, the nodes can exist indefinitely."
+  What it does not say is whether GKE then replaces an expired node to hold the
+  pool at its target count. It does not.
+
+  Observed 2026-09-20 on `leoflow-exp-netpol-09192248` (1 node, `--ttl 30m`,
+  created `01:48:43Z`), inspected an hour later at `02:48Z`:
+
+  | | |
+  |---|---|
+  | node pool `default-pool` | `status: RUNNING`, `initialNodeCount: 1`, `maxRunDuration: 1800s` |
+  | its managed instance group | **`size 0`, `targetSize 0`** |
+  | GCE instances in the project | **none** |
+  | the cluster object | still `RUNNING` |
+
+  So the expensive part really does remove itself and is **not** recreated: the
+  MIG target is taken to zero rather than the node being replaced. That is the
+  guardrail working exactly as this directory needs it to.
+
+  **And it confirms the other half.** The cluster was still `RUNNING` an hour
+  later with zero nodes, billing the control-plane fee (~USD 0.10/h) the whole
+  time. The TTL bounds the node bill; only deleting the CLUSTER stops the rest.
+  The TTL is a backstop, the teardown is still the job, and `--list` is still
+  the check.
 
 On top of it:
 

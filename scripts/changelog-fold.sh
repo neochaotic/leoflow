@@ -17,6 +17,7 @@
 #
 # Usage:
 #   scripts/changelog-fold.sh <version>        # render with changie, then merge
+#   scripts/changelog-fold.sh --dry-run <ver>  # print the result, change nothing
 #   scripts/changelog-fold.sh --render <file>  # merge an already-rendered block
 #   scripts/changelog-fold.sh --self-test
 #
@@ -233,6 +234,14 @@ self_test() {
 
 die() { printf 'FATAL: %s\n' "$*" >&2; exit 1; }
 
+# --dry-run prints what the CHANGELOG would become and changes nothing: no
+# write, no fragment removed. It exists because the first thing anyone does with
+# this script is run it to see what it does, and without the flag that consumes
+# the fragments of every PR waiting to merge. It ate this script's own fragment
+# once before the flag existed.
+dry_run=0
+if [ "${1:-}" = "--dry-run" ]; then dry_run=1; shift; fi
+
 rendered=""
 case "${1:-}" in
 	--render)
@@ -240,7 +249,7 @@ case "${1:-}" in
 		[ -f "$rendered" ] || die "--render needs a file"
 		;;
 	"")
-		die "usage: $(basename "$0") <version> | --render <file> | --self-test"
+		die "usage: $(basename "$0") [--dry-run] <version> | --render <file> | --self-test"
 		;;
 	*)
 		version="$1"
@@ -272,10 +281,40 @@ grep -q '^## \[Unreleased\]' "$CHANGELOG" || die "CHANGELOG has no [Unreleased] 
 
 merged="$(mktemp)"
 merge_unreleased "$CHANGELOG" "$rendered" > "$merged"
-# A merge that produced a shorter file than it started with has lost something.
-# Entries only ever move into this section; nothing here removes a line.
-[ "$(wc -l < "$merged")" -ge "$(wc -l < "$CHANGELOG")" ] ||
-	{ rm -f "$merged"; die "refusing to write a CHANGELOG shorter than the one it replaced"; }
+
+# Every line that went in has to come out. Content only ever moves within this
+# file; nothing here is allowed to drop a line of it.
+#
+# Compared as a set of trimmed lines, not as a line count, and not in order.
+# Continuations gain two spaces of indent, `### ` headings are deduplicated on
+# purpose, entries are reordered into the declared kind order, and an exact
+# duplicate entry collapses to one copy that is still present. A count would
+# report all four as data loss; the first version of this guard did exactly
+# that and refused a correct merge whose only change was uniting two `### Added`
+# headings into one.
+#
+# What this catches is a bullet or a paragraph that vanished. It does NOT check
+# structure: paragraph breaks, indentation and heading order are the
+# self-test's job (`--self-test`), which drives the merge directly and asserts
+# on the shape.
+lost="$(comm -23 \
+	<(grep -v '^### ' "$CHANGELOG" | sed 's/^[[:space:]]*//' | awk 'NF' | sort -u) \
+	<(grep -v '^### ' "$merged" | sed 's/^[[:space:]]*//' | awk 'NF' | sort -u) | head -3)"
+if [ -n "$lost" ]; then
+	rm -f "$merged"
+	printf 'FATAL: the merge dropped content. First line(s) lost:\n' >&2
+	printf '%s\n' "$lost" | sed 's/^/    /' >&2
+	exit 1
+fi
+
+if [ "$dry_run" -eq 1 ]; then
+	cat "$merged"
+	rm -f "$merged"
+	printf 'dry run: %s fragment(s) would be folded and removed; nothing was changed.\n' \
+		"${#fragments[@]:-0}" >&2
+	exit 0
+fi
+
 mv "$merged" "$CHANGELOG"
 
 if [ "${#fragments[@]:-0}" -gt 0 ]; then

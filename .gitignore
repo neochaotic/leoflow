@@ -211,3 +211,7 @@ node_modules/
 # timings from a real billing cluster on one machine at one moment: they belong
 # to that run, not to the repository. test/gcp/lib/experiment.sh writes them.
 test/gcp/runs/
+
+# Soak battery evidence (test/soak). Every run writes a timestamped directory of
+# samples, violations and logs here; none of it belongs in the repository.
+.soak/

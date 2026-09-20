@@ -1,0 +1,20 @@
+schema_version: "1.0"
+dag_id: soak_flaky
+description: "Soak: deterministic retry behavior plus a run that always ends failed. Exercises the retry budget and the terminal-failure path."
+owner: soak
+tags:
+  - soak
+  - retries
+# No python_version: the battery must boot on whatever CPython the box has.
+# Pinning one here makes the harness refuse to start on a machine without that
+# exact interpreter, which is a portability failure, not a fidelity win: the
+# soak measures the scheduler, not the runtime version.
+tasks:
+  flaky:
+    retries: 3
+    retry_delay_seconds: 20
+    execution_timeout_seconds: 120
+  always_fails:
+    retries: 1
+    retry_delay_seconds: 15
+    execution_timeout_seconds: 120

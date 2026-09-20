@@ -176,8 +176,15 @@ jobs:
           # Exclude generated code, main packages, version, and the
           # process-orchestration of external binaries (Docker/initdb/pg_ctl)
           # that only integration/e2e can exercise honestly, per ADR 0011.
+          #
+          # /test/ covers the load and soak harnesses (test/load/*,
+          # test/soak/*): `package main` programs that drive a real Postgres and
+          # a real control plane, which is the same category as /cmd/ and was
+          # already being counted by accident. Their pure logic IS tested
+          # (test/soak/monitor/*_test.go); what cannot be covered honestly here
+          # is their database and HTTP orchestration.
           FLOOR=80
-          EXCLUDE='(/internal/storage/queries/|/internal/storage/repository\.go:|/internal/storage/postgres\.go:|/internal/storage/redis\.go:|/internal/storage/scheduler_store\.go:|/internal/storage/agent_store\.go:|/internal/storage/xcom_index\.go:|/internal/xcom/redis_backend\.go:|/internal/logs/tail\.go:|/internal/scheduler/leader\.go:|/internal/cli/managed_postgres\.go:|/internal/cli/backup_cmd\.go:|/internal/cli/restore_cmd\.go:|/internal/cli/forget\.go:|/internal/cli/dbt_manifest\.go:|\.pb\.go:|\.gen\.go:|/internal/version/|/cmd/)'
+          EXCLUDE='(/internal/storage/queries/|/internal/storage/repository\.go:|/internal/storage/postgres\.go:|/internal/storage/redis\.go:|/internal/storage/scheduler_store\.go:|/internal/storage/agent_store\.go:|/internal/storage/xcom_index\.go:|/internal/xcom/redis_backend\.go:|/internal/logs/tail\.go:|/internal/scheduler/leader\.go:|/internal/cli/managed_postgres\.go:|/internal/cli/backup_cmd\.go:|/internal/cli/restore_cmd\.go:|/internal/cli/forget\.go:|/internal/cli/dbt_manifest\.go:|\.pb\.go:|\.gen\.go:|/internal/version/|/cmd/|/test/)'
           grep -vE "$EXCLUDE" coverage.out > coverage.filtered.out
           TOTAL=$(go tool cover -func=coverage.filtered.out | tail -1 | awk '{print $3}' | sed 's/%//')
           echo "Total coverage (filtered): ${TOTAL}% (floor: ${FLOOR}%)"

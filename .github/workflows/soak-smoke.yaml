@@ -1,0 +1,132 @@
+name: Soak harness smoke (short, bounded)
+
+# The soak battery itself (test/soak) is a LOCAL tool: a 48 h run is 2880
+# hosted-runner minutes per occurrence, which on a private repository's
+# 2000-minute monthly allowance is one weekend over budget and about USD 76 a
+# month at a weekly cadence, on a personal card, for a job whose whole premise is
+# hardware we already own. A hosted runner is also destroyed per job, so nothing
+# about long-lived process behavior survives it.
+#
+# What CI IS good for is the thing that silently rots: whether the harness still
+# builds, boots, registers its six DAGs, samples, asserts and writes a verdict.
+# That is a 6-minute run, which disappears into the existing budget. It gates the
+# harness, never the long-run behavior. See test/soak/README.md section 6.4.
+on:
+  push:
+    paths:
+      - "test/soak/**"
+      - "internal/scheduler/**"
+      - "internal/storage/scheduler_store.go"
+      - ".github/workflows/soak-smoke.yaml"
+  pull_request:
+    paths:
+      - "test/soak/**"
+      - "internal/scheduler/**"
+      - "internal/storage/scheduler_store.go"
+      - ".github/workflows/soak-smoke.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  soak-smoke:
+    name: Soak harness smoke (6 minutes)
+    runs-on: ubuntu-latest
+    # Twice the soak's own ceiling plus build time. The harness has its own
+    # wall-clock ceiling and watchdog; this is the outermost of three stops.
+    timeout-minutes: 25
+    env:
+      PYTHONPATH: parser
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.6"
+          cache: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Build and vet the harness
+        run: |
+          set -euo pipefail
+          gofmt -l test/soak | tee /tmp/fmt.out
+          test ! -s /tmp/fmt.out
+          go vet ./test/soak/...
+          # The monitor's unit tests are the only place the invariants themselves
+          # are exercised: the 6-minute run below is a healthy system, so it
+          # proves the harness works and nothing about whether a check can fail.
+          go test ./test/soak/...
+          go build -o /dev/null ./test/soak/monitor
+          go build -o /dev/null ./test/soak/fixture
+          bash -n test/soak/soak.sh
+          bash -n test/soak/warmpool-ab.sh
+          bash -n test/soak/schedule/install.sh
+
+      - name: No public endpoint may appear in the soak DAGs
+        # A weekend of scheduled requests against a stranger's service is not
+        # something we do. This is the gate that keeps it true as the DAGs grow.
+        run: |
+          set -uo pipefail
+          offenders="$(grep -rInoE 'https?://[A-Za-z0-9._:/-]+' test/soak/dags \
+            | grep -vE 'https?://(127\.0\.0\.1|localhost)' || true)"
+          if [ -n "$offenders" ]; then
+            echo "a soak DAG names a non-loopback URL; see test/soak/README.md section 6.1"
+            echo "$offenders"
+            exit 1
+          fi
+          echo "every endpoint in test/soak/dags is loopback"
+
+      - name: Run the harness for 6 minutes
+        run: bash test/soak/soak.sh --duration 6m --label ci-smoke --out "$GITHUB_WORKSPACE/.soak/ci"
+
+      - name: The smoke must have produced real evidence
+        # A harness that exits 0 having sampled nothing is the failure mode this
+        # job exists to catch, so the assertion is on the contents, not the code.
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, pathlib, sys
+          out = pathlib.Path(".soak/ci")
+          v = json.loads((out / "verdict.json").read_text())
+          samples = [json.loads(l) for l in (out / "samples.jsonl").read_text().splitlines() if l]
+          print(f"verdict={v['verdict']} samples={len(samples)} stop={v['stop_reason']}")
+          problems = []
+          if len(samples) < 20:
+              problems.append(f"only {len(samples)} samples in 6 minutes at a 10 s interval")
+          if not any(s["total_task_instances"] > 0 for s in samples):
+              problems.append("no task instance was ever observed: the workload did not run")
+          if not any(s["dispatch_n"] > 0 for s in samples):
+              problems.append("no dispatch latency was ever measured")
+          ops = set()
+          for s in samples:
+              ops |= set(s.get("dispatch_by_operator") or {})
+          for want in ("python", "bash", "airflow_operator"):
+              if want not in ops:
+                  problems.append(f"task type {want!r} never ran; observed {sorted(ops)}")
+          if v["verdict"] != "PASS":
+              problems.append(f"verdict was {v['verdict']}: {v['violations_by_check']}")
+          # Two invariants (leader_churn, undispatchable_task) are read only from
+          # the metrics listener, which Lite serves on a different port from the
+          # API. A scrape that silently fails reads as three zeros forever, so the
+          # smoke asserts the monitor really saw an exposition page.
+          if not all("scheduler_step_downs_total" in s for s in samples):
+              problems.append("samples do not carry the scheduler_step_downs_total field at all")
+          # null is the honest encoding of "not scraped"; one of those during a
+          # restart is fine, every one of them means the endpoint was never there.
+          if all(s.get("scheduler_step_downs_total") is None for s in samples):
+              problems.append("the metrics listener was never scraped: leader_churn and undispatchable_task could not have fired")
+          if problems:
+              print("\n".join("  - " + p for p in problems))
+              sys.exit(1)
+          print("smoke evidence is complete")
+          PY
+
+      - name: Upload the evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: soak-smoke-evidence
+          path: .soak/ci
+          retention-days: 7

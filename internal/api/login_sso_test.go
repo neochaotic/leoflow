@@ -28,11 +28,26 @@ func loginPageWith(t *testing.T, sso, breakGlass bool) string {
 
 func loginPageQuery(t *testing.T, sso, breakGlass bool, query string) string {
 	t.Helper()
+	return loginPageBody(t, loginPageOpts{sso: sso, breakGlass: breakGlass}, query)
+}
+
+// loginPageRec serves the login route the way the router does and returns the
+// whole response, so a test can assert on the status and Location and not only
+// on the rendered body. Auto-redirect made that necessary: its correct behavior
+// is a redirect, which a body-only helper cannot see.
+func loginPageRec(t *testing.T, o loginPageOpts, query string) *httptest.ResponseRecorder {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.GET("/api/v2/auth/login", loginPageHandler(sso, breakGlass))
+	r.GET("/api/v2/auth/login", loginPageHandler(o))
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v2/auth/login"+query, http.NoBody))
+	return rec
+}
+
+func loginPageBody(t *testing.T, o loginPageOpts, query string) string {
+	t.Helper()
+	rec := loginPageRec(t, o, query)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("login page = %d", rec.Code)
 	}
@@ -270,7 +285,7 @@ func TestServerFailureLandsOnThePageThatDescribesIt(t *testing.T) {
 	r.GET("/boom", func(c *gin.Context) {
 		abortSSOServerFailure(c, slog.New(slog.NewTextHandler(&buf, nil)), "minting session token", errors.New("hsm unreachable at 10.0.0.9"))
 	})
-	r.GET("/api/v2/auth/login", loginPageHandler(true, true))
+	r.GET("/api/v2/auth/login", loginPageHandler(loginPageOpts{sso: true, breakGlass: true}))
 
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/boom", http.NoBody))
@@ -289,5 +304,114 @@ func TestServerFailureLandsOnThePageThatDescribesIt(t *testing.T) {
 	r.ServeHTTP(landed, httptest.NewRequestWithContext(t.Context(), http.MethodGet, rec.Header().Get("Location"), http.NoBody))
 	if !strings.Contains(landed.Body.String(), "on its side") {
 		t.Errorf("the page the failure redirects to does not describe a failure:\n%s", landed.Body.String())
+	}
+}
+
+// TestAutoRedirectSendsTheUserStraightToTheIdP covers the click a comparable
+// tool does not ask for.
+//
+// Against the same pool, OpenMetadata starts the flow on the first
+// unauthenticated request and the user lands inside with no visible login step.
+// Leoflow rendered its sign-in page and waited. Where an edge proxy has already
+// authenticated the session, that page is a screen to acknowledge for nothing.
+func TestAutoRedirectSendsTheUserStraightToTheIdP(t *testing.T) {
+	rec := loginPageRec(t, loginPageOpts{sso: true, breakGlass: true, autoRedirect: true}, "?next=/dags")
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("login page = %d, want a %d redirect to the IdP", rec.Code, http.StatusFound)
+	}
+	loc := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/api/v2/auth/oidc/login") {
+		t.Fatalf("redirected to %q, want the route that starts the flow", loc)
+	}
+	// The destination has to survive the detour, or auto-redirect trades a click
+	// for always landing on the root.
+	if !strings.Contains(loc, "next=%2Fdags") && !strings.Contains(loc, "next=%2fdags") {
+		t.Errorf("the redirect dropped the post-login destination: %q", loc)
+	}
+}
+
+// TestAutoRedirectStopsOnARefusedSignOn is the reason this feature is not one
+// line, and it is the assertion that must exist.
+//
+// Since #1169 a refused sign-on answers 302 to the login page carrying
+// sso_error. Auto-redirecting that page without a guard turns every denial into
+// an infinite bounce between this server and the IdP, with no surface left to
+// read the error on. A test that only asserts "auto-redirect redirects" passes
+// on exactly that implementation.
+func TestAutoRedirectStopsOnARefusedSignOn(t *testing.T) {
+	rec := loginPageRec(t, loginPageOpts{sso: true, breakGlass: true, autoRedirect: true}, "?sso_error=1")
+
+	if rec.Code == http.StatusFound {
+		t.Fatalf("a refused sign-on bounced straight back to the IdP (%q): the user can never read why they were refused, and the loop has no exit", rec.Header().Get("Location"))
+	}
+	if !strings.Contains(rec.Body.String(), "Single sign-on did not complete") {
+		t.Error("the page the denial lands on no longer explains it")
+	}
+}
+
+// TestAutoRedirectYieldsToAnExplicitOptOut keeps break-glass reachable without a
+// config change. With auto-redirect on, the password form is behind a redirect,
+// and the account that needs it is the one used when the IdP is the thing that
+// is broken: requiring an operator to edit values and roll out, to reach the
+// escape hatch, would defeat the hatch.
+func TestAutoRedirectYieldsToAnExplicitOptOut(t *testing.T) {
+	rec := loginPageRec(t, loginPageOpts{sso: true, breakGlass: true, autoRedirect: true}, "?"+loginLocalParam+"=1")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the opt-out still redirected (%d); there is then no way to reach the form when the IdP is down", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `name="password"`) {
+		t.Error("the opt-out did not render the password form")
+	}
+}
+
+// TestAutoRedirectOffIsTodaysBehavior pins the default. Turning this on for
+// everyone would remove the sign-in page from deployments that rely on it.
+func TestAutoRedirectOffIsTodaysBehavior(t *testing.T) {
+	rec := loginPageRec(t, loginPageOpts{sso: true, breakGlass: true}, "?next=/dags")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("auto-redirect off = %d, want the sign-in page", rec.Code)
+	}
+}
+
+// TestAutoRedirectNeedsAFlow guards the combination that would 404 every user:
+// auto-redirect on with no OIDC flow discovered sends them to a route the router
+// never registered.
+func TestAutoRedirectNeedsAFlow(t *testing.T) {
+	rec := loginPageRec(t, loginPageOpts{autoRedirect: true}, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("a jwt-only deployment redirected (%d) to a route it does not serve", rec.Code)
+	}
+}
+
+// TestLogoutDoesNotBounceStraightBackIntoTheIdP covers the interaction between
+// sign-out and auto-redirect, which turns a working logout into a no-op.
+//
+// logoutHandler clears the session and redirects to the sign-in page. With
+// auto-redirect on, that page is itself a redirect to the IdP, and the IdP
+// session is untouched by our sign-out, so the user is signed straight back in.
+// From their side the button did nothing, and the more reliable the SSO setup
+// is, the more completely it fails.
+//
+// Sign-out therefore has to reach the PAGE rather than the flow.
+func TestLogoutDoesNotBounceStraightBackIntoTheIdP(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/api/v2/auth/logout", logoutHandler(false))
+	r.GET("/api/v2/auth/login", loginPageHandler(loginPageOpts{sso: true, breakGlass: true, autoRedirect: true}))
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v2/auth/logout", http.NoBody))
+	loc := rec.Header().Get("Location")
+
+	landed := httptest.NewRecorder()
+	r.ServeHTTP(landed, httptest.NewRequestWithContext(t.Context(), http.MethodGet, loc, http.NoBody))
+
+	if landed.Code == http.StatusFound && strings.Contains(landed.Header().Get("Location"), "/oidc/login") {
+		t.Fatalf("signing out landed on %q, which redirects back to the IdP; the IdP session is still live, so the user is signed straight back in and the button appears to do nothing", loc)
+	}
+	if landed.Code != http.StatusOK {
+		t.Fatalf("signing out reached %q, which answered %d instead of the sign-in page", loc, landed.Code)
 	}
 }

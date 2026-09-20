@@ -75,6 +75,7 @@ exp_run_dir() { # <experiment> <stamp>
 EXP_CLUSTER=""
 EXP_TEARDOWN_DONE=0
 EXP_TEARDOWN_SH=""
+EXP_TRAP_ARMED_AT=""
 
 # exp_teardown_decision is the whole "what should the trap do" question, pulled
 # out as a pure function so every branch is tested without an account.
@@ -98,13 +99,46 @@ exp_teardown_decision() { # <cluster name or empty> <already done 0|1> [recorded
   echo delete
 }
 
+# exp_recorded_cluster reads the cluster name provision.sh leaves behind, but
+# ONLY if this run is the one that left it.
+#
+# The fallback exists because a cluster provision.sh created and did not hand
+# back is still billing (#1206). The hazard it introduced is the mirror image:
+# the marker file outlives the run that wrote it, so a LATER runner that dies
+# before provisioning would read a stale name and tear down a cluster that is
+# not its own, possibly one somebody else is using right now.
+#
+# That is not hypothetical. Running the self-test from the repository root while
+# a warm-pool experiment was in flight made the "a run that never provisioned
+# deletes nothing" case fail, because the trap found the live experiment's name
+# on disk. The stub teardown meant no harm was done; a real runner in the same
+# shape would have issued a real delete.
+#
+# So the marker is only trusted when it is NEWER than the moment this run armed
+# its trap. A name written before we started belongs to someone else.
+#
+# EXP_TRAP_ARMED_AT is set by exp_arm_teardown. Without it there is no run to
+# compare against and the marker is not trusted at all, which is the safe
+# direction: the cost of ignoring a real marker is a cluster that must be
+# deleted by hand, and its TTL still expires the nodes. The cost of trusting a
+# stale one is deleting someone else's work.
+exp_recorded_cluster() {
+  local marker=".gcp-experiment-cluster"
+  [ -f "$marker" ] || return 0
+  [ -n "${EXP_TRAP_ARMED_AT:-}" ] || return 0
+  local written
+  written="$(date -r "$marker" +%s 2>/dev/null || stat -c %Y "$marker" 2>/dev/null || echo 0)"
+  [ "${written:-0}" -ge "${EXP_TRAP_ARMED_AT}" ] || return 0
+  cat "$marker" 2>/dev/null || true
+}
+
 # exp_trap is installed on EXIT, INT, TERM and ERR. It preserves the original
 # exit status: a teardown must never turn a failed experiment green, and it must
 # never turn a passing one red just by running.
 exp_trap() {
   local rc=$?
   local recorded=""
-  [ -f .gcp-experiment-cluster ] && recorded="$(cat .gcp-experiment-cluster 2>/dev/null || true)"
+  recorded="$(exp_recorded_cluster)"
   case "$(exp_teardown_decision "$EXP_CLUSTER" "$EXP_TEARDOWN_DONE" "$recorded")" in
     already-done)     exit "$rc" ;;
     delete-recorded)
@@ -150,6 +184,9 @@ LEFTOVER
 exp_arm_teardown() { # <path to teardown.sh>
   EXP_TEARDOWN_SH="$1"
   [ -x "$EXP_TEARDOWN_SH" ] || exp_die "teardown.sh not executable at $EXP_TEARDOWN_SH; refusing to create anything that nothing can delete"
+  # The instant this run started caring. A cluster marker older than this was
+  # written by somebody else, and exp_recorded_cluster will not touch it.
+  EXP_TRAP_ARMED_AT="$(date +%s)"
   trap exp_trap EXIT INT TERM
 }
 
@@ -426,6 +463,59 @@ STUB
     echo "  ok   a failed teardown turns a passing run red and prints the manual delete"
   else
     echo "  FAIL a failed teardown was not fatal (rc=$rc, out: $out)"; fail=1
+  fi
+
+  # Case 3b: a marker from an EARLIER run must not be acted on.
+  #
+  # This is the hazard the recorded-name fallback introduced. The file outlives
+  # the run that wrote it, so a later runner that dies before provisioning would
+  # read a stale name and delete a cluster that is not its own. Found for real:
+  # running this suite from the repository root while a warm-pool experiment was
+  # in flight made case 4 below fail, because the trap picked up the live
+  # cluster's name off the disk.
+  #
+  # Hermetic on purpose. It runs in its own directory with its own marker, so
+  # the suite no longer depends on what is or is not happening in the checkout.
+  : > "$tmp/calls3b"
+  mkdir -p "$tmp/stale"
+  echo "leoflow-exp-somebody-elses-cluster" > "$tmp/stale/.gcp-experiment-cluster"
+  # Backdated well before the trap could be armed.
+  touch -t 202001010000 "$tmp/stale/.gcp-experiment-cluster"
+  out="$(
+    STUB_TD_CALLS="$tmp/calls3b" bash -c '
+      set -euo pipefail
+      cd "$3"
+      source "$1/lib/experiment.sh"
+      exp_arm_teardown "$2/teardown.sh"
+      exit 7
+    ' _ "$EXP_SELFTEST_DIR" "$tmp" "$tmp/stale" 2>&1
+  )" && rc=0 || rc=$?
+  if [ "${rc:-0}" = "7" ] && [ ! -s "$tmp/calls3b" ]; then
+    echo "  ok   a cluster marker left by an EARLIER run is not deleted by this one"
+  else
+    echo "  FAIL the trap deleted a cluster it did not create (rc=$rc, calls: $(cat "$tmp/calls3b"))"; fail=1
+  fi
+
+  # Case 3c: a marker written AFTER the trap was armed is ours, and is acted on.
+  # Without this, "ignore stale markers" could be implemented as "ignore all
+  # markers" and the #1206 fallback would be silently dead.
+  : > "$tmp/calls3c"
+  mkdir -p "$tmp/fresh"
+  out="$(
+    STUB_TD_CALLS="$tmp/calls3c" bash -c '
+      set -euo pipefail
+      cd "$3"
+      source "$1/lib/experiment.sh"
+      exp_arm_teardown "$2/teardown.sh"
+      sleep 1
+      echo "leoflow-exp-ours-09201200" > .gcp-experiment-cluster
+      exit 7
+    ' _ "$EXP_SELFTEST_DIR" "$tmp" "$tmp/fresh" 2>&1
+  )" && rc=0 || rc=$?
+  if grep -q 'leoflow-exp-ours-09201200' "$tmp/calls3c" 2>/dev/null; then
+    echo "  ok   a cluster this run recorded is still torn down"
+  else
+    echo "  FAIL the fallback is dead: a cluster this run created was not deleted (calls: $(cat "$tmp/calls3c"))"; fail=1
   fi
 
   # Case 4: nothing was ever created. The trap must not invent a delete.

@@ -389,6 +389,27 @@ PY
 
   rm -rf "$t"
 
+  # The login identity must be an email, because that is what the server looks
+  # up. Cheap to assert, and a cluster to discover: FindUserByLogin passes
+  # `username` straight to GetUserByEmail, so "admin" is a 401 and
+  # "admin@leoflow.local" is a token.
+  case "${WP_ADMIN_LOGIN:-admin@leoflow.local}" in
+    *@*) echo "  ok   the admin login is an email, which is what the server matches on" ;;
+    *)   echo "  FAIL the admin login is not an email; FindUserByLogin looks up by email and this will 401"; fail=1 ;;
+  esac
+  # And the fatal token call must keep its stderr. Sending it to /dev/null cost
+  # a run: the script died saying it could not get a token and discarded the
+  # sentence that said why.
+  # Anchored on the INVOCATION, not on the words "auth create-token", which also
+  # appear in this very check. The first version matched its own source and
+  # failed always, which is the same shape as a test that passes always: it
+  # stops carrying information about the thing it names.
+  if grep -A 3 '"\$WP_CLI" auth create-token' "${BASH_SOURCE[0]}" | grep -q 'password-stdin 2>/dev/null'; then
+    echo "  FAIL the token call discards stderr; its failure is fatal and the reason is what you need"; fail=1
+  else
+    echo "  ok   the token call keeps its stderr, so a failure says why"
+  fi
+
   # The runner must actually CALL run_experiment. It was defined and never
   # invoked, and an unconditional refusal was the last statement in the file, so
   # nothing ever reached the point of needing it. Remove the refusal and the
@@ -471,9 +492,23 @@ run_experiment() {
   local api_port="${API_PORT:-18080}" token
   stack_up leoflow "$WP_JWT" "$WP_PW" $(wp_sets A)
   stack_api_forward leoflow "$api_port"
+  # The login identity is an EMAIL, not a name. FindUserByLogin calls
+  # GetUserByEmail with whatever `username` carries
+  # (internal/storage/repository.go), and the bootstrap admin is created as
+  # LEOFLOW_BOOTSTRAP_EMAIL or admin@leoflow.local
+  # (cmd/leoflow-server/main.go). This passed "admin" and got a 401 that the
+  # first real run spent a cluster to discover.
+  local admin_login="${WP_ADMIN_LOGIN:-admin@leoflow.local}"
+  # Stderr is KEPT. It was sent to /dev/null on the one call whose failure is
+  # fatal, so the run died saying "could not obtain an API token" and threw away
+  # the sentence that said why. A diagnostic discarded on the fatal path is the
+  # one you needed.
+  local token_err
+  token_err="$out/token-attempt.log"
   token="$(printf '%s' "$WP_PW" | "$WP_CLI" auth create-token \
-             --server "http://127.0.0.1:$api_port" --username admin --password-stdin 2>/dev/null)" \
-    || exp_die "could not obtain an API token from the bootstrap admin"
+             --server "http://127.0.0.1:$api_port" --username "$admin_login" \
+             --password-stdin 2>"$token_err")" \
+    || exp_die "could not obtain an API token for $admin_login: $(tr '\n' ' ' < "$token_err")"
   [ -n "$token" ] || exp_die "the token was empty; every later call would 401 and every arm would measure nothing"
 
   "$WP_CLI" deploy "$out/dag-project" --server "http://127.0.0.1:$api_port" \

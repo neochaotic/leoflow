@@ -20,6 +20,71 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   local `hugo` build uses. The two had already drifted: one listed a release the
   other did not, so a local build and the published site disagreed about which
   releases exist.
+  **Upgrading a deployment served over plain http on a name that is not
+  localhost:** set `auth.session_cookie_insecure: true` BEFORE you upgrade. A
+  browser refuses a `Secure` cookie on such an origin, and it refuses the
+  `Secure` deletion too. So with the default, a new login is silently discarded
+  **and sign-out stops signing anybody out**: the pre-existing non-`Secure`
+  cookie from the old build stays in the jar, stays a valid session, and cannot
+  be cleared until its original lifetime runs out. Loopback is unaffected,
+  because browsers treat it as potentially trustworthy, and so is anything
+  behind TLS, which is every chart install.
+
+
+### Fixed
+
+- **A password login could not replace a live SSO session, and a JWT-only
+  deployment's session cookie was readable by any script** (#1191). The two
+  login paths set the same `_token` cookie by different mechanisms: the OIDC
+  callback set it server-side and `HttpOnly`, the sign-in page set it from
+  JavaScript with `document.cookie`. A script cannot overwrite an `HttpOnly`
+  cookie, so on top of a live SSO session the browser silently discarded the
+  token a break-glass login had just been issued. The server answered `200`, the
+  audit recorded a success, and the UI went on showing the SSO identity, which
+  reads as "the escape hatch did not open" at the one moment break-glass exists
+  for.
+
+  Looking for it surfaced the wider half, which nobody had reported: a
+  deployment on `auth.provider: jwt` never reaches the OIDC callback, so its
+  session cookie was **only ever** the page-set one, not `HttpOnly`, readable by
+  anything running on the page. Same cookie, same session, two security
+  postures, decided by which button the user pressed.
+
+  `POST /auth/token` now sets the session cookie itself, through the same helper
+  the SSO callback uses (`HttpOnly`, `Secure`, `SameSite=Lax`, path `/`,
+  `Max-Age` = the token TTL), and the page's `document.cookie` write is gone.
+  The response body still carries `access_token`, so the CLI, the SPA and every
+  other API client are unaffected; logout clears through the same helper, so the
+  deletion cannot drift from what the login set.
+
+  Setting a cookie there also had to be kept from becoming a login-CSRF hole,
+  which `/auth/token` did not have while it answered with a body only. The
+  handler binds JSON without looking at `Content-Type`, so a page on another
+  origin can POST credentials it controls with no preflight and, if the response
+  set a cookie unconditionally, plant its own session in the visitor's browser.
+  The cookie is therefore written only for a request the browser itself reports
+  as same-origin (`Sec-Fetch-Site`); a cross-origin caller gets the body and no
+  cookie, and a caller that sends no such header keeps today's behavior. That
+  last group is every non-browser client, which holds no cookie jar, and also a
+  browser on a plain-http origin that is not loopback, which is sent no fetch
+  metadata at all and so gains nothing here; that deployment already carries the
+  session token in the clear, which is what `auth.session_cookie_insecure` says
+  on the tin. The OIDC callback is deliberately exempt: it is a
+  cross-site navigation from the IdP by construction, and its signed single-use
+  state cookie is what binds it to a flow this browser started.
+
+### Added
+
+- **`auth.session_cookie_insecure`** (default `false`), the one escape hatch the
+  fix above needs. `Secure` is now decided by the server rather than by the
+  page's `location.protocol`, and a browser refuses a `Secure` cookie from a
+  plain-http origin that is not loopback, so a deployment served over plain http
+  to a real hostname would otherwise have been upgraded into a sign-in page that
+  posts valid credentials, gets a `200`, and lands back on itself. It cannot be
+  derived from the request: behind a TLS-terminating ingress the server sees
+  plain http while the browser sees https, so request-derived `Secure` would
+  strip it from the deployment that most needs it. Operator-scoped, `WARN` at
+  boot while it is on, and no Helm value on purpose.
 
 ## [0.4.7] - 2026-09-19
 

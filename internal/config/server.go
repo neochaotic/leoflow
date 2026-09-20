@@ -435,6 +435,22 @@ type AuthSection struct {
 	// and ignores this). It is operator-scoped, NEVER author-settable. Empty = the
 	// envvar default. Bind via LEOFLOW_AUTH_AGENT_TOKEN_TRANSPORT.
 	AgentTokenTransport string `mapstructure:"agent_token_transport"`
+	// SessionCookieInsecure drops the Secure attribute from the browser session
+	// cookie (_token) and the OIDC state cookie. It is operator-scoped, NEVER
+	// author-settable, and defaults to false, which is the hardened posture.
+	//
+	// There is exactly one reason to set it: a deployment served over plain http
+	// to something that is not a loopback address. A browser refuses a Secure
+	// cookie from such an origin outright, so the login page would post valid
+	// credentials, get a 200, and land back on itself with no error anywhere. A
+	// loopback deployment (localhost, 127.0.0.1) needs nothing: browsers treat it
+	// as trustworthy and accept the Secure cookie over http.
+	//
+	// It cannot be derived from the request. Behind a TLS-terminating ingress the
+	// server sees plain http while the browser sees https, so request-derived
+	// Secure would strip it from the deployment that most needs it. Boot logs a
+	// WARN when it is on. Bind via LEOFLOW_AUTH_SESSION_COOKIE_INSECURE.
+	SessionCookieInsecure bool `mapstructure:"session_cookie_insecure"`
 }
 
 // JWTSection configures JWT issuance and validation.
@@ -726,9 +742,13 @@ var serverDefaults = map[string]any{
 	// poll every 1s) was actually running at the 30s production default.
 	"ui.auto_refresh_interval_seconds": 0,
 	"auth.dev_no_auth":                 false,
-	"secret_key":                       "",
-	"secrets.backend":                  "",
-	"secrets.backend_kwargs":           "",
+	// Registered so LEOFLOW_AUTH_SESSION_COOKIE_INSECURE binds at all (viper's
+	// AutomaticEnv only sees keys it has a default for), and false so the
+	// hardened posture is what a config that never mentions it gets.
+	"auth.session_cookie_insecure": false,
+	"secret_key":                   "",
+	"secrets.backend":              "",
+	"secrets.backend_kwargs":       "",
 }
 
 // LoadServer assembles the server configuration from defaults, the given file,

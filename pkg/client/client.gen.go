@@ -4788,6 +4788,11 @@ func (r GetXcomEntryResponse) ContentType() string {
 	return ""
 }
 
+// IssueTokenResponse200Headers the declared response headers of an HTTP 200 response for IssueToken
+type IssueTokenResponse200Headers struct {
+	SetCookie *string
+}
+
 type IssueTokenResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -4795,6 +4800,8 @@ type IssueTokenResponse struct {
 	JSON200 *TokenResponse
 	// JSON401 the response for an HTTP 401 `application/json` response
 	JSON401 *Unauthorized
+	// Headers200 the parsed response headers for an HTTP 200 response
+	Headers200 *IssueTokenResponse200Headers
 }
 
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
@@ -6472,6 +6479,19 @@ func ParseIssueTokenResponse(rsp *http.Response) (*IssueTokenResponse, error) {
 		}
 		response.JSON401 = &dest
 
+	}
+
+	switch {
+	case rsp.StatusCode == 200:
+		var headers IssueTokenResponse200Headers
+		if values := rsp.Header.Values("Set-Cookie"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Set-Cookie", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.SetCookie = &value
+		}
+		response.Headers200 = &headers
 	}
 
 	return response, nil

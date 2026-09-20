@@ -38,9 +38,11 @@ func TestLoginPageIsPublicHTML(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
 		t.Errorf("content-type = %q, want text/html", ct)
 	}
-	body := rec.Body.String()
-	if !strings.Contains(body, "/auth/token") || !strings.Contains(body, "_token=") {
-		t.Errorf("login page should post /auth/token and set _token cookie")
+	// The page posts the credentials; the response's Set-Cookie is the session.
+	// It must NOT name the cookie itself: see
+	// TestLoginPageNeverWritesTheSessionCookieFromScript.
+	if body := rec.Body.String(); !strings.Contains(body, "/auth/token") {
+		t.Errorf("login page should post /auth/token")
 	}
 }
 

@@ -166,7 +166,7 @@ e2e-timeout: ## Run the k3d execution_timeout e2e (#925/#930: agent clock beats 
 	bash test/e2e/execution-timeout-e2e.sh
 
 .PHONY: e2e-sso
-e2e-sso: ## Run the sign-in page SSO e2e (#1160: a configured deployment must offer the flow; Linux only, needs openssl, python3, node with playwright-core, local Postgres; run make build first)
+e2e-sso: ## Run the sign-in page SSO e2e (#1160 the flow is offered, #1191 a break-glass login replaces a live SSO session and neither session cookie is readable by a script; Linux only, needs openssl, python3, node with playwright-core, local Postgres; run make build first)
 	bash test/e2e/sso-login-page.sh
 
 .PHONY: e2e-split

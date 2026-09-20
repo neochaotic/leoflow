@@ -86,7 +86,20 @@ type tokenResponse struct {
 // When bg is non-nil (OIDC mode, D8) only the break-glass allowlist may use the
 // credential path; every other password login is rejected and audited, so
 // enabling SSO does not silently leave a full password bypass open.
-func authTokenHandler(authn auth.Authenticator, limiter *auth.RateLimiter, ttlSeconds int, bg *breakGlass) gin.HandlerFunc {
+//
+// On success it does two things with the token, for two different callers. It
+// returns it in the body, which is the contract the CLI, the SPA and every API
+// client read. And, for a request the browser reports as same-origin, it sets
+// it as that browser's session cookie, server-side, with the attributes
+// setSessionCookie describes: the login page used to write that cookie itself
+// from JavaScript, which could neither replace an existing HttpOnly session nor
+// keep a script from reading the new one.
+//
+// The cookie on a CLI response is inert: nothing there keeps a cookie jar, and
+// the body is unchanged. A cross-origin caller gets the body and no cookie at
+// all; see browserMaySetSession for why setting one there would be a login-CSRF
+// hole that this endpoint did not have while it answered with a body only.
+func authTokenHandler(authn auth.Authenticator, limiter *auth.RateLimiter, ttlSeconds int, bg *breakGlass, insecureCookies bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Peek the limiter up front but DON'T count this attempt yet: only failed
 		// logins consume the budget (recorded below). This is what keeps a user who
@@ -142,6 +155,15 @@ func authTokenHandler(authn auth.Authenticator, limiter *auth.RateLimiter, ttlSe
 		}
 		if bg != nil {
 			recordBreakGlass(c, bg, tenant, username, "success")
+		}
+		// Only a login that actually issued a token writes the cookie: every
+		// rejection above returns before this point, so a refused attempt can never
+		// disturb a session that is already there. And only a request the browser
+		// calls same-origin writes it, so a page on another origin cannot sign this
+		// browser in as an account it holds credentials for; see
+		// browserMaySetSession. The body is unchanged either way.
+		if browserMaySetSession(c) {
+			setSessionCookie(c, token, time.Duration(ttlSeconds)*time.Second, insecureCookies)
 		}
 		c.JSON(http.StatusOK, tokenResponse{AccessToken: token, TokenType: "bearer", ExpiresIn: ttlSeconds})
 	}

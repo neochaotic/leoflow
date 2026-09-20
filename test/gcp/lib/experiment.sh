@@ -81,8 +81,19 @@ EXP_TEARDOWN_SH=""
 #
 # It is deliberately NOT "delete if the run failed". The bill does not care
 # whether the experiment passed.
-exp_teardown_decision() { # <cluster name or empty> <already done 0|1>
+exp_teardown_decision() { # <cluster name or empty> <already done 0|1> [recorded name]
   if [ "$2" = "1" ]; then echo already-done; return 0; fi
+  # A cluster provision.sh created but did not hand back is still a cluster, and
+  # it is still billing. provision.sh writes .gcp-experiment-cluster the moment
+  # the create returns, BEFORE the TTL step that can fail, precisely so the name
+  # survives a failure there. Nothing read it.
+  #
+  # The cost of not reading it was not a missed cleanup, it was a lie. A run
+  # whose TTL step failed printed "the cluster STILL EXISTS, it is billing right
+  # now", and then this function said "no cluster was created, so there is
+  # nothing to tear down" and that was the LAST line on the screen: reassuring,
+  # final, and wrong.
+  if [ -z "$1" ] && [ -n "${3:-}" ]; then echo delete-recorded; return 0; fi
   if [ -z "$1" ]; then echo nothing-to-delete; return 0; fi
   echo delete
 }
@@ -92,8 +103,13 @@ exp_teardown_decision() { # <cluster name or empty> <already done 0|1>
 # never turn a passing one red just by running.
 exp_trap() {
   local rc=$?
-  case "$(exp_teardown_decision "$EXP_CLUSTER" "$EXP_TEARDOWN_DONE")" in
+  local recorded=""
+  [ -f .gcp-experiment-cluster ] && recorded="$(cat .gcp-experiment-cluster 2>/dev/null || true)"
+  case "$(exp_teardown_decision "$EXP_CLUSTER" "$EXP_TEARDOWN_DONE" "$recorded")" in
     already-done)     exit "$rc" ;;
+    delete-recorded)
+      exp_warn "the runner never received a cluster name, but $recorded was recorded as created; tearing THAT down"
+      EXP_CLUSTER="$recorded" ;;
     nothing-to-delete)
       # Reached when the runner died before a cluster existed. Saying so is
       # worth a line: silence here is indistinguishable from a trap that did
@@ -225,6 +241,19 @@ self_test() {
   _eq "$(exp_teardown_decision "" 0)" "nothing-to-delete" "no cluster means nothing to delete, and it is said out loud"
   _eq "$(exp_teardown_decision leoflow-exp-netpol-01011200 1)" "already-done" "a second trap firing does not delete twice"
   _eq "$(exp_teardown_decision "" 1)" "already-done" "already-done wins over an empty name"
+  # The case a real run hit. provision.sh created a ten-node cluster, failed at
+  # the TTL step, and exited without handing the name back. The trap said "no
+  # cluster was created" as the last line on the screen while the cluster was
+  # billing. The recorded name is the third argument precisely so that cannot
+  # happen again.
+  _eq "$(exp_teardown_decision "" 0 leoflow-exp-pod-per-task-09201112)" "delete-recorded" \
+      "a cluster the runner never received, but that provision.sh recorded, is still torn down"
+  _eq "$(exp_teardown_decision "" 0 "")" "nothing-to-delete" \
+      "an empty recorded name is still nothing to delete"
+  _eq "$(exp_teardown_decision leoflow-exp-a 0 leoflow-exp-b)" "delete" \
+      "a name the runner DOES have wins over the recorded one"
+  _eq "$(exp_teardown_decision "" 1 leoflow-exp-pod-per-task-09201112)" "already-done" \
+      "already-done still wins, so a recorded name cannot cause a second delete"
 
   # ------------------------------------------- cluster name validation
   # The live defect this guards. A stale marker really does hold this value.

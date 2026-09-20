@@ -434,6 +434,32 @@ build_create_args "$CLUSTER"
 build_ttl_args "$CLUSTER"
 build_ttl_check_args "$CLUSTER"
 
+# wait_for_pool_operation waits out the node-pool operation gcloud stopped
+# waiting for, and reports whether it ended OK.
+#
+# gcloud's non-zero exit on `node-pools update` conflates "the update failed"
+# with "I stopped waiting". They need opposite responses: the first means delete
+# the cluster, the second means wait. Distinguishing them is the difference
+# between a clean run and a ten-node cluster left billing because the script
+# believed its own error message.
+#
+# The read-back after this is still what decides. This only buys the time for
+# there to be something to read.
+wait_for_pool_operation() { # <cluster> -> 0 if the operation ended DONE
+  local c="$1" op status
+  op="$(gcloud container operations list --project "$PROJECT" --zone "$ZONE" \
+          --filter="targetLink~$c AND status=RUNNING" --format='value(name)' 2>/dev/null | head -1)"
+  if [ -z "$op" ]; then
+    # Nothing running. gcloud's failure was therefore a real one, not a wait.
+    return 1
+  fi
+  log "operation $op is still running; waiting for it rather than assuming it failed"
+  gcloud container operations wait "$op" --project "$PROJECT" --zone "$ZONE" >/dev/null 2>&1 || true
+  status="$(gcloud container operations describe "$op" --project "$PROJECT" --zone "$ZONE" \
+              --format='value(status)' 2>/dev/null)"
+  [ "$status" = "DONE" ]
+}
+
 log "creating $CLUSTER in $ZONE (project $PROJECT)"
 gcloud "${CREATE_ARGS[@]}" || die "cluster create failed; nothing to tear down"
 
@@ -448,9 +474,24 @@ printf '%s\n' "$CLUSTER" > .gcp-experiment-cluster
 # watching.
 log "applying the $TTL node TTL to $DEFAULT_POOL (nodes may be recreated to pick it up)"
 if ! gcloud "${TTL_ARGS[@]}"; then
-  warn "the node TTL could not be applied; deleting the cluster rather than leaving it unbounded"
-  "$(dirname "$0")/teardown.sh" "$CLUSTER" || die "DELETE $CLUSTER BY HAND NOW: gcloud container clusters delete $CLUSTER --zone $ZONE"
-  die "node TTL not applied; the cluster was deleted"
+  # A non-zero exit here is not the same as a failure, and treating it as one
+  # cost a ten-node cluster. Applying maxRunDuration RECREATES every node, one
+  # at a time; on ten nodes that outran gcloud's own operation wait, which
+  # returned non-zero with "is still running" at 9 of 10 nodes and NODES_FAILED
+  # zero. Nothing had failed. The script concluded the TTL could not be applied,
+  # tried to delete, and the delete bounced off the very operation that was
+  # still succeeding.
+  #
+  # So: find the operation and wait for IT, rather than for gcloud's patience.
+  # Only if that also fails is the cluster unbounded and worth deleting.
+  warn "the TTL call returned non-zero; checking whether its operation is merely still running"
+  if wait_for_pool_operation "$CLUSTER"; then
+    ok "the node-pool operation completed; the TTL is read back below, which is what decides"
+  else
+    warn "the node TTL could not be applied; deleting the cluster rather than leaving it unbounded"
+    "$(dirname "$0")/teardown.sh" "$CLUSTER" || die "DELETE $CLUSTER BY HAND NOW: gcloud container clusters delete $CLUSTER --zone $ZONE"
+    die "node TTL not applied; the cluster was deleted"
+  fi
 fi
 
 APPLIED_TTL="$(gcloud "${TTL_CHECK_ARGS[@]}" 2>/dev/null || true)"

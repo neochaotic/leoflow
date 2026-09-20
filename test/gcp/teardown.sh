@@ -187,6 +187,27 @@ cluster_exists() { # <cluster>
   gcloud container clusters describe "$1" --project "$PROJECT" --zone "$ZONE" >/dev/null 2>&1
 }
 
+# wait_for_operations blocks while GKE has a RUNNING operation on this cluster.
+#
+# Deleting is refused while one is in flight, so without this the teardown's
+# delete can fail for a reason that will clear itself in a minute, and the
+# verification then correctly reports a cluster still standing and still
+# billing. Bounded, because a teardown that waits forever is its own failure:
+# if the operation outlasts the budget the delete is attempted anyway and the
+# verification below is what has the final word.
+wait_for_operations() { # <cluster>
+  local c="$1" i op
+  for i in $(seq 1 "${OP_WAIT_TRIES:-40}"); do
+    op="$(gcloud container operations list --project "$PROJECT" --zone "$ZONE" \
+            --filter="targetLink~$c AND status=RUNNING" --format='value(name)' 2>/dev/null | head -1)"
+    [ -n "$op" ] || return 0
+    [ "$i" = "1" ] && log "$c has operation $op in flight; a delete would be refused, waiting"
+    sleep "${OP_WAIT_SECONDS:-15}"
+  done
+  warn "an operation on $c is still running after the wait budget; attempting the delete anyway"
+  return 0
+}
+
 delete_one() { # <cluster>
   local c="$1" labels exists
   exists=no
@@ -212,6 +233,14 @@ delete_one() { # <cluster>
       warn "$c does not carry $LABEL_SELECTOR (labels: ${labels:-none}); leaving it alone"
       return 1 ;;
   esac
+
+  # A cluster with an operation in flight REFUSES to be deleted: GKE answers
+  # code=400 "Cluster is running incompatible operation". That is not a
+  # hypothetical. A 10-node node-pool update outran gcloud's own wait, the
+  # caller decided to delete, the delete bounced off the still-running
+  # operation, and a ten-node cluster stayed up billing while the script said
+  # it had failed. Waiting first is what makes the delete able to succeed.
+  wait_for_operations "$c"
 
   log "deleting $c"
   gcloud container clusters delete "$c" --project "$PROJECT" --zone "$ZONE" --quiet \

@@ -336,6 +336,7 @@ apply_task_policy() { # <allowMetadataEgress value or empty>
 run_experiment() {
   local out="$1"
   exp_require gcloud kubectl helm
+  exp_require_env
 
   exp_arm_teardown "$HERE/teardown.sh"
   exp_provision "$HERE/provision.sh" netpol "$NODES" "$TTL"

@@ -210,6 +210,36 @@ exp_require() { # <binary...>
   [ -z "$missing" ] || exp_die "missing required tool(s):$missing. Install them BEFORE provisioning: a missing binary found after the cluster is up is billed time."
 }
 
+# exp_require_env resolves the two account settings every runner needs, by the
+# SAME rule provision.sh uses, and refuses in the preflight if neither source
+# has them.
+#
+# It exists because the two disagreed. provision.sh falls back to
+# `gcloud config get-value project` when GCP_PROJECT is unset, and documents
+# that; the runners wrote ${GCP_PROJECT:?}, which does not. So a run with only
+# GCP_ZONE set provisioned a ten-node cluster perfectly, applied the TTL, read
+# it back, armed the teardown, and then died on the very next line with
+# "GCP_PROJECT: parameter null or not set".
+#
+# Fifty minutes and about two dollars to discover a variable was unset. The
+# check costs a second and now happens next to exp_require, whose own comment
+# already said the principle: a missing prerequisite found after the cluster is
+# up is billed time.
+#
+# It EXPORTS, so everything downstream sees the resolved values rather than each
+# caller re-deriving them and finding a third answer.
+exp_require_env() {
+  : "${GCP_PROJECT:=$(gcloud config get-value project 2>/dev/null || true)}"
+  : "${GCP_ZONE:=$(gcloud config get-value compute/zone 2>/dev/null || true)}"
+  case "${GCP_PROJECT:-}" in
+    ""|"(unset)") exp_die "set GCP_PROJECT or 'gcloud config set project'. Checked BEFORE provisioning: this used to surface after a cluster was already billing." ;;
+  esac
+  case "${GCP_ZONE:-}" in
+    ""|"(unset)") exp_die "set GCP_ZONE or 'gcloud config set compute/zone'. Checked BEFORE provisioning." ;;
+  esac
+  export GCP_PROJECT GCP_ZONE
+}
+
 # exp_kube_ready waits for the cluster's API to answer and for every node to be
 # Ready. Nothing else in a runner is meaningful until this passes, and a runner
 # that starts measuring against a half-ready node pool measures the node pool.
@@ -254,6 +284,53 @@ self_test() {
       "a name the runner DOES have wins over the recorded one"
   _eq "$(exp_teardown_decision "" 1 leoflow-exp-pod-per-task-09201112)" "already-done" \
       "already-done still wins, so a recorded name cannot cause a second delete"
+
+  # exp_require_env, driven with a stub gcloud so no account is touched. The
+  # case that matters is the one that cost fifty minutes and about two dollars:
+  # only GCP_ZONE exported, provision.sh falling back to gcloud config for the
+  # project, and the runner insisting on ${GCP_PROJECT:?} one line after the
+  # cluster came up.
+  local envtmp; envtmp="$(mktemp -d)"
+  cat > "$envtmp/gcloud" <<'STUB'
+#!/usr/bin/env bash
+case "$*" in
+  *"config get-value project"*)      printf '%s\n' "${STUB_PROJECT-}" ;;
+  *"config get-value compute/zone"*) printf '%s\n' "${STUB_ZONE-}" ;;
+esac
+STUB
+  chmod +x "$envtmp/gcloud"
+
+  _env_case() { # <name> <want rc> <project env> <zone env> <stub project> <stub zone>
+    local name="$1" want="$2" rc
+    ( export PATH="$envtmp:$PATH" STUB_PROJECT="$5" STUB_ZONE="$6"
+      if [ -n "$3" ]; then export GCP_PROJECT="$3"; else unset GCP_PROJECT; fi
+      if [ -n "$4" ]; then export GCP_ZONE="$4"; else unset GCP_ZONE; fi
+      exp_require_env ) >/dev/null 2>&1 && rc=0 || rc=1
+    [ "$rc" = "$want" ] && echo "  ok   $name" || { echo "  FAIL $name (rc=$rc want=$want)"; fail=1; }
+  }
+
+  _env_case "both set in the environment is accepted"               0 p z "" ""
+  _env_case "neither set anywhere is refused before provisioning"   1 "" "" "" ""
+  _env_case "the project alone, with no gcloud default, is refused" 1 p "" "" ""
+  _env_case "the zone alone, with no gcloud default, is refused"    1 "" z "" ""
+  # THE case. provision.sh always accepted this shape; the runners did not, and
+  # found out one line after the cluster was up and billing.
+  _env_case "the zone exported and the project from gcloud config is accepted" 0 "" z proj ""
+  _env_case "both coming from gcloud config is accepted"            0 "" "" proj zn
+  # gcloud prints the literal string "(unset)" rather than nothing, and a
+  # cluster provisioned into a project named "(unset)" is a very bad afternoon.
+  _env_case "gcloud answering (unset) is refused, not used as a project name" 1 "" z "(unset)" ""
+
+  # Every runner has to call it, or the check protects whichever ones remembered.
+  local r missing=""
+  for r in pod-per-task netpol warm-pool-ab; do
+    grep -q 'exp_require_env' "$EXP_SELFTEST_DIR/$r.sh" 2>/dev/null || missing="$missing $r"
+  done
+  [ -z "$missing" ] \
+    && echo "  ok   every runner checks its environment in the preflight" \
+    || { echo "  FAIL these runners never check their environment:$missing"; fail=1; }
+
+  rm -rf "$envtmp"
 
   # ------------------------------------------- cluster name validation
   # The live defect this guards. A stale marker really does hold this value.

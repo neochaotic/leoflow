@@ -661,3 +661,36 @@ func TestReachabilityResetsOnRecovery(t *testing.T) {
 		}
 	}
 }
+
+// TestPunctualityIgnoresABackdatedLogicalDate covers a false positive this check
+// produced against the battery's own DAG.
+//
+// soak_token declared start_date=2026-01-01, so its first run's logical_date sat
+// months in the past and queued_at minus logical_date came out at 20,843,777
+// seconds. The check reported it, correctly as arithmetic and uselessly as
+// signal, once every ten seconds for hours: 2127 violations in one run, all of
+// them the same non-event.
+//
+// A lateness measured in days is a different phenomenon from a late scheduler.
+// It means the logical_date is in the past by construction: a backdated
+// start_date, a catchup backfill, or a DAG registered long after its first
+// interval.
+func TestPunctualityIgnoresABackdatedLogicalDate(t *testing.T) {
+	backdated := sample{
+		WindowMin:      120,
+		WorstLatenessS: map[string]float64{"soak_ingest": 20843777},
+	}
+	if got := violationsFor(t, backdated, "schedule_late"); got != 0 {
+		t.Errorf("reported %d violations for a run 241 days behind its logical date; that is a backfill, not a late scheduler", got)
+	}
+
+	// The exclusion must not swallow real lateness. Just under the ceiling still
+	// reports, so the escape hatch cannot become a blanket.
+	genuine := sample{
+		WindowMin:      120,
+		WorstLatenessS: map[string]float64{"soak_ingest": backfillLatenessCeilingS - 60},
+	}
+	if got := violationsFor(t, genuine, "schedule_late"); got == 0 {
+		t.Error("an hours-late scheduler just under the ceiling was ignored; the backfill exclusion swallowed a real finding")
+	}
+}

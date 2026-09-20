@@ -297,6 +297,20 @@ func (c *checker) checkPunctuality(s sample, add addFunc) {
 			continue
 		}
 		budget := float64(periodMin) * 60 * latenessBudgetOfPeriod
+		// A lateness measured in DAYS is not a late scheduler, it is a run whose
+		// logical_date sits in the past by construction: a backdated start_date,
+		// a catchup backfill, or a DAG registered long after its first interval.
+		// Reporting those as punctuality would be arithmetically true and
+		// operationally meaningless, and on this battery it was: soak_token
+		// declared start_date=2026-01-01 and produced a single violation of
+		// 20,843,777 seconds, then repeated it every ten seconds for hours.
+		//
+		// The ceiling is absolute rather than another multiple of the period,
+		// because the thing being excluded is a different phenomenon and not a
+		// larger amount of the same one.
+		if worst > backfillLatenessCeilingS {
+			continue
+		}
 		if worst > budget {
 			add("schedule_late",
 				fmt.Sprintf("%s created a scheduled run %.0fs after it was due; its schedule is every %d min, so the budget is %.0fs. Runs exist, which is what the cadence check sees, and they are arriving late",
@@ -310,6 +324,11 @@ func (c *checker) checkPunctuality(s sample, add addFunc) {
 // closer to the next slot than to its own, and two consecutive such runs would
 // start colliding with each other.
 const latenessBudgetOfPeriod = 0.5
+
+// backfillLatenessCeilingS is where "late" stops meaning late. A day is far
+// beyond any schedule this battery runs (the longest is hourly) and far below
+// the gap a backdated logical_date produces, so nothing real is hidden by it.
+const backfillLatenessCeilingS = 24 * 60 * 60
 
 // cadenceExpectations maps each soak DAG to its cron period in minutes. It is a
 // literal rather than something read out of the database on purpose: the check

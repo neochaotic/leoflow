@@ -47,7 +47,6 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime
 
 from airflow.sdk import DAG, task
 
@@ -86,7 +85,6 @@ def _authenticated_probe(label: str) -> str:
 with DAG(
     "soak_token",
     schedule="0 * * * *",
-    start_date=datetime(2026, 1, 1),
     catchup=False,
     max_active_runs=1,
     tags=["soak"],

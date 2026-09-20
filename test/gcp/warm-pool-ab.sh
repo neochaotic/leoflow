@@ -424,6 +424,28 @@ PY
     echo "  FAIL run_experiment is not called with its output directory; --execute dies on an unbound \$1, or does nothing at all"; fail=1
   fi
 
+  # Build and deploy must name the SAME image tag. The packer pushes
+  # $WP_DAG_VERSION and deploy defaults to `git describe`, so leaving it off the
+  # deploy makes the two derive the tag by different rules and the run dies on
+  # "no such object" against an image that was never pushed. Checked by reading,
+  # because finding out costs a cluster.
+  # Both invocations span several lines, so this reads three lines forward from
+  # each rather than matching one. The first version anchored on a single line
+  # and failed always, which is the second time today a check of mine did that:
+  # a test that cannot pass says nothing about the code, it only gets silenced.
+  local compile_pinned deploy_pinned
+  # `|| true` on both, and it is not noise. grep -c exits 1 when the count is
+  # zero, so under set -e the assignment itself aborts the script: the check
+  # died silently at exactly the moment it had something to report. Third time
+  # today a check of mine could not report its own failure.
+  compile_pinned="$(grep -A 3 '"\$WP_CLI" compile' "${BASH_SOURCE[0]}" | grep -c -- '--dag-version "\$WP_DAG_VERSION"' || true)"
+  deploy_pinned="$(grep -A 3 '"\$WP_CLI" deploy' "${BASH_SOURCE[0]}" | grep -c -- '--dag-version "\$WP_DAG_VERSION"' || true)"
+  if [ "${compile_pinned:-0}" -ge 1 ] && [ "${deploy_pinned:-0}" -ge 1 ]; then
+    echo "  ok   the build and the deploy name the same image tag"
+  else
+    echo "  FAIL build and deploy do not both pin --dag-version (compile=$compile_pinned deploy=$deploy_pinned); they will disagree on the tag"; fail=1
+  fi
+
   [ "$fail" = "0" ] && { echo "warm-pool-ab self-test: ok"; return 0; }
   return 1
 }
@@ -511,8 +533,15 @@ run_experiment() {
     || exp_die "could not obtain an API token for $admin_login: $(tr '\n' ' ' < "$token_err")"
   [ -n "$token" ] || exp_die "the token was empty; every later call would 401 and every arm would measure nothing"
 
+  # --dag-version is passed HERE TOO, and the two must agree.
+  #
+  # deploy defaults it to `git describe`, so with --skip-build it recompiled
+  # against a tag nobody had pushed and died on
+  # "no such object: .../gcp-probe:15cb19f" while the image sitting in the
+  # registry was gcp-probe:gcpexp1. Two steps deriving the same tag by different
+  # rules, which works right up until the rules disagree.
   "$WP_CLI" deploy "$out/dag-project" --server "http://127.0.0.1:$api_port" \
-    --token "$token" --skip-build --yes \
+    --token "$token" --skip-build --yes --dag-version "$WP_DAG_VERSION" \
     || exp_die "registering the DAG failed; a trigger would 404, which is exactly the shape this runner exists to fix"
 
   # The arms, in the bracketed order, with A measured at both ends.

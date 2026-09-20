@@ -305,6 +305,90 @@ PY
     *) echo "  FAIL the run order does not bracket the experiment with arm A: '$RUN_ORDER'"; fail=1 ;;
   esac
 
+  # ------------------------------------- the report, driven from fixtures
+  #
+  # wp_report is the step that used to `return 1` unimplemented, so a paid run
+  # ended with raw JSON and no summary (#1203). These cases drive it over series
+  # files on disk, with no cluster and no API, and the refusals matter more than
+  # the happy path: an arm that measured nothing must never render as an arm
+  # that was very fast.
+  local t
+  t="$(mktemp -d)"
+
+  _series() { # <dir> <arm> <idx> <values...>
+    local d="$1" a="$2" i="$3"; shift 3
+    printf '%s\n' "$@" > "$d/start-$a-$i.series"
+  }
+
+  # A complete, stable run: arm B twice as fast as A', A stable end to end.
+  mkdir -p "$t/ok"
+  _series "$t/ok" A      1 $(seq 1 30 | sed 's/.*/10/')
+  _series "$t/ok" Aprime 2 $(seq 1 30 | sed 's/.*/12/')
+  _series "$t/ok" B      3 $(seq 1 30 | sed 's/.*/6/')
+  _series "$t/ok" A      4 $(seq 1 30 | sed 's/.*/10/')
+  if wp_report "$t/ok" >/dev/null 2>&1; then
+    echo "  ok   a complete run with stable arm A reports"
+  else
+    echo "  FAIL a complete, stable run was refused"; fail=1
+  fi
+  _eq "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["ratios"]["b_vs_aprime"])' "$t/ok/verdict.json")" \
+      "0.500" "B at half of A-prime is reported as 0.500, the feature in isolation"
+  _eq "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["drift"])' "$t/ok/verdict.json")" \
+      "STABLE" "arm A measured the same twice is STABLE"
+  _eq "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["trustworthy"])' "$t/ok/verdict.json")" \
+      "True" "and the run is marked trustworthy"
+  grep -q 'B vs A' "$t/ok/report.md" \
+    && echo "  ok   the report names the comparison that isolates the feature" \
+    || { echo "  FAIL the report omits the B vs A-prime row"; fail=1; }
+
+  # An arm that measured NOTHING. This is the shape of a warm pool that never
+  # filled, a deploy that 404'd, and a token that expired mid-run.
+  mkdir -p "$t/missing"
+  _series "$t/missing" A      1 $(seq 1 30 | sed 's/.*/10/')
+  _series "$t/missing" Aprime 2 $(seq 1 30 | sed 's/.*/12/')
+  _series "$t/missing" A      4 $(seq 1 30 | sed 's/.*/10/')
+  if wp_report "$t/missing" >/dev/null 2>&1; then
+    echo "  FAIL an arm with no observations was reported as a result"; fail=1
+  else
+    echo "  ok   an arm that measured nothing REFUSES a verdict rather than reading as fast"
+  fi
+  [ -f "$t/missing/verdict.json" ] \
+    && { echo "  FAIL a refused run still wrote a verdict file"; fail=1; } \
+    || echo "  ok   and writes no verdict.json for a later reader to mistake for one"
+
+  # A cluster that moved under the run. The numbers are kept; the conclusion is
+  # withheld, because arm B ran last and drift flatters or penalizes it.
+  mkdir -p "$t/drifted"
+  _series "$t/drifted" A      1 $(seq 1 30 | sed 's/.*/10/')
+  _series "$t/drifted" Aprime 2 $(seq 1 30 | sed 's/.*/12/')
+  _series "$t/drifted" B      3 $(seq 1 30 | sed 's/.*/6/')
+  _series "$t/drifted" A      4 $(seq 1 30 | sed 's/.*/40/')
+  if wp_report "$t/drifted" >/dev/null 2>&1; then
+    echo "  FAIL a run whose cluster drifted reported success"; fail=1
+  else
+    echo "  ok   a drifted cluster fails the run"
+  fi
+  _eq "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["trustworthy"])' "$t/drifted/verdict.json")" \
+      "False" "and its verdict says so rather than omitting the field"
+  grep -q 'must not be quoted' "$t/drifted/report.md" \
+    && echo "  ok   and the report says the numbers must not be quoted" \
+    || { echo "  FAIL the drifted report does not warn the reader"; fail=1; }
+
+  # Below the percentile floor. The arms are all present, so a verdict IS
+  # written, but the run is not a pass.
+  mkdir -p "$t/thin"
+  _series "$t/thin" A      1 10 10 10
+  _series "$t/thin" Aprime 2 12 12 12
+  _series "$t/thin" B      3 6 6 6
+  _series "$t/thin" A      4 10 10 10
+  if wp_report "$t/thin" >/dev/null 2>&1; then
+    echo "  FAIL three observations per arm was reported as a pass"; fail=1
+  else
+    echo "  ok   an arm under the $MIN_SAMPLES-sample floor is not a pass"
+  fi
+
+  rm -rf "$t"
+
   [ "$fail" = "0" ] && { echo "warm-pool-ab self-test: ok"; return 0; }
   return 1
 }
@@ -427,7 +511,11 @@ wp_sets() { # <arm> -> --set arguments
 }
 
 # wp_run_arm applies one arm and measures ATTEMPTS task starts under it.
-# NEVER EXECUTED. See the banner.
+#
+# NEVER EXECUTED against a cluster. The series extraction it calls IS proven:
+# lib/warm_deltas.py was run against a live leoflow API and produced one
+# observation per attempt (see its self-test for the shapes, and #1203 for why
+# this interval replaced the pod-derived one).
 wp_run_arm() { # <arm> <index> <out> <api port> <token>
   local arm="$1" idx="$2" out="$3" port="$4" token="$5" i
   exp_log "arm $arm (position $idx in: $RUN_ORDER)"
@@ -443,22 +531,196 @@ wp_run_arm() { # <arm> <index> <out> <api port> <token>
   done
   printf 'arm %s warmup_discarded %s\n' "$arm" "${WARMUP_ATTEMPTS:-3}" >> "$out/facts.txt"
 
+  # The window opens AFTER the warm-ups, so their cold starts are excluded by
+  # the same queued_at filter that excludes the previous arm's attempts, rather
+  # than by counting and hoping the counts line up.
+  local since
+  since="$(python3 -c 'import time;print(time.time())')"
+
   for i in $(seq 1 "$ATTEMPTS"); do
-    # The measurement is the POD's own schedule-to-running interval, read from
-    # the Kubernetes API, not the wall time of the trigger call: the trigger
-    # returns as soon as the run is accepted, so timing it would measure the
-    # API and not the pool.
+    # The measurement is NOT the wall time of the trigger call: the trigger
+    # returns as soon as the run is accepted, so timing it would measure the API
+    # and not the pool. It is reconstructed afterwards from the control plane's
+    # own stamps (wp_arm_series).
     "$WP_CLI" runs trigger gcp_probe --server "http://127.0.0.1:$port" --token "$token" >/dev/null 2>&1 || true
     sleep "${ATTEMPT_SPACING:-2}"
   done
+
+  # Let the last attempts actually start before asking when they started. An
+  # attempt still queued has no start_date and would be DROPPED, which silently
+  # biases every arm toward whatever started fastest.
+  sleep "${SETTLE_SECONDS:-30}"
+  wp_arm_series "$out" "$arm" "$idx" "$port" "$token" "$since" || true
+
+  # The pods are still worth keeping as evidence, they are just not the series.
   kubectl -n "$STACK_TASK_NS" get pods -l leoflow.io/run-id -o json > "$out/pods-$arm-$idx.json" 2>/dev/null || true
   kubectl -n "$STACK_TASK_NS" delete pods -l leoflow.io/run-id --wait=false >/dev/null 2>&1 || true
 }
 
+# wp_arm_series turns one arm's window into its observation series on disk.
+#
+# The series is run.queued_at -> task.start_date, per attempt, extracted by
+# lib/warm_deltas.py. That file carries the argument for why it is this interval
+# and not the pod's; the short version is that a warm attempt gets no pod of its
+# own, so a pod-derived series times different events in different arms (#1203).
+wp_arm_series() { # <out> <arm> <idx> <api port> <token> <since epoch>
+  local out="$1" arm="$2" idx="$3" port="$4" token="$5" since="$6"
+  local base="http://127.0.0.1:$port" raw="$out/raw-$arm-$idx"
+  curl -sS -m 30 -H "Authorization: Bearer $token" \
+    "$base/api/v2/dags/gcp_probe/dagRuns?limit=500" > "$raw.runs.json" || {
+      exp_warn "arm $arm: could not list runs; this arm has no series"; return 1; }
+  : > "$raw.tis.jsonl"
+  local id n=0
+  for id in $(python3 "$EXP_REPO_ROOT/test/gcp/lib/warm_deltas.py" ids "$since" < "$raw.runs.json"); do
+    curl -sS -m 30 -H "Authorization: Bearer $token" \
+      "$base/api/v2/dags/gcp_probe/dagRuns/$id/taskInstances" >> "$raw.tis.jsonl" || continue
+    printf '\n' >> "$raw.tis.jsonl"
+    n=$((n + 1))
+  done
+  exp_log "arm $arm: $n run(s) in this arm's window"
+  # Notes go to the run directory, not just to stderr: "observed 11 of 30" is the
+  # kind of fact that explains a percentile six months later.
+  python3 "$EXP_REPO_ROOT/test/gcp/lib/warm_deltas.py" deltas "$since" \
+    "$raw.runs.json" "$raw.tis.jsonl" \
+    > "$out/start-$arm-$idx.series" 2> "$out/notes-$arm-$idx.txt"
+  [ -s "$out/notes-$arm-$idx.txt" ] && exp_warn "arm $arm: $(tr '\n' ' ' < "$out/notes-$arm-$idx.txt")"
+  return 0
+}
+
+# wp_stat prints "<count> <p50> <p95>" for one arm's series, or nothing if the
+# file is absent. Kept separate so wp_report never re-reads a series twice with
+# two tools that could disagree about what is in it.
+wp_stat() { # <series path>
+  [ -f "$1" ] || return 1
+  local n p50 p95
+  n="$(count_of < "$1")"
+  [ "${n:-0}" -ge 1 ] || return 1
+  p50="$(p_of 50 < "$1")"
+  p95="$(p_of 95 < "$1")"
+  printf '%s %s %s' "$n" "$p50" "$p95"
+}
+
+# wp_report writes the comparison, or refuses.
+#
+# It refuses on purpose when an arm produced nothing. An empty arm is the
+# expected shape of several real failures here (a warm pool that never filled, a
+# deploy that 404'd, a token that expired mid-run), and every one of them would
+# otherwise render as an arm that was simply very fast. The soak's `{}` is the
+# precedent: a verdict built from no observations is indistinguishable from a
+# passing one.
 wp_report() { # <out dir>
-  exp_warn "wp_report is unimplemented: the arms above have never produced a series, so there is nothing to summarize."
-  exp_warn "Writing a report from no observations is precisely the empty-verdict shape this directory refuses."
-  return 1
+  local out="$1" arm idx=0 usable=0 total=0 line
+  : > "$out/arms.tsv"
+  for arm in $RUN_ORDER; do
+    idx=$((idx + 1))
+    local path="$out/start-$arm-$idx.series" n p50 p95
+    if line="$(wp_stat "$path")"; then
+      read -r n p50 p95 <<EOF
+$line
+EOF
+      printf '%s\t%s\t%s\t%s\t%s\n' "$arm" "$idx" "$n" "$p50" "$p95" >> "$out/arms.tsv"
+      total=$((total + n))
+      if series_is_usable "$n" "arm $arm (position $idx)"; then usable=$((usable + 1)); fi
+    else
+      printf '%s\t%s\t0\t\t\n' "$arm" "$idx" >> "$out/arms.tsv"
+      exp_warn "arm $arm (position $idx) produced NO observations"
+    fi
+  done
+
+  # Every arm must have a series. Three arms with one missing is not a partial
+  # result, it is a different experiment.
+  local arms_with_data
+  arms_with_data="$(awk -F'\t' '$3 > 0' "$out/arms.tsv" | wc -l | tr -d ' ')"
+  local arms_expected
+  arms_expected="$(echo $RUN_ORDER | wc -w | tr -d ' ')"
+  if [ "$arms_with_data" -lt "$arms_expected" ]; then
+    exp_warn "REFUSING to write a verdict: $arms_with_data of $arms_expected arm positions produced observations."
+    exp_warn "A comparison missing an arm is not a partial answer; the raw series are in $out."
+    return 1
+  fi
+
+  # A and A are the first and last positions, by construction of RUN_ORDER.
+  local a1 a2 aprime b
+  a1="$(awk -F'\t' '$1=="A"{print $5}' "$out/arms.tsv" | head -1)"
+  a2="$(awk -F'\t' '$1=="A"{print $5}' "$out/arms.tsv" | tail -1)"
+  aprime="$(awk -F'\t' '$1=="Aprime"{print $5}' "$out/arms.tsv" | head -1)"
+  b="$(awk -F'\t' '$1=="B"{print $5}' "$out/arms.tsv" | head -1)"
+
+  local drift feature experienced prereq
+  drift="$(drift_verdict "$a1" "$a2")"
+  feature="$(ratio_of "$aprime" "$b")"
+  experienced="$(ratio_of "$a1" "$b")"
+  prereq="$(ratio_of "$a1" "$aprime")"
+
+  {
+    echo "# warm-pool A/B"
+    echo
+    echo "Observation: seconds from a run being accepted (\`queued_at\`) to its task"
+    echo "starting (\`start_date\`). Defined identically under every arm; see"
+    echo "\`lib/warm_deltas.py\` for why this and not the pod's own interval."
+    echo
+    echo "| arm | position | settings | n | p50 s | p95 s |"
+    echo "|---|---|---|---|---|---|"
+    while IFS=$'\t' read -r arm idx n p50 p95; do
+      printf '| %s | %s | `%s` | %s | %s | %s |\n' "$arm" "$idx" "$(arm_values "$arm")" "$n" "${p50:--}" "${p95:--}"
+    done < "$out/arms.tsv"
+    echo
+    echo "## Drift: $drift"
+    echo
+    echo "Arm A was measured first and last (p95 $a1 s then $a2 s). Tolerance"
+    echo "${DRIFT_TOLERANCE}x in either direction: a cluster that sped up under the run"
+    echo "flatters the last arm exactly as much as one that slowed penalizes it."
+    if [ "$drift" = "UNTRUSTWORTHY" ]; then
+      echo
+      echo "**The cluster moved under the experiment, so the comparisons below are"
+      echo "recorded but must not be quoted.** Re-run before concluding anything."
+    fi
+    echo
+    echo "## Comparisons (ratio < 1 means faster)"
+    echo
+    echo "| comparison | ratio | what it isolates |"
+    echo "|---|---|---|"
+    echo "| B vs A' | $feature | **warm pools, one variable** |"
+    echo "| B vs A | $experienced | what an operator experiences, three variables |"
+    echo "| A' vs A | $prereq | the price of the coupled prerequisites |"
+    echo
+    echo "B vs A' is the answer to \"do warm pools help\". B vs A is the answer to"
+    echo "\"is turning them on worth it\", and they differ because the chart refuses"
+    echo "warm pools without \`agentTokenTransport=exchange\` and"
+    echo "\`secretLivenessMode=enforce\`."
+    echo
+    echo "Warm-up attempts discarded per arm (a pool is empty on a dag_version's"
+    echo "first attempt, which is a cold start and not the steady state the"
+    echo "feature is for):"
+    echo
+    [ -f "$out/facts.txt" ] && sed 's/^/    /' "$out/facts.txt"
+  } > "$out/report.md"
+
+  python3 - "$out" "$drift" "$feature" "$experienced" "$prereq" "$total" <<'JSON'
+import json, sys, csv
+out, drift, feature, experienced, prereq, total = sys.argv[1:7]
+arms = []
+with open(out + "/arms.tsv") as fh:
+    for row in csv.reader(fh, delimiter="\t"):
+        if not row:
+            continue
+        arms.append({"arm": row[0], "position": int(row[1]), "n": int(row[2]),
+                     "p50_s": float(row[3]) if row[3] else None,
+                     "p95_s": float(row[4]) if row[4] else None})
+json.dump({
+    "observation": "run.queued_at -> task.start_date, seconds",
+    "arms": arms,
+    "drift": drift,
+    "ratios": {"b_vs_aprime": feature, "b_vs_a": experienced, "aprime_vs_a": prereq},
+    "total_observations": int(total),
+    "trustworthy": drift == "STABLE",
+}, open(out + "/verdict.json", "w"), indent=2)
+JSON
+
+  exp_ok "report written to $out/report.md (drift: $drift, B vs A': $feature)"
+  [ "$drift" = "STABLE" ] || { exp_warn "drift made this run untrustworthy; the numbers are recorded, not published"; return 1; }
+  [ "$usable" -ge "$arms_expected" ] || { exp_warn "at least one arm is below the $MIN_SAMPLES-sample floor; treat its percentile as inconclusive"; return 1; }
+  return 0
 }
 
 # ---------------------------------------------------------------------- main

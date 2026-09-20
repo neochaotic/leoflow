@@ -103,7 +103,63 @@ finished but not yet been garbage-collected.
 `restricted`-enforcing namespace with `readOnlyRootFilesystem: true`, running a
 hybrid DAG whose dbt models materialized normally.
 
+## Memory limits, and what happens without one
+
+A task pod gets the CPU, memory and ephemeral-storage `requests` and `limits` the
+DAG author declares under `resources`. Leoflow adds none of its own.
+
+**If nobody declares a memory limit, there is none.** The pod inherits whatever
+the namespace imposes, and if the namespace imposes nothing the task can grow
+until the NODE runs short. The kubelet then starts evicting to reclaim memory,
+and what it evicts is chosen by QoS class and by how far each pod is over its
+request, not by who caused the problem. So the symptom appears on someone else's
+task while the one at fault keeps running. A `LimitRange` on the task namespace
+is the operator-side answer; a declared limit is the author-side one.
+
+A pod with `requests` but no `limits` lands in QoS class `Burstable`. It runs
+fine until the node tightens and then becomes an eviction candidate, which means
+the failure shows up under load and not in testing.
+
+### Reading an out-of-memory failure
+
+When a limit IS set and the task exceeds it, the kernel kills the task process
+and leoflow reports:
+
+```
+out of memory: the kernel killed this task's process. Raise the task's memory
+limit (resources.limits.memory); if it uses an engine with its own memory
+budget, such as DuckDB, set that budget too, because it sizes itself from
+detected RAM and may not see the container's limit.
+```
+
+That message is derived from the kernel's own OOM-kill counter for the pod's
+cgroup, sampled either side of the task, rather than from the exit code. The
+distinction matters when you are debugging: exit 137 is SIGKILL and an external
+kill looks identical, so a task killed for memory and a task killed by something
+else are the same number and different problems.
+
+### The second half of a memory limit
+
+Setting `resources.limits.memory` alone is sometimes not enough.
+
+An engine that manages its own memory budget — DuckDB is the common one, but
+Spark, Polars and the JVM all behave this way — sizes that budget from the RAM it
+detects. Depending on version and platform it may see the NODE's memory rather
+than the container's limit. It then plans for memory it will never be allowed to
+touch, does not spill to disk, and is killed instead of degrading.
+
+A DuckDB task in a pod limited to 4 GiB should be told so:
+
+```sql
+SET memory_limit = '3GB';
+```
+
+Leaving headroom under the pod limit on purpose: the Python process, the agent
+and the engine's own overhead all live in the same cgroup, so the engine's budget
+should not be the whole of it.
+
 ## Related
 
 - [Control-plane HA and disruption posture](/operate/control-plane-ha/)
 - [Agent credential transport](/operate/agent-credential-transport/)
+- [Troubleshooting](/operate/troubleshooting/)

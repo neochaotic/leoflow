@@ -193,7 +193,7 @@ path with none of them.
 | File | What it does | Has it run? |
 |---|---|---|
 | `netpol.sh` | #1089's §3b rows on a CNI that enforces | **yes**, see below |
-| `pod-per-task.sh` | rising concurrency until something saturates | partly: the Kubernetes half |
+| `pod-per-task.sh` | rising concurrency until something saturates | **yes**, the Kubernetes half; see the run record |
 | `warm-pool-ab.sh` | warm pools vs the coupled baseline | **no**, and two known defects say not yet (#1203) |
 | `lib/experiment.sh` | the run directory and the teardown trap | |
 | `lib/stats.sh` | percentiles and what "saturated" means | |
@@ -288,6 +288,96 @@ flag on the wrong subcommand, a label split on the wrong separator, a missing
 release channel, an empty-array expansion under bash 3.2) is the kind only a real
 run finds. These two were cheaper: they were found by reading, before a cluster
 was paid for.
+
+### Run record: `pod-per-task`, 2026-09-20, 10 x e2-standard-4
+
+Cluster `leoflow-exp-pod-per-task-09201532`, `us-central1-a`, `--ttl 3h`,
+`--k8s-only`, ladder 10/20/40/80/160/320, `LOAD_SLEEP=45`,
+`SUBMIT_PARALLEL=16`. Torn down and verified gone. About USD 4.
+
+**Verdict: `no-saturation-observed`**, 1274 observations. Read the runner's own
+sentence rather than a summary of it: that is not "it scales", it means the
+ceiling is above 320 and where it is remains unknown.
+
+**It took three attempts to get one measurement**, and the first two are the
+reason this section exists.
+
+| attempt | what happened |
+|---|---|
+| 1 | gcloud stopped waiting on the TTL roll at 9 of 10 nodes and the script read that as failure, deleted, and could not delete because the operation was still running. Ten nodes left billing (#1206). |
+| 2 | provisioned perfectly, then died on an unset `GCP_PROJECT` one line after the cluster came up (#1211). |
+| 3 | the run below. |
+
+#### What the cluster held
+
+| | |
+|---|---|
+| allocatable | **39 200m CPU**, 129.6 GiB memory, 110 pods/node |
+| level 320 requested | 32 000m CPU (**82%**), 20.0 GiB (16%), 32 pods/node (29%) |
+| `still_pending_at_deadline` | **0 at every level**, including 320 |
+
+Three hundred and twenty pods fit on ten nodes with none of them queuing. CPU
+was the tight axis at 82%; memory and pod slots were never close. That margin is
+not wide: pods asking 120m instead of 100m would start queuing at this level.
+
+#### The submit phase, and why the earlier number was wrong
+
+An earlier run submitted each level with one `kubectl apply -f` over a
+multi-document file, which creates pods **one at a time**. It measured 0.53s per
+pod, flat from level 10 to level 320, and that number described the client
+rather than the apiserver (#1214).
+
+Submitting across 16 writers:
+
+| level | serial | parallel |
+|---|---|---|
+| 10 | 0.610 s/pod | **0.183** |
+| 40 | 0.551 | **0.105** |
+| 320 | 0.530 | **0.082** |
+| batch wall at 320 | 169.5 s | **26.2 s** |
+
+Per-pod cost FALLS as the batch grows, which is fixed cost amortizing across
+writers, and nothing in the ladder walls.
+
+#### The levels above 40 did not exist before this run
+
+The serial submission took 169s at level 320 while each pod lived 20s, so the
+first pods were dead before the last were created. The `start` phase collected
+exactly **38 observations at levels 40, 80, 160 and 320** — the size of the
+steady-state window, not the level. The nominal ladder was really
+`10/20/40/40/40/40`.
+
+`peak_concurrency_observed` exists so that can never again be invisible:
+
+```
+level 320 peak_concurrency_observed 320 of 320 nominal
+```
+
+All six levels reported full coexistence, and `start` sample counts now track the
+level (320 of 320) instead of flatlining at 38.
+
+#### What this run still cannot see
+
+- **The `dispatch` phase.** `--k8s-only` has no leoflow in it, so the scheduler
+  tick is ABSENT rather than fast. Three of four candidate ceilings can be
+  ranked; the fourth needs a control plane.
+- **`schedule` and `start` are quantized.** Kubernetes timestamps are
+  whole-second, and both phases resolve to 0 or to 1-versus-2. The runner reports
+  `resolution=UNRELIABLE` for them, which is honest and also means they cannot
+  rank anything here.
+- **`pull` after the first level.** The kubelet caches, so later levels measure
+  nothing. `--cold-pull` exists for that and was not used.
+- **Level 10's `start` series is 3 of 10.** The readiness gate counts pods in
+  `Pending` only, and a pod pulling an image reports `ContainerCreating`, so at
+  the smallest level collection raced the cold pull. Higher levels take long
+  enough to submit that the race disappears. The low-level samples are thin for
+  that reason and not for a reason about leoflow.
+- **These pods do nothing.** Each requests 100m and sleeps. This measures the
+  DISPATCH path, not the cost of work, so 320 here says nothing about 320 real
+  tasks with an engine inside them.
+
+One run is one sample of one afternoon on shared hardware. Two runs that
+disagree would be a finding; this is a reading.
 
 ### Run record: `netpol`, 2026-09-20, GKE Dataplane V2
 

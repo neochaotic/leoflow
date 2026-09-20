@@ -714,9 +714,14 @@ jobs:
           # merge-base must be present). checkout + gate always run; the heavy
           # steps are guarded, so this job always reports its (required) check.
           fetch-depth: 0
-      # Docs/tooling-only PRs validate nothing here; skip the ~40-min k3d run but
-      # keep reporting this required check. Computes the base..head diff and runs
-      # the heavy steps only when a non-docs/spec/load-test/website/markdown file changed.
+      # Docs/tooling-only PRs validate nothing here; skip the k3d run but keep
+      # reporting this required check. Computes the base..head diff and runs the
+      # heavy steps only when a file outside the allowlist changed.
+      #
+      # .changes/ is in the allowlist because a changelog fragment is inert data
+      # that only the release cut reads. Every PR carries one now, including the
+      # docs-only ones this gate exists to spare, so leaving it out would have
+      # made the skip unreachable for exactly those.
       - name: Gate heavy E2E on code changes
         id: gate
         run: |
@@ -735,7 +740,7 @@ jobs:
           git fetch origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
           FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
           echo "Changed files:"; echo "$FILES"
-          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|website/|.*\.md$)'; then
+          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|website/|\.changes/|.*\.md$)'; then
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "docs/tooling-only change — skipping heavy k3d E2E."
           else
@@ -807,9 +812,14 @@ jobs:
           # merge-base must be present). checkout + gate always run; the heavy
           # steps are guarded, so this job always reports its (required) check.
           fetch-depth: 0
-      # Docs/tooling-only PRs validate nothing here; skip the ~40-min k3d run but
-      # keep reporting this required check. Computes the base..head diff and runs
-      # the heavy steps only when a non-docs/spec/load-test/website/markdown file changed.
+      # Docs/tooling-only PRs validate nothing here; skip the k3d run but keep
+      # reporting this required check. Computes the base..head diff and runs the
+      # heavy steps only when a file outside the allowlist changed.
+      #
+      # .changes/ is in the allowlist because a changelog fragment is inert data
+      # that only the release cut reads. Every PR carries one now, including the
+      # docs-only ones this gate exists to spare, so leaving it out would have
+      # made the skip unreachable for exactly those.
       - name: Gate heavy E2E on code changes
         id: gate
         run: |
@@ -828,7 +838,7 @@ jobs:
           git fetch origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
           FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
           echo "Changed files:"; echo "$FILES"
-          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|website/|.*\.md$)'; then
+          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|website/|\.changes/|.*\.md$)'; then
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "docs/tooling-only change — skipping heavy k3d E2E."
           else
@@ -897,9 +907,14 @@ jobs:
           # merge-base must be present). checkout + gate always run; the heavy
           # steps are guarded, so this job always reports its (required) check.
           fetch-depth: 0
-      # Docs/tooling-only PRs validate nothing here; skip the ~40-min k3d run but
-      # keep reporting this required check. Computes the base..head diff and runs
-      # the heavy steps only when a non-docs/spec/load-test/website/markdown file changed.
+      # Docs/tooling-only PRs validate nothing here; skip the k3d run but keep
+      # reporting this required check. Computes the base..head diff and runs the
+      # heavy steps only when a file outside the allowlist changed.
+      #
+      # .changes/ is in the allowlist because a changelog fragment is inert data
+      # that only the release cut reads. Every PR carries one now, including the
+      # docs-only ones this gate exists to spare, so leaving it out would have
+      # made the skip unreachable for exactly those.
       - name: Gate heavy E2E on code changes
         id: gate
         run: |
@@ -918,7 +933,7 @@ jobs:
           git fetch origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
           FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
           echo "Changed files:"; echo "$FILES"
-          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|website/|.*\.md$)'; then
+          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|website/|\.changes/|.*\.md$)'; then
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "docs/tooling-only change — skipping heavy k3d E2E."
           else
@@ -1037,9 +1052,14 @@ jobs:
           # merge-base must be present). checkout + gate always run; the heavy
           # steps are guarded, so this job always reports its (required) check.
           fetch-depth: 0
-      # Docs/tooling-only PRs validate nothing here; skip the ~40-min k3d run but
-      # keep reporting this required check. Computes the base..head diff and runs
-      # the heavy steps only when a non-docs/spec/load-test/website/markdown file changed.
+      # Docs/tooling-only PRs validate nothing here; skip the k3d run but keep
+      # reporting this required check. Computes the base..head diff and runs the
+      # heavy steps only when a file outside the allowlist changed.
+      #
+      # .changes/ is in the allowlist because a changelog fragment is inert data
+      # that only the release cut reads. Every PR carries one now, including the
+      # docs-only ones this gate exists to spare, so leaving it out would have
+      # made the skip unreachable for exactly those.
       - name: Gate heavy E2E on code changes
         id: gate
         run: |
@@ -1058,7 +1078,7 @@ jobs:
           git fetch origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
           FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
           echo "Changed files:"; echo "$FILES"
-          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|website/|.*\.md$)'; then
+          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|website/|\.changes/|.*\.md$)'; then
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "docs/tooling-only change — skipping heavy k3d E2E."
           else

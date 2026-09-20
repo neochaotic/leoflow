@@ -33,7 +33,7 @@ func TestResolveBaseImageDefaultsToPublishedBase(t *testing.T) {
 // config so a caller can always pin an explicit tag.
 func TestResolveBuildImageFlagWins(t *testing.T) {
 	cfg := &domain.LeoflowConfig{Registry: &domain.RegistryConfig{URL: "ghcr.io/acme", ImageName: "etl"}}
-	if got := resolveBuildImage("myreg/explicit:v1", cfg, "abc123"); got != "myreg/explicit:v1" {
+	if got := resolveBuildImage("myreg/explicit:v1", cfg, "abc123", ""); got != "myreg/explicit:v1" {
 		t.Errorf("resolveBuildImage() = %q, want the explicit flag value", got)
 	}
 }
@@ -42,7 +42,7 @@ func TestResolveBuildImageFlagWins(t *testing.T) {
 // registry block (url/image_name:version) when no --image flag is given.
 func TestResolveBuildImageFromRegistry(t *testing.T) {
 	cfg := &domain.LeoflowConfig{Registry: &domain.RegistryConfig{URL: "ghcr.io/acme", ImageName: "etl"}}
-	if got := resolveBuildImage("", cfg, "v1.2.3"); got != "ghcr.io/acme/etl:v1.2.3" {
+	if got := resolveBuildImage("", cfg, "v1.2.3", ""); got != "ghcr.io/acme/etl:v1.2.3" {
 		t.Errorf("resolveBuildImage() = %q, want ghcr.io/acme/etl:v1.2.3", got)
 	}
 }
@@ -51,7 +51,7 @@ func TestResolveBuildImageFromRegistry(t *testing.T) {
 // complete registry block the resolver returns "" so the caller can error.
 func TestResolveBuildImageEmptyWhenNothing(t *testing.T) {
 	cfg := &domain.LeoflowConfig{Registry: &domain.RegistryConfig{URL: "ghcr.io/acme"}}
-	if got := resolveBuildImage("", cfg, "v1"); got != "" {
+	if got := resolveBuildImage("", cfg, "v1", ""); got != "" {
 		t.Errorf("resolveBuildImage() = %q, want empty (image_name missing)", got)
 	}
 }
@@ -372,5 +372,48 @@ func TestGeneratedDockerfileMixedDeduplicatesSharedProjectDir(t *testing.T) {
 	}
 	if n := strings.Count(df, "COPY warehouse /home/leoflow/warehouse"); n != 1 {
 		t.Errorf("generatedDockerfile() emitted the shared project COPY %d times, want 1:\n%s", n, df)
+	}
+}
+
+// TestBuildAndDeployAgreeOnTheImageTag is the regression test for #1227.
+//
+// The build tagged with the DAG version unconditionally and never consulted
+// tag_strategy; deploy honored it. With `tag_strategy: git_sha` the build
+// pushed <image>:<version> and deploy went looking for <image>:<sha>, and the
+// error named the missing image rather than the disagreement, so it reads as a
+// failed push and sends the reader to check registry credentials.
+//
+// resolveImageTag was correct and had its own test the whole time. It just had
+// one caller. So this asserts the two paths AGREE rather than asserting either
+// one in isolation, which is the only assertion that would have caught it.
+func TestBuildAndDeployAgreeOnTheImageTag(t *testing.T) {
+	const (
+		version = "gcpexp1"
+		sha     = "e28574c"
+	)
+	for _, strategy := range []string{"git_sha", "git-sha", "version", "", "something-unknown"} {
+		cfg := &domain.LeoflowConfig{Registry: &domain.RegistryConfig{
+			URL: "us-central1-docker.pkg.dev/p/repo", ImageName: "gcp-probe", TagStrategy: strategy,
+		}}
+		built := resolveBuildImage("", cfg, version, sha)
+		deployed := deployImageRef(cfg, version, sha)
+		if built != deployed {
+			t.Errorf("tag_strategy %q: build pushes %q and deploy looks for %q; one artifact, two names",
+				strategy, built, deployed)
+		}
+	}
+
+	// And the strategy must actually be honored, not merely agreed upon: two
+	// paths that both ignore tag_strategy would satisfy the loop above.
+	cfg := &domain.LeoflowConfig{Registry: &domain.RegistryConfig{
+		URL: "r.io/p", ImageName: "img", TagStrategy: "git_sha",
+	}}
+	if got := resolveBuildImage("", cfg, version, sha); got != "r.io/p/img:"+sha {
+		t.Errorf("with tag_strategy git_sha the build tagged %q, want the sha", got)
+	}
+
+	// An explicit --image still wins over everything, which is the escape hatch.
+	if got := resolveBuildImage("pinned:1", cfg, version, sha); got != "pinned:1" {
+		t.Errorf("--image was overridden by the tag strategy: %q", got)
 	}
 }

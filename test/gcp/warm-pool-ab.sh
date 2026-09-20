@@ -389,6 +389,20 @@ PY
 
   rm -rf "$t"
 
+  # The runner must actually CALL run_experiment. It was defined and never
+  # invoked, and an unconditional refusal was the last statement in the file, so
+  # nothing ever reached the point of needing it. Remove the refusal and the
+  # script falls off its own end and exits 0 having created nothing, which is
+  # indistinguishable from a successful run.
+  #
+  # Checked by reading the file rather than by running it, because running it is
+  # the thing that costs money.
+  if grep -qE '^run_experiment$' "${BASH_SOURCE[0]}"; then
+    echo "  ok   the runner invokes run_experiment, so --execute reaches the cluster"
+  else
+    echo "  FAIL run_experiment is defined and never called; --execute would exit 0 having done nothing"; fail=1
+  fi
+
   [ "$fail" = "0" ] && { echo "warm-pool-ab self-test: ok"; return 0; }
   return 1
 }
@@ -785,3 +799,16 @@ fi
 # measurement. That is in test/gcp/README.md, next to the run records, and it
 # does not need to be enforced by refusing, because the cost of finding out is
 # one bounded cluster with a TTL on it.
+
+# And the call the refusal was standing in for.
+#
+# run_experiment was defined and never invoked: while the unconditional refusal
+# was the last statement in the file, nothing ever reached the point of needing
+# it, so its absence was invisible. Removing the refusal made the script fall
+# off its own end and exit 0 having created nothing, which looks exactly like
+# success.
+#
+# That is the second thing the stale guard was hiding, and the more dangerous
+# one: a runner that exits 0 without running is worse than one that refuses,
+# because a refusal says so.
+run_experiment

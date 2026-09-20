@@ -248,10 +248,20 @@ one that needs a control plane. It reports that phase as absent rather than as
 zero.
 
 **`warm-pool-ab.sh` has never run end to end**, and prints the banner saying so.
-It does NOT refuse to provision: without `--execute` it prints the plan and
-creates nothing, exactly like the other two, and with `--execute` it runs. This
-paragraph said otherwise for a while, which is worse than saying nothing, because
-the one question a reader brings to it is whether they can run the thing.
+
+This paragraph has now been wrong in both directions, which is worth recording
+next to what it currently says. It first said the runner "refuses to provision",
+and that was TRUE: an unconditional refusal sat after the `--execute` check, so
+the flag did nothing. I then "corrected" it to say the refusal did not exist,
+having read the `--execute` branch and not the line below it, and that correction
+shipped. The refusal is now removed, so the sentence is true for the first time,
+and it is true because the code changed rather than because the description got
+better.
+
+The refusal's own message is the reason it went: it said the DAG build-and-push
+step was not implemented, which was true when written and false by the time it
+was read. A guard whose stated reason has stopped being true is worse than no
+guard, because it is specific, so it is believed.
 
 The step it was missing is the same one `test/soak/warmpool-ab.sh` was missing:
 building and pushing the DAG image, without which every `trigger_and_wait` 404s

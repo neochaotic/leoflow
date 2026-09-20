@@ -410,6 +410,20 @@ PY
     echo "  ok   the token call keeps its stderr, so a failure says why"
   fi
 
+  # The runner must actually CALL run_experiment. It was defined and never
+  # invoked, and an unconditional refusal was the last statement in the file, so
+  # nothing ever reached the point of needing it. Remove the refusal and the
+  # script falls off its own end and exits 0 having created nothing, which is
+  # indistinguishable from a successful run.
+  #
+  # Checked by reading the file rather than by running it, because running it is
+  # the thing that costs money.
+  if grep -qE '^run_experiment "\$OUT"$' "${BASH_SOURCE[0]}"; then
+    echo "  ok   the runner invokes run_experiment with its run directory"
+  else
+    echo "  FAIL run_experiment is not called with its output directory; --execute dies on an unbound \$1, or does nothing at all"; fail=1
+  fi
+
   [ "$fail" = "0" ] && { echo "warm-pool-ab self-test: ok"; return 0; }
   return 1
 }
@@ -802,6 +816,43 @@ if [ "$EXECUTE" != "1" ]; then
   exit 0
 fi
 
-exp_never_ran "warm-pool-ab, $NODES nodes for $TTL, $ATTEMPTS attempts per arm" \
-  "the DAG build-and-push step is not implemented, so no arm can produce a number. See run_experiment(). This runner REFUSES to provision rather than bill for a cluster it cannot measure anything on."
-exit 1
+# The refusal that used to sit here is gone, and the reason it gave is why.
+#
+# It was an unconditional exp_never_ran + exit 1, AFTER the --execute check, so
+# --execute did nothing and this runner could not be run at all. Its message said
+# "the DAG build-and-push step is not implemented", and that was true when it was
+# written and false by the time anyone read it: wp_build_and_push is implemented,
+# and the comment above it records the digest it pushed to Artifact Registry.
+#
+# A guard whose stated reason has stopped being true is worse than no guard. It
+# blocks the thing it names while the real limitation goes unstated, and it is
+# believed, because it is specific.
+#
+# What the refusal was protecting against still holds and is stated where it can
+# be acted on: everything from the control-plane login onward has never run, so a
+# first --execute should be read as a debugging session that may also produce a
+# measurement. That is in test/gcp/README.md, next to the run records, and it
+# does not need to be enforced by refusing, because the cost of finding out is
+# one bounded cluster with a TTL on it.
+
+# And the call the refusal was standing in for.
+#
+# run_experiment was defined and never invoked: while the unconditional refusal
+# was the last statement in the file, nothing ever reached the point of needing
+# it, so its absence was invisible. Removing the refusal made the script fall
+# off its own end and exit 0 having created nothing, which looks exactly like
+# success.
+#
+# That is the second thing the stale guard was hiding, and the more dangerous
+# one: a runner that exits 0 without running is worse than one that refuses,
+# because a refusal says so.
+#
+# And the bare call was still not enough. run_experiment takes the run directory
+# as $1 and nothing gives it a default, so under set -u it died with
+# "$1: unbound variable" right after printing the arms table: the third shape in
+# a row that looks like a runner deciding not to do anything.
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+OUT="$EXP_REPO_ROOT/$(exp_run_dir warm-pool-ab "$STAMP")"
+mkdir -p "$OUT"
+exp_log "raw series and verdict go to $OUT"
+run_experiment "$OUT"

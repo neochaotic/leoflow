@@ -418,15 +418,31 @@ func (c *collector) cadence(ctx context.Context, s *sample, started time.Time) e
 	// scheduler actually created the run. Their difference is the lateness the
 	// operator would feel. Scheduled-only runs are counted so a manual trigger,
 	// which has no schedule to be late for, cannot flatter the number.
+	// The lateness filter excludes runs that were DUE before this monitor
+	// started, and it is not a convenience.
+	//
+	// A run whose logical_date precedes the observation window is late by
+	// however long the harness took to come up, which on a cold boot is minutes:
+	// the scheduler cannot create a run on time while it does not yet exist.
+	// Holding it responsible for that measures the harness starting, not the
+	// scheduler running.
+	//
+	// It turned the CI smoke red with 95 violations, all of them one DAG, all of
+	// them the 254 seconds that Lite's first boot spends provisioning a venv per
+	// DAG. On a weekend run the same runs are a rounding error and the defect is
+	// invisible; on a six-minute smoke they are the entire report.
+	//
+	// Runs due DURING the window are still judged, which is every run this
+	// monitor is in a position to have an opinion about.
 	const q = `
 SELECT d.dag_id,
        count(*),
        COALESCE(MAX(EXTRACT(EPOCH FROM (r.queued_at - r.logical_date)))
-                FILTER (WHERE r.trigger = 'scheduled'), 0)
+                FILTER (WHERE r.trigger = 'scheduled' AND r.logical_date >= $2), 0)
 FROM dag_runs r JOIN dags d ON d.id = r.dag_id
 WHERE r.queued_at >= now() - $1::interval
 GROUP BY d.dag_id`
-	rows, err := c.pool.Query(ctx, q, fmt.Sprintf("%d seconds", int(win.Seconds())+1))
+	rows, err := c.pool.Query(ctx, q, fmt.Sprintf("%d seconds", int(win.Seconds())+1), started)
 	if err != nil {
 		return fmt.Errorf("cadence: %w", err)
 	}

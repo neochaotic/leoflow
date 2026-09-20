@@ -271,6 +271,33 @@ STUB
 
   rm -rf "$dtmp"
 
+  # split_manifest, which is what makes the submission parallel. It has no
+  # cluster in it, so it is testable, and getting it wrong is silent: a splitter
+  # that drops documents submits fewer pods than the level names and every
+  # number downstream is computed against a level that never existed.
+  local stmp; stmp="$(mktemp -d)"
+  batch_manifest 7 25 busybox:1.36 > "$stmp/m.yaml"
+  _split_case() { # <name> <workers> <want files> <want total pods>
+    local name="$1" workers="$2" wantf="$3" wantp="$4" gotf gotp
+    rm -f "$stmp/c-"*.yaml
+    split_manifest "$stmp/m.yaml" "$stmp/c-" "$workers"
+    gotf="$(ls "$stmp/c-"*.yaml 2>/dev/null | wc -l | tr -d ' ')"
+    gotp="$(cat "$stmp/c-"*.yaml 2>/dev/null | grep -c '^kind: Pod')"
+    if [ "$gotf" = "$wantf" ] && [ "$gotp" = "$wantp" ]; then
+      echo "  ok   $name"
+    else
+      echo "  FAIL $name (files=$gotf want=$wantf, pods=$gotp want=$wantp)"; fail=1
+    fi
+  }
+  # THE case: every pod survives the split. A splitter that loses documents
+  # under-submits, and the level's own count is the only thing that would ever
+  # have noticed.
+  _split_case "25 pods across 4 workers keeps all 25"   4  4 25
+  _split_case "25 pods across 1 worker is just the file" 1  1 25
+  # More workers than pods must not produce empty files for kubectl to choke on.
+  _split_case "40 workers over 25 pods makes 25 files"  40 25 25
+  rm -rf "$stmp"
+
   [ "$fail" = "0" ] && { echo "pod-per-task self-test: ok"; return 0; }
   return 1
 }
@@ -301,6 +328,27 @@ spec:
 ---
 YAML
   done
+}
+
+# split_manifest fans one multi-document manifest out into <n> files, round
+# robin, so parallel writers each get an interleaved share rather than a
+# contiguous block. Round robin matters: contiguous blocks would have every
+# worker start on pods that land on the same nodes in the same order.
+split_manifest() { # <manifest> <prefix> <n>
+  python3 - "$1" "$2" "$3" <<'SPLIT'
+import sys
+src, prefix, n = sys.argv[1], sys.argv[2], int(sys.argv[3])
+docs = [d for d in open(src).read().split("---\n") if d.strip()]
+n = max(1, min(n, len(docs)))
+buckets = [[] for _ in range(n)]
+for i, d in enumerate(docs):
+    buckets[i % n].append(d)
+for i, b in enumerate(buckets):
+    if not b:
+        continue
+    with open("%s%02d.yaml" % (prefix, i), "w") as fh:
+        fh.write("---\n".join(b))
+SPLIT
 }
 
 # collect_level pulls the per-pod phase timings for one level out of the API and
@@ -364,13 +412,52 @@ run_level() { # <level> <count> <out dir>
   batch_manifest "$level" "$n" "$image" > "$out/manifest-L$level.yaml"
 
   # The submit phase, timed client-side with millisecond resolution. This is
-  # the ONLY phase not quantized to a second, and it is the API server signal:
-  # the time for the apiserver to accept N pod creates.
+  # the ONLY phase not quantized to a second.
+  #
+  # SUBMITTED IN PARALLEL, and that is not a speed optimization. A single
+  # `kubectl apply -f` over a multi-document file creates the pods ONE AT A
+  # TIME, and the first real run measured 0.53s per pod flat from level 10 to
+  # level 320. Two things followed, both fatal to what this phase claims to be
+  # (#1214):
+  #
+  #   - It measured the CLIENT's serial throughput, not the apiserver's ability
+  #     to absorb concurrent creates. A real API-server ceiling could not appear
+  #     in a number that never asked for concurrency.
+  #   - Level 320 took 169s to submit while each pod lives LOAD_SLEEP seconds.
+  #     The first pods were long dead before the last were created, so the
+  #     nominal ladder 10/20/40/80/160/320 was really 10/20/40/40/40/40, and no
+  #     level above 40 ever existed as a level.
+  #
+  # Chunked across SUBMIT_PARALLEL workers so the creates overlap. The wall time
+  # is still the whole batch, so the series remains "seconds per pod to get N
+  # pods accepted", now with N of them actually in flight.
+  local chunks="${SUBMIT_PARALLEL:-16}"
+  rm -f "$out/chunk-L$level-"*.yaml
+  split_manifest "$out/manifest-L$level.yaml" "$out/chunk-L$level-" "$chunks"
   t0="$(python3 -c 'import time;print(time.time())')"
-  kubectl apply -f "$out/manifest-L$level.yaml" >/dev/null
+  local c pids=""
+  for c in "$out/chunk-L$level-"*.yaml; do
+    kubectl apply -f "$c" >/dev/null 2>&1 &
+    pids="$pids $!"
+  done
+  for c in $pids; do wait "$c" || true; done
   t1="$(python3 -c 'import time;print(time.time())')"
   awk -v a="$t0" -v b="$t1" -v n="$n" 'BEGIN{printf "%.6f\n", (b-a)/n}' >> "$out/submit-L$level.series"
-  awk -v a="$t0" -v b="$t1" 'BEGIN{printf "level batch wall %.3fs\n", b-a}' >> "$out/facts.txt"
+  awk -v a="$t0" -v b="$t1" -v n="$n" -v p="$chunks" \
+    'BEGIN{printf "level batch wall %.3fs across %d parallel writers\n", b-a, p}' >> "$out/facts.txt"
+
+  # The concurrency that ACTUALLY existed, sampled right after submission.
+  # Recorded next to the nominal level because a report that says "level 320"
+  # when 40 pods coexisted is describing something that did not happen. Only
+  # non-terminal pods count: a Succeeded pod holds no CPU and is not
+  # concurrency, which is a thing this directory learned by measuring it live.
+  local live
+  live="$(kubectl -n "$TASK_NS" get pods -l "leoflow.io/level=$level" --no-headers 2>/dev/null \
+    | awk '$3!="Completed" && $3!="Succeeded" && $3!="Error"' | wc -l | tr -d ' ')"
+  printf 'level %s peak_concurrency_observed %s of %s nominal\n' "$level" "${live:-0}" "$n" >> "$out/facts.txt"
+  if [ "${live:-0}" -lt "$((n / 2))" ]; then
+    exp_warn "level $level: only ${live} of $n pods coexisted. The pods outlive submission by too little, so this level did not test the concurrency it names (#1214). Raise LOAD_SLEEP or SUBMIT_PARALLEL."
+  fi
 
   # Wait for the batch to reach a terminal-or-running state. A level that times
   # out is recorded as such: pods still Pending at the deadline are the finding,

@@ -162,10 +162,37 @@ forgotten_usd() { # <nodes> <machine> <spot 0|1>
 # than a neutral setting, and a node replacement there would look exactly like
 # node capacity saturating. The saturation runner records node ages for that
 # reason.
+# seed_nodes is how many nodes the cluster is CREATED with, which is not how
+# many it ends with.
+#
+# --max-run-duration is a node-pool flag applied after create, and applying it
+# RECREATES every node in the pool, one at a time. At ten nodes that took over
+# half an hour, outran gcloud's own operation wait, and left a window in which a
+# ten-node cluster existed with no expiry on it at all. That window is where
+# every guardrail here is weakest, because the node TTL is the only one that
+# survives this script being killed.
+#
+# So the pool is created with ONE node, the TTL goes on while there is one node
+# to recreate, and the rest are added afterwards by `clusters resize`. The nine
+# that arrive later are born with the expiry already in force.
+#
+# VERIFIED on a real cluster before this was written, because the whole change
+# rests on a claim about inheritance that the pool's own config does not prove.
+# leoflow-exp-provision-probe-09201213: created with 1 node, TTL 40m applied,
+# resized to 2, then both INSTANCES inspected (not the pool template):
+#
+#   gke-...-96hm  created 08:17:36 (before the TTL)  maxRunDuration 2400
+#   gke-...-zmrw  created 08:23:05 (by the resize)   maxRunDuration 2400
+#
+# If that had come back empty for the second node this change would have put the
+# guardrail on one node out of ten and removed it from the other nine, which is
+# categorically worse than the slow roll it replaces (#1207).
+seed_nodes() { [ "${NODES:-1}" -gt 1 ] && echo 1 || echo "${NODES:-1}"; }
+
 build_create_args() { # <cluster>
   CREATE_ARGS=(container clusters create "$1"
     --project "$PROJECT" --zone "$ZONE"
-    --num-nodes "$NODES" --machine-type "$MACHINE"
+    --num-nodes "$(seed_nodes)" --machine-type "$MACHINE"
     --release-channel regular
     --labels "purpose=leoflow-experiment,experiment=$EXPERIMENT,expires-after=$TTL")
   if [ "$SPOT" = "1" ]; then
@@ -356,6 +383,27 @@ self_test() {
 
   argv_self_test
 
+  # seed_nodes decides how many nodes exist while the pool still has no expiry,
+  # so it sizes the only window a killed script cannot protect. Cases rather
+  # than an eyeball, because the two obvious wrong spellings are both silent:
+  # seeding with $NODES restores the ten-node roll this change exists to remove,
+  # and seeding with 1 unconditionally turns a one-node run into a resize to
+  # itself.
+  local saved_nodes="$NODES"
+  NODES=10; [ "$(seed_nodes)" = "1" ] \
+    && echo "  ok   a ten-node run is created with one node, so the TTL rolls one node" \
+    || { echo "  FAIL a ten-node run does not seed with one node"; fail=1; }
+  NODES=1; [ "$(seed_nodes)" = "1" ] \
+    && echo "  ok   a one-node run seeds with one and needs no resize" \
+    || { echo "  FAIL a one-node run does not seed with one"; fail=1; }
+  NODES=2; [ "$(seed_nodes)" = "1" ] \
+    && echo "  ok   two nodes still seeds with one" \
+    || { echo "  FAIL two nodes does not seed with one"; fail=1; }
+  NODES=3; [ "$(seed_nodes)" != "3" ] \
+    && echo "  ok   the seed is never the target, so the TTL is never rolled across a full pool" \
+    || { echo "  FAIL the seed equals the target; the slow roll is back"; fail=1; }
+  NODES="$saved_nodes"
+
   case "$(usage)" in
     *"--experiment pod-per-task"*"--self-test"*) echo "  ok   -h still prints the usage block" ;;
     *) echo "  FAIL -h no longer prints the usage block; the header extraction has drifted"; fail=1 ;;
@@ -510,7 +558,39 @@ if [ -z "$APPLIED_TTL" ]; then
   die "node TTL not readable back; the cluster was deleted"
 fi
 
-ok "cluster up, and the node pool reports maxRunDuration=$APPLIED_TTL"
+ok "the node pool reports maxRunDuration=$APPLIED_TTL"
+
+# The rest of the nodes, added only now that the expiry is in force. A node
+# created here is born with it (see seed_nodes for the evidence), so the window
+# in which an unbounded node exists is the seed node's recreation and nothing
+# more.
+if [ "$(seed_nodes)" != "$NODES" ]; then
+  log "scaling $DEFAULT_POOL from $(seed_nodes) to $NODES, with the TTL already in force"
+  if ! gcloud container clusters resize "$CLUSTER" --project "$PROJECT" --zone "$ZONE" \
+         --num-nodes "$NODES" --quiet; then
+    warn "the resize failed; deleting rather than leaving a cluster nobody asked for"
+    "$(dirname "$0")/teardown.sh" "$CLUSTER" || die "DELETE $CLUSTER BY HAND NOW: gcloud container clusters delete $CLUSTER --zone $ZONE"
+    die "could not scale to $NODES nodes; the cluster was deleted"
+  fi
+
+  # Verify the INSTANCES, not the pool's template. The pool saying
+  # maxRunDuration and a running instance actually carrying an expiry are two
+  # different claims, and this directory has been bitten four times by exactly
+  # that gap between what a command accepts and what it does. If a node came up
+  # without the expiry, the guardrail is missing on that node and the cluster
+  # goes now.
+  unbounded="$(gcloud compute instances list --project "$PROJECT" \
+      --filter="name~gke-$CLUSTER AND zone:($ZONE)" \
+      --format='value(name,scheduling.maxRunDuration.seconds)' 2>/dev/null \
+    | awk -F'\t' '$2 == "" { print $1 }')"
+  if [ -n "$unbounded" ]; then
+    warn "these nodes carry NO expiry after the scale-up, so the TTL does not cover them:"
+    printf '    %s\n' $unbounded >&2
+    "$(dirname "$0")/teardown.sh" "$CLUSTER" || die "DELETE $CLUSTER BY HAND NOW: gcloud container clusters delete $CLUSTER --zone $ZONE"
+    die "nodes without an expiry after scale-up; the cluster was deleted"
+  fi
+  ok "$NODES nodes up, every one of them carrying the expiry"
+fi
 cat <<NEXT
 
   Delete it the moment you are done, do not wait for the TTL:

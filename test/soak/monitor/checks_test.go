@@ -731,3 +731,66 @@ func TestRunWedgeClearsTheBatterysOwnLongestDag(t *testing.T) {
 		t.Error("a run past the threshold was not reported; the fix removed the check rather than calibrating it")
 	}
 }
+
+// TestLeaderChurnCountsEventsNotSamples pins that a cumulative counter is
+// reported once per step-down and not once per sample thereafter.
+//
+// leoflow_scheduler_step_downs_total only goes up. Compared against a limit of
+// zero, the obvious check fires on every remaining sample of the run: a 15.7h
+// soak turned 15 real step-downs (#1199) into 5198 violations, which made one
+// finding 44% of the total and buried the two beside it. The condition is an
+// event; a count that is really the sample rate describes the monitor, not the
+// scheduler.
+//
+// Both directions are pinned. Under-reporting is the worse failure, so the
+// second half asserts that a LATER step-down is still reported after a quiet
+// stretch: a fix that only reported the first one would satisfy "not 5198".
+func TestLeaderChurnCountsEventsNotSamples(t *testing.T) {
+	c := newChecker(defaultOptions())
+
+	churn := func(vs []violation) int {
+		n := 0
+		for _, v := range vs {
+			if v.Check == "leader_churn" {
+				n++
+			}
+		}
+		return n
+	}
+
+	s := healthySample()
+	s.StepDowns = 0
+	if got := churn(c.Check(s)); got != 0 {
+		t.Fatalf("a scheduler that never stepped down reported %d leader_churn violations", got)
+	}
+
+	// First step-down: reported.
+	s.StepDowns = 1
+	if got := churn(c.Check(s)); got != 1 {
+		t.Fatalf("the first step-down reported %d times, want 1", got)
+	}
+	// The counter is cumulative, so it stays at 1 while nothing more happens.
+	// This is the sample that used to re-report forever.
+	for i := range 20 {
+		if got := churn(c.Check(s)); got != 0 {
+			t.Fatalf("sample %d re-reported a step-down that had already been counted; the violation total would become the sample rate", i+2)
+		}
+	}
+	// A NEW step-down must still be caught. Without this the "fix" is silence.
+	s.StepDowns = 2
+	if got := churn(c.Check(s)); got != 1 {
+		t.Fatalf("a second step-down reported %d times, want 1; a check that only ever reports the first one has stopped watching", got)
+	}
+	// And a jump of more than one between samples is still one report, which
+	// says how many.
+	s.StepDowns = 5
+	vs := c.Check(s)
+	if got := churn(vs); got != 1 {
+		t.Fatalf("a jump of three step-downs reported %d times, want 1", got)
+	}
+	for _, v := range vs {
+		if v.Check == "leader_churn" && !strings.Contains(v.Detail, "3 new") {
+			t.Fatalf("the violation does not say how many step-downs it covers: %q", v.Detail)
+		}
+	}
+}

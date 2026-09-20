@@ -51,6 +51,17 @@ type checker struct {
 	// unreachable counts CONSECUTIVE samples with no API. Reset on any reachable
 	// sample, so a blip during an injected restart does not accumulate.
 	unreachable int
+	// lastStepDowns is the previous sample's cumulative step-down counter, so
+	// leader_churn can report EVENTS instead of re-reporting a total.
+	//
+	// A monotonic counter compared against a limit of zero fires on every sample
+	// for the rest of the run once it has moved once. A 15.7h soak found a real
+	// bug (#1199) that stepped the leader down 15 times and reported it 5198
+	// times, which made one finding 44% of the run's violation total and buried
+	// the other two. The condition here is an EVENT, not a state, and a count
+	// that is really the sample rate tells a reader nothing about either.
+	lastStepDowns float64
+	seenStepDowns bool
 }
 
 func newChecker(o options) *checker {
@@ -194,10 +205,23 @@ func (c *checker) checkCorrectness(s sample, add addFunc) {
 			fmt.Sprintf("%d DAGs are failing to import; a DAG that stopped compiling stops producing runs and the cadence check would only notice later",
 				s.ImportErrors), float64(s.ImportErrors), 0)
 	}
+	// Reported per NEW step-down, not per sample on which the total is nonzero.
+	// See lastStepDowns: the counter is cumulative, so the obvious `> 0` fires
+	// forever after the first event and the violation count becomes the sample
+	// rate. Every step-down is still a violation and still fails the run; what
+	// changes is that fifteen of them are counted fifteen times.
 	if !math.IsNaN(float64(s.StepDowns)) && s.StepDowns > 0 {
-		add("leader_churn",
-			fmt.Sprintf("leoflow_scheduler_step_downs_total = %.0f in a single-process soak; nothing is contending for the lock, so a step-down means the leader lost it",
-				float64(s.StepDowns)), float64(s.StepDowns), 0)
+		cur := float64(s.StepDowns)
+		if !c.seenStepDowns || cur > c.lastStepDowns {
+			since := cur
+			if c.seenStepDowns {
+				since = cur - c.lastStepDowns
+			}
+			add("leader_churn",
+				fmt.Sprintf("%.0f new scheduler step-down(s) since the last sample (leoflow_scheduler_step_downs_total = %.0f) in a single-process soak; nothing is contending for the lock, so a step-down means the leader lost it",
+					since, cur), cur, 0)
+		}
+		c.lastStepDowns, c.seenStepDowns = cur, true
 	}
 	if !math.IsNaN(float64(s.Undispatchable)) && s.Undispatchable > 0 {
 		add("undispatchable_task",

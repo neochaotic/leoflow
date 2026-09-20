@@ -397,10 +397,10 @@ PY
   #
   # Checked by reading the file rather than by running it, because running it is
   # the thing that costs money.
-  if grep -qE '^run_experiment$' "${BASH_SOURCE[0]}"; then
-    echo "  ok   the runner invokes run_experiment, so --execute reaches the cluster"
+  if grep -qE '^run_experiment "\$OUT"$' "${BASH_SOURCE[0]}"; then
+    echo "  ok   the runner invokes run_experiment with its run directory"
   else
-    echo "  FAIL run_experiment is defined and never called; --execute would exit 0 having done nothing"; fail=1
+    echo "  FAIL run_experiment is not called with its output directory; --execute dies on an unbound \$1, or does nothing at all"; fail=1
   fi
 
   [ "$fail" = "0" ] && { echo "warm-pool-ab self-test: ok"; return 0; }
@@ -811,4 +811,13 @@ fi
 # That is the second thing the stale guard was hiding, and the more dangerous
 # one: a runner that exits 0 without running is worse than one that refuses,
 # because a refusal says so.
-run_experiment
+#
+# And the bare call was still not enough. run_experiment takes the run directory
+# as $1 and nothing gives it a default, so under set -u it died with
+# "$1: unbound variable" right after printing the arms table: the third shape in
+# a row that looks like a runner deciding not to do anything.
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+OUT="$EXP_REPO_ROOT/$(exp_run_dir warm-pool-ab "$STAMP")"
+mkdir -p "$OUT"
+exp_log "raw series and verdict go to $OUT"
+run_experiment "$OUT"

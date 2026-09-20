@@ -15,6 +15,8 @@ GOCYCLO_VERSION       ?= latest
 INEFFASSIGN_VERSION   ?= latest
 MISSPELL_VERSION      ?= latest
 OAPI_CODEGEN_VERSION  ?= v2.8.0
+# changie writes the per-PR changelog fragments (see .changie.yaml).
+CHANGIE_VERSION       ?= v1.24.0
 
 # ─── Pinned Airflow UI (see ADR 0017 / docs/ui-compatibility.md) ───
 AIRFLOW_UI_VERSION ?= 3.2.1
@@ -49,7 +51,7 @@ help: ## Show this help
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: setup
-setup: ## Install Go tools, Python parser, and the pre-commit hook
+setup: ## Install Go tools (incl. changie), Python parser, and the pre-commit hook
 	go mod download
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
@@ -58,6 +60,7 @@ setup: ## Install Go tools, Python parser, and the pre-commit hook
 	go install github.com/client9/misspell/cmd/misspell@$(MISSPELL_VERSION)
 	go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@$(MIGRATE_VERSION)
 	go install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
+	go install github.com/miniscruff/changie@$(CHANGIE_VERSION)
 	command -v python3 >/dev/null && pip install -e "./parser[dev]" && pip install -e ./runtime/python || echo "skip parser/runtime install (python3 not found)"
 	install -m 0755 scripts/pre-commit .git/hooks/pre-commit
 	@echo "setup complete"
@@ -249,6 +252,11 @@ lint: ## Run golangci-lint and ruff
 .PHONY: fmt
 fmt: ## Format Go code
 	gofmt -w .
+
+.PHONY: changelog
+changelog: ## Record this change as a CHANGELOG fragment (.changes/unreleased/), which never conflicts
+	@command -v changie >/dev/null || { echo "changie is not installed: brew install changie (or see https://changie.dev)"; exit 1; }
+	changie new
 
 .PHONY: reportcard
 reportcard: ## Verify the Go Report Card A+ floor (ADR 0012) with maintained tools

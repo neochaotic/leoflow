@@ -19,6 +19,7 @@ Closes #
 - [ ] No new dependency without justification; `make vuln` clean — [ADR 0014](https://neochaotic.github.io/leoflow/project/adrs/0014-supply-chain-security/)
 - [ ] Public `/api/v2/` surface unchanged, or Airflow 3.2.x compatibility preserved
 - [ ] Docs updated if behavior, flags, or config changed
+- [ ] Changelog recorded: `make changelog` writes `.changes/unreleased/<slug>.yaml` (one file per PR, so it never conflicts). No user-facing change? Apply the `skip-changelog` label instead.
 - [ ] All code, comments, and commit messages are in English
 - [ ] One logical change (no "and also…")
 

@@ -1,0 +1,50 @@
+# changie turns one CHANGELOG file that every pull request edits into one small
+# file per change, so two pull requests never touch the same bytes (#1200).
+#
+# WHY THIS EXISTS. Every entry went under a single `## [Unreleased]` heading in
+# CHANGELOG.md, so any two open PRs wrote the same lines and merging one made the
+# other DIRTY. On 2026-09-20 that serialized the queue for a whole day: each
+# rebase cost a full CI cycle, which in this repository is around fifty-five
+# checks including k3d end-to-end jobs. Worse, resolving those conflicts by hand
+# is how the Unreleased section ended up with five headings for three types, a
+# corruption no test could see because nothing checked the shape.
+#
+# WHAT CHANGIE OWNS AND WHAT IT DOES NOT. It owns `.changes/unreleased/` only.
+# CHANGELOG.md stays the published artifact at its current path, keeps all of its
+# history untouched, and is still assembled at release time:
+# scripts/changelog-fold.sh folds the pending fragments into `[Unreleased]`,
+# and scripts/cut-release.sh calls it before dating the section. Migrating years of hand-written entries into changie's
+# format would be a large, risky change that buys nothing: the conflicts are all
+# in the unreleased section, and that is the part this replaces.
+changesDir: .changes
+unreleasedDir: unreleased
+headerPath: ""
+changelogPath: CHANGELOG.md
+versionExt: md
+
+# The heading a batched version renders under. cut-release.sh inserts the
+# version line itself, so this template is the body only.
+versionFormat: ""
+kindFormat: '### {{.Kind}}'
+changeFormat: '- {{.Body}}'
+
+# Keep a Changelog's types, in its order. `Security` is kept even though it is
+# rarely used: a security fix filed as `Fixed` is a security fix nobody greps
+# for.
+#
+# These labels and their order are duplicated in scripts/changelog-fold.sh,
+# which has to emit the kinds in a fixed order without parsing YAML. A self-test
+# there reads this list and fails if the two drift.
+kinds:
+  - label: Added
+  - label: Changed
+  - label: Deprecated
+  - label: Removed
+  - label: Fixed
+  - label: Security
+
+# The body is free prose, same as the entries already in CHANGELOG.md. This
+# project writes several sentences that explain what broke and why it mattered,
+# not one-line summaries, and nothing here should push authors toward the latter.
+body:
+  format: ""

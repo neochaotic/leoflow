@@ -1,0 +1,3 @@
+kind: Changed
+body: "**Changelog entries are now one file per pull request.** `make changelog` (a wrapper around [changie](https://changie.dev)) writes `.changes/unreleased/<slug>.yaml`, and the release cut folds every pending fragment into `CHANGELOG.md` under `## [Unreleased]`. Before this, every open PR edited the same `## [Unreleased]` lines in one file: merging any one of them made the rest dirty, each rebase cost a full CI cycle of around fifty-five checks, and resolving those conflicts by keeping both sides is how the section came to hold five headings for three kinds. Two fragments are two different files and cannot conflict. Editing `CHANGELOG.md` by hand still satisfies the guard. (#1200)"
+time: 2026-09-20T18:30:00.000000000-03:00

@@ -38,6 +38,7 @@ type Flow struct {
 // with (a derived key). It returns an error if discovery fails, so a
 // misconfigured issuer is a boot failure rather than a per-login surprise.
 func NewFlow(ctx context.Context, cfg config.OIDCSection, hs256Secret string) (*Flow, error) {
+	ctx = gooidc.ClientContext(ctx, HTTPClient())
 	provider, err := gooidc.NewProvider(ctx, cfg.Issuer)
 	if err != nil {
 		return nil, fmt.Errorf("oidc discovery for %q: %w", cfg.Issuer, err)
@@ -115,6 +116,12 @@ func googleHostedDomain(cfg config.OIDCSection) string {
 // PKCE verifier and the client secret) and returns the raw ID token for
 // verification. A response without an id_token fails closed.
 func (f *Flow) Exchange(ctx context.Context, code, verifier string) (string, error) {
+	// The token endpoint is a third outbound call to the IdP, and oauth2 reads
+	// its client from the context under its OWN key, so go-oidc's ClientContext
+	// does not reach it. Without this the exchange runs on http.DefaultClient,
+	// which has no timeout, and the only bound on a token endpoint that accepts
+	// the connection and never answers is the browser giving up.
+	ctx = context.WithValue(ctx, oauth2.HTTPClient, HTTPClient())
 	tok, err := f.oauth.Exchange(ctx, code, oauth2.VerifierOption(verifier))
 	if err != nil {
 		return "", fmt.Errorf("oidc: code exchange: %w", err)

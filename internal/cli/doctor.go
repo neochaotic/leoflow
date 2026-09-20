@@ -51,6 +51,14 @@ func renderDoctor(w io.Writer, r setup.Report) {
 	p("leoflow doctor\n\n")
 	p("  platform      %s\n", plat)
 	p("  python 3.11+  %s\n", found(r.PythonAvailable, r.PythonPath, "no python3.11/3.12/3.13 on PATH; will download a relocatable CPython 3.11 on `leoflow setup`"))
+	// Said separately, because the line above answers a different question than
+	// the one the reader is about to act on. It reports what can PARSE a dag.py,
+	// where 3.12 and 3.13 qualify; `leoflow setup` resolves its interpreter with
+	// LookPath("python3.11") and nothing else, so a host with only 3.12 sees a
+	// green line and then a download it was not told about (#1224).
+	if r.PythonAvailable && r.Python311Path == "" {
+		p("                but `leoflow setup` needs python3.11 specifically and will download a managed CPython 3.11 (needs outbound network). Install python3.11 to avoid it.\n")
+	}
 	p("  docker        %s\n", found(r.Docker, "found", "not found"))
 	p("  k3d           %s\n", found(r.K3d, "found", "not found (fetched on demand for the k8s tier)"))
 	p("  kubectl       %s\n", found(r.Kubectl, "found", "not found (fetched on demand for the k8s tier)"))

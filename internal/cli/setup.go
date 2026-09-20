@@ -213,7 +213,13 @@ func runSetup(cmd *cobra.Command, workspaceFlag string, dryRun bool) error {
 	}
 
 	_, _ = fmt.Fprintf(out, "\n  workspace  %s\n  executor   %s\n  port       %d\n  admin      %s\n", lc.Workspace, lc.Executor, lc.Port, lc.AdminEmail) //nolint:errcheck // best-effort terminal output
-	if r.PythonAvailable {
+	if r.PythonAvailable && r.Python311Path == "" {
+		// The case the old message got wrong: a host Python that can parse but is
+		// not the one setup will use. Saying "using system 3.12" here and then
+		// downloading is the gap #1224 reported, and a dry run that misdescribes
+		// the real run is worse than no dry run.
+		_, _ = fmt.Fprintf(out, "  python     %s can parse DAGs, but setup needs python3.11 specifically\n             and will download a managed CPython 3.11 under ~/.leoflow/python (needs network)\n", r.PythonPath) //nolint:errcheck // best-effort terminal output
+	} else if r.PythonAvailable {
 		_, _ = fmt.Fprintf(out, "  python     using system %s\n", r.PythonPath) //nolint:errcheck // best-effort terminal output
 	} else {
 		_, _ = fmt.Fprintln(out, "  python     no python3.11/3.12/3.13 on PATH; will install a relocatable CPython 3.11 under ~/.leoflow/python") //nolint:errcheck // best-effort terminal output

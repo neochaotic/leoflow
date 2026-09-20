@@ -544,6 +544,30 @@ run_experiment() {
     --token "$token" --skip-build --yes --dag-version "$WP_DAG_VERSION" \
     || exp_die "registering the DAG failed; a trigger would 404, which is exactly the shape this runner exists to fix"
 
+  # An exploratory stop, for mapping what is left instead of discovering it one
+  # paid cluster at a time.
+  #
+  # Nine runs found eight real defects, each hidden behind the one before it, at
+  # a steady rate of one per cluster. This exists to break that rate: it holds
+  # the stack up long enough to inspect a LIVE control plane with the DAG
+  # registered, which is the state every remaining barrier lives in.
+  #
+  # BOUNDED, and the bound is not a formality. An unbounded pause is a forgotten
+  # cluster, which is the single outcome this whole directory is built to
+  # prevent. The node TTL is still the backstop underneath it, and the pause is
+  # deliberately far shorter than the TTL so the pause expires first.
+  if [ -n "${WP_PAUSE_AFTER_DEPLOY:-}" ]; then
+    local pause="${WP_PAUSE_SECONDS:-1200}"
+    exp_warn "PAUSING for ${pause}s with the stack up, at the operator's request."
+    exp_log "  cluster:  $EXP_CLUSTER"
+    exp_log "  api:      http://127.0.0.1:$api_port (port-forward is live)"
+    exp_log "  token:    $out/token.txt"
+    exp_log "  teardown is still armed; the node TTL is still the backstop."
+    printf '%s' "$token" > "$out/token.txt"
+    sleep "$pause"
+    exp_log "pause over, continuing"
+  fi
+
   # The arms, in the bracketed order, with A measured at both ends.
   local arm idx=0
   for arm in $RUN_ORDER; do

@@ -89,6 +89,28 @@ func (r execRunner) Run(ctx context.Context, argv, env []string, stdout, stderr 
 	cmd.WaitDelay = r.waitDelay
 
 	err := cmd.Run()
+
+	// Reap whatever the task left behind, on EVERY path out of Run and not only
+	// on cancellation.
+	//
+	// cmd.Cancel above is invoked by os/exec when the CONTEXT ends. A task that
+	// simply exits leaves its process group untouched, so a grandchild that
+	// outlived its parent keeps running. Under pod-per-task that is invisible:
+	// the agent exits, the container ends, the runtime reaps it.
+	//
+	// Under warm pools it is not. A WarmRunner serves attempt after attempt in
+	// one container ("a failed TASK is a normal outcome and never ends serve()"),
+	// so a survivor crosses into the NEXT attempt, holding the cgroup memory that
+	// attempt was sized for. In the worst case it causes an OOM and the kill
+	// lands on the innocent task that inherited the container (#1216).
+	//
+	// The scratch is already wiped between attempts (#728). Processes were not.
+	// ESRCH is the expected answer when nothing survived, and killProcessGroup
+	// treats it as "nothing to do" rather than as a failure.
+	if cmd.Process != nil {
+		_ = killProcessGroup(cmd.Process)
+	}
+
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		return exitErr.ExitCode(), nil

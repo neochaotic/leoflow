@@ -608,7 +608,12 @@ func (r *Runner) execute(ctx context.Context, argv, env []string, timeout time.D
 	start := time.Now()
 	emitTaskStarted(r.Sink)
 	emitTaskBoot(r.Sink, argv, env)
+	// The kernel's OOM-kill counter, either side of the run. A rise is PROOF the
+	// kernel killed something in this cgroup; the exit code alone cannot say so,
+	// because 137 is SIGKILL and an external kill looks identical (#1216).
+	oomBefore := readOOMKills()
 	exitCode, runErr := r.Cmd.Run(timeoutCtx, argv, env, stdout, stderr)
+	oomAfter := readOOMKills()
 	stdout.flush()
 	stderr.flush()
 	emitTaskEnded(r.Sink, exitCode, runErr, time.Since(start))
@@ -635,6 +640,22 @@ func (r *Runner) execute(ctx context.Context, argv, env []string, timeout time.D
 		if when, ok := r.readReschedule(); ok {
 			return r.reportReschedule(ctx, when)
 		}
+	}
+	// An OOM of the TASK is not visible to Kubernetes, so it cannot reach the
+	// reconciler's OOMKilled branch and would otherwise land here as a bare
+	// "task failed (exit 137)".
+	//
+	// The agent is the container's PID 1 and the task is its child, so the kernel
+	// kills the task and the agent survives to report: the container exits with
+	// the AGENT's status and is never marked OOMKilled. This is the only place
+	// that can tell the difference, because it is the only one that saw the
+	// cgroup counter on both sides of the run (#1216).
+	//
+	// Checked before the generic non-zero path, and only for a failure, so a task
+	// that survived an OOM elsewhere in its cgroup is not relabelled.
+	if (runErr != nil || exitCode != 0) && oomKilledBetween(oomBefore, oomAfter) {
+		msg := "out of memory: the kernel killed this task's process. Raise the task's memory limit (resources.limits.memory); if it uses an engine with its own memory budget, such as DuckDB, set that budget too, because it sizes itself from detected RAM and may not see the container's limit."
+		return r.failWithReason(ctx, exitCode, msg, msg)
 	}
 	if runErr != nil || exitCode != 0 {
 		// An ordinary non-zero exit stays UNCLASSIFIED: the record's own

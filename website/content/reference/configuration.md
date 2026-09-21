@@ -90,6 +90,22 @@ This matters more than for most images because it is inherited: a DAG image is
 built `FROM` this base, so pinning `base_image` freezes your DAG on whatever the
 base was on the day you pinned it.
 
+#### Which base you get when you do not pin one
+
+When `base_image` is unset, `leoflow compile --build` writes the `FROM` itself,
+and it chooses between two tag shapes based on the CLI you are running:
+
+- a **released** `leoflow` pins `leoflow-runtime:py<ver>-v<X.Y.Z>`, which is
+  immutable, so a compile from that release reproduces byte for byte (ADR 0003)
+- a **development** build, from source or a dirty tree, falls back to
+  `leoflow-runtime:py<ver>`, a line every release republishes
+
+So two people compiling the same project can end up on different bases if one
+runs a released CLI and the other runs one built from source. Setting
+`base_image` explicitly overrides both rules and is used verbatim. The full tag
+scheme for every published image is in
+[Published images](/reference/published-images/).
+
 ### Defaults
 
 Every field in `leoflow.yaml` is optional. Zero-valued fields are filled by

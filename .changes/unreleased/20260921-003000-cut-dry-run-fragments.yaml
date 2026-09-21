@@ -1,0 +1,10 @@
+kind: Fixed
+body: |-
+  **The release cut's dry run described a changelog it was no longer going to
+  produce.** On an rc it printed `changelog: unchanged`, which stopped being
+  true when the cut started folding the pending `.changes/unreleased/`
+  fragments into `[Unreleased]`. The plan now names how many fragments will be
+  folded and removed, on an rc and on a GA alike. A plan that understates what
+  a release will do is wrong in the one place someone reads before authorising
+  it.
+time: 2026-09-21T00:30:00.000000000-03:00

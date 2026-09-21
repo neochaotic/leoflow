@@ -847,10 +847,17 @@ main() {
 
   if [ "$dry" = 1 ]; then
     log "DRY RUN — plan only, no branch/commit/PR/tag:"
-    printf '  branch:        release/%s\n  tag:           %s\n  chart version: %s -> %s\n  kind:          %s\n  changelog:     %s\n' \
+    # The fragment count is part of the plan, not a detail. The cut CONSUMES
+    # .changes/unreleased/, on an rc as well as a GA, and a plan that says
+    # "unchanged" while two entries are about to move into the changelog is
+    # wrong in the one place someone reads before authorising a release.
+    local pending
+    pending="$(ls "$ROOT"/.changes/unreleased/*.yaml "$ROOT"/.changes/unreleased/*.yml 2>/dev/null | wc -l | tr -d ' ')"
+    printf '  branch:        release/%s\n  tag:           %s\n  chart version: %s -> %s\n  kind:          %s\n  fragments:     %s\n  changelog:     %s\n' \
       "$tag" "$tag" "$(read_chart_version)" "$cv" \
-      "$(is_rc "$version" && echo 'rc — keeps [Unreleased]' || echo 'GA — dates [Unreleased]')" \
-      "$(is_rc "$version" && echo 'unchanged' || echo "[Unreleased] -> [$cv] - $(date -u +%F)")"
+      "$(is_rc "$version" && echo 'rc, keeps [Unreleased]' || echo 'GA, dates [Unreleased]')" \
+      "$pending pending, folded into [Unreleased] and removed" \
+      "$(is_rc "$version" && echo "[Unreleased] gains the $pending folded entry(ies)" || echo "[Unreleased] + $pending folded -> [$cv] - $(date -u +%F)")"
     exit 0
   fi
 

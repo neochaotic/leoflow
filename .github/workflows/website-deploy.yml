@@ -206,7 +206,7 @@ jobs:
           fetch-depth: 1
 
       - name: Download every leg's built site
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: site-*
           path: artifacts

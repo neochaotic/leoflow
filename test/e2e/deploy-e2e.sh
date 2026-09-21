@@ -181,4 +181,92 @@ for try in 0 1 2; do
 done
 [ -n "$hlog" ] || fail "no 'hello' log shipped — the deployed image did not run"
 
-log "DEPLOY E2E passed — leoflow deploy built, pushed, pinned by digest, and the cluster ran it"
+# ---------------------------------------------------------------------------
+# The TWO-STEP path, with a non-default tag strategy.
+#
+# Everything above drives a single `leoflow deploy`, which compiles, builds,
+# pushes and registers in one process. That is one of the two ways this is used
+# and it is the one that cannot expose a disagreement, because only one tag
+# resolver ever runs.
+#
+# CI/CD uses the other way: build in one job, deploy in another with
+# --skip-build. There the build names the image and the deploy goes looking for
+# it, and if the two derive the tag by different rules the deploy fails with
+# "no such object" against an image that was pushed under another name. That is
+# exactly what happened (#1227), and it happened on a real cloud run rather than
+# here, because this file never separated the steps and never set a
+# tag_strategy: with the default the two rules agree by coincidence.
+#
+# So this second project sets `tag_strategy: git_sha` on purpose, and the two
+# commands are run separately. It asserts the deploy finds what the build
+# pushed, which no unit test can: comparing the two resolvers passes if both are
+# wrong in the same way, and only a real push and a real lookup rule that out.
+TWO_STEP_ID="deploydag2step"
+log "Two-step path: scaffolding $TWO_STEP_ID with tag_strategy: git_sha"
+"$ROOT/bin/leoflow" init "$WORKDIR/$TWO_STEP_ID" >/dev/null
+# Written out rather than copied from the first project. Copying its dag.py
+# brought DAG("deploydag") along, which does not match this project's dag_id,
+# and the parser rejects that pair. The first attempt did exactly that and died
+# in step 1, never reaching the two-step seam it exists to exercise.
+cat > "$WORKDIR/$TWO_STEP_ID/dag.py" <<PYDAG
+"""${TWO_STEP_ID}: the two-step build and deploy path."""
+from __future__ import annotations
+
+from airflow.sdk import DAG, task
+
+
+@task
+def hello() -> None:
+    print("hello from the two-step deploy e2e")
+
+
+with DAG("${TWO_STEP_ID}", schedule="@daily", catchup=False, tags=["deploy-e2e"]):
+    hello()
+PYDAG
+cat > "$WORKDIR/$TWO_STEP_ID/Dockerfile" <<DOCKER2
+FROM ${BASE_IMAGE}
+COPY dag.py /home/leoflow/dag.py
+ENV PYTHONPATH=/home/leoflow
+DOCKER2
+cat > "$WORKDIR/$TWO_STEP_ID/leoflow.yaml" <<YAML
+dag_id: ${TWO_STEP_ID}
+python_version: "${PY_VERSION}"
+build:
+  platforms:
+    - ${PLATFORM}
+registry:
+  url: ${REG_HOST}
+  image_name: ${TWO_STEP_ID}
+  tag_strategy: git_sha
+YAML
+
+# A dag-version that is deliberately NOT the git sha, so a build that ignores
+# tag_strategy pushes a different tag than a deploy that honors it. With the two
+# equal the bug is invisible, which is how it survived.
+TWO_STEP_VERSION="e2e-twostep-$(date +%s)"
+log "Step 1: compile --build --push (version $TWO_STEP_VERSION, strategy git_sha)"
+# Output captured and echoed on failure. "the two-step build failed" on its own
+# is the shape that cost real money elsewhere in this repo, where a fatal call
+# sent its stderr to /dev/null and the run reported that it failed without
+# reporting why.
+if ! "$ROOT/bin/leoflow" compile "$WORKDIR/$TWO_STEP_ID" \
+     --output "$WORKDIR/$TWO_STEP_ID/dag.json" \
+     --build --push --dag-version "$TWO_STEP_VERSION" > "$WORKDIR/twostep-build.log" 2>&1; then
+  sed 's/^/    /' "$WORKDIR/twostep-build.log" >&2
+  fail "the two-step build failed (its output is above)"
+fi
+grep -E 'naming to|Compiled' "$WORKDIR/twostep-build.log" | sed 's/^/    /' || true
+
+log "Step 2: deploy --skip-build, which must find the image step 1 pushed"
+if ! "$ROOT/bin/leoflow" deploy "$WORKDIR/$TWO_STEP_ID" --yes --config "$CFG" \
+     --skip-build --dag-version "$TWO_STEP_VERSION" > "$WORKDIR/twostep-deploy.log" 2>&1; then
+  sed 's/^/    /' "$WORKDIR/twostep-deploy.log" >&2
+  fail "deploy --skip-build could not find the image the build pushed; the two steps disagree about the tag (#1227)"
+fi
+
+TWO_STEP_IMG="$(jq -r '.image' "$WORKDIR/$TWO_STEP_ID/dag.json")"
+echo "$TWO_STEP_IMG" | grep -q "@sha256:" \
+  || fail "the two-step dag.json is not digest-pinned: $TWO_STEP_IMG"
+log "two-step registered image: $TWO_STEP_IMG"
+
+log "DEPLOY E2E passed: one-shot deploy and the two-step CI/CD path both built, pushed, pinned and ran"

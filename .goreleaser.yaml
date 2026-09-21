@@ -175,34 +175,18 @@ release:
   # prerelease suffix, but make it explicit.
   prerelease: auto
   name_template: "{{ .Tag }}"
-  header: |
-    ## Leoflow {{ .Tag }}
-
-    A `0.x` (pre-1.0) build — SemVer carries the maturity, there is no separate
-    alpha/beta, and the pre-alpha series ended at `v0.0.1` (ADR 0037). APIs and
-    on-disk shape may still evolve between minor versions; `-rc.N` tags are release
-    candidates gated by the E2E suite. Install **this exact release** with:
-
-    ```bash
-    curl -fsSL https://raw.githubusercontent.com/neochaotic/leoflow/{{ .Tag }}/install.sh | LEOFLOW_VERSION={{ .Tag }} sh
-    ```
-
-    > A bare `curl … | sh` installs the latest **stable** release (`/releases/latest`
-    > excludes pre-releases), so on a pre-release page it would NOT give you `{{ .Tag }}`.
-    > `LEOFLOW_VERSION` must sit on the **`sh`** side of the pipe (not `curl`) — a
-    > `VAR=x curl … | sh` prefix sets the var for `curl` only, so `install.sh` would
-    > not see it and would fall back to latest-stable.
-  footer: |
-    ---
-    Artifacts are checksummed (SHA-256) and the checksums file is cosign-signed
-    (keyless). Verify with `cosign verify-blob`.
+  # The body is composed by scripts/release-notes.sh and handed to GoReleaser
+  # with --release-notes, so no header, footer or generated changelog is
+  # configured here: --release-notes replaces all three, and config that no
+  # longer reaches the page is config someone will edit expecting it to.
+  #
+  # It used to be GoReleaser's commit list, and on a GA that list is empty by
+  # construction: a GA is cut from its rc, so the only commit between the two
+  # tags is the promotion. v0.4.7's page says one line while CHANGELOG.md holds
+  # 35 entries for it. The exclude filters were dead too, anchored as `^docs:`
+  # against commits that are all scoped (`docs(changelog):`).
 
 changelog:
-  use: github
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
-      - "merge conflict"
+  # Not generated: the notes come from CHANGELOG.md. The full commit list is a
+  # compare link in the footer instead of a filtered copy.
+  disable: true

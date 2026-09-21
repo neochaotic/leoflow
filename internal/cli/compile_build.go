@@ -110,14 +110,26 @@ func releaseBaseTag(v string) string {
 // derived from the registry block (url/image_name:version); a missing url or
 // image_name yields "" so the caller can fail with an actionable message rather
 // than building an untagged image.
-func resolveBuildImage(flagImage string, cfg *domain.LeoflowConfig, dagVersion string) string {
+func resolveBuildImage(flagImage string, cfg *domain.LeoflowConfig, dagVersion, gitSHA string) string {
 	if flagImage != "" {
 		return flagImage
 	}
 	if cfg.Registry == nil || cfg.Registry.URL == "" || cfg.Registry.ImageName == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s/%s:%s", strings.TrimRight(cfg.Registry.URL, "/"), cfg.Registry.ImageName, dagVersion)
+	// Through resolveImageTag, the SAME function deploy uses, because the build
+	// and the deploy must agree about which artifact this project is.
+	//
+	// This used to tag with dagVersion unconditionally and never consult
+	// TagStrategy. With `tag_strategy: git_sha` the build pushed
+	// <image>:<version> while deploy went looking for <image>:<sha>, and the
+	// error named the missing image rather than the disagreement, so it reads as
+	// a failed push and sends the reader to check registry credentials (#1227).
+	//
+	// resolveImageTag was correct and had its own test the whole time. It just
+	// had one caller.
+	tag := resolveImageTag(cfg.Registry.TagStrategy, dagVersion, gitSHA)
+	return composeImageRef(cfg.Registry.URL, cfg.Registry.ImageName, tag)
 }
 
 // generatedDockerfile renders the Dockerfile for a project that does not ship its

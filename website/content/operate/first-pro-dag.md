@@ -173,6 +173,41 @@ leoflow deploy --all        # every DAG in the workspace (best-effort; non-zero 
 leoflow deploy --skip-build # reuse the existing image (skip docker build/push); dag.json is still recompiled from leoflow.yaml/dag.py
 ```
 
+## Build in one CI job, deploy in another
+
+`leoflow deploy` builds, pushes and registers in one command, and that is the
+path to use when one machine does all three. A CI/CD pipeline usually splits
+them: a build job that produces the image, and a deploy job, often on a
+different runner with different credentials, that only registers it.
+
+```bash
+# build job
+leoflow compile . --output dag.json --build --push --dag-version "$VERSION"
+
+# deploy job, later, possibly elsewhere
+leoflow deploy . --skip-build --dag-version "$VERSION"
+```
+
+The two steps have to name the **same image**, and the name comes from
+`registry.tag_strategy` in `leoflow.yaml`. Pass the same `--dag-version` to
+both, and run both from the same commit when the strategy is `git_sha`.
+
+{{% alert title="Prefer tag_strategy: git_sha for a split pipeline" color="info" %}}
+With the default `version` strategy the tag is the DAG version label, which
+comes from `git describe`, so two runs of the same pipeline on the same commit
+produce the same tag and a rebuild silently replaces what is already in the
+registry. `git_sha` ties the tag to the commit instead, which is what makes a
+deploy reproducible and a rollback a matter of pointing at an older tag.
+
+Either way the artifact is re-pinned by digest after the push, so the tag is a
+convenience and not the integrity boundary.
+{{% /alert %}}
+
+If the deploy job reports that it cannot find the image the build job pushed,
+check `--dag-version` and the commit first. The error names the image it looked
+for, which reads like a failed push but is more often the two steps disagreeing
+about the tag.
+
 ## The complete path — your own DAG, yaml-driven
 
 {{% alert title="Not yet the default path" color="warning" %}}

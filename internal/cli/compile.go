@@ -126,7 +126,7 @@ func runCompile(cmd *cobra.Command, dir string, o compileOptions) error {
 	// registry block (url/image_name:version), so a yaml-driven build needs no
 	// flag. The resolved value flows into dag.json (via the parser) and the build,
 	// keeping the registered artifact and the built/pushed image in lockstep.
-	image := resolveBuildImage(o.image, cfg, o.dagVersion)
+	image := resolveBuildImage(o.image, cfg, o.dagVersion, gitSHA(cmdContext(cmd)))
 	if ierr := checkImageFlags(cmd, o.build, o.push, image); ierr != nil {
 		return ierr
 	}
@@ -173,7 +173,7 @@ func runDbtCompile(cmd *cobra.Command, dir string, o compileOptions, cfg *domain
 	if o.dagVersion == "" {
 		o.dagVersion = gitVersion(cmdContext(cmd))
 	}
-	image := resolveBuildImage(o.image, cfg, o.dagVersion)
+	image := resolveBuildImage(o.image, cfg, o.dagVersion, gitSHA(cmdContext(cmd)))
 	if ierr := checkImageFlags(cmd, o.build, o.push, image); ierr != nil {
 		return ierr
 	}

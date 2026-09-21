@@ -56,6 +56,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # ── The release body, from CHANGELOG.md rather than from the commits ──
+      # A GA is cut from its rc, so the only commit between the two tags is the
+      # promotion: GoReleaser's generated list made v0.4.7's page one line long
+      # while CHANGELOG.md held 35 entries for it. This composes the body from
+      # the section written for humans, and fails loudly rather than publishing
+      # an empty one, which is indistinguishable from a good release.
+      - name: Compose the release notes from CHANGELOG.md
+        env:
+          TAG: ${{ github.ref_name }}
+        run: bash scripts/release-notes.sh "$TAG" > "${RUNNER_TEMP}/release-notes.md"
+
       # ── GoReleaser handles the build, packaging, signing, and release ──
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
@@ -64,7 +75,7 @@ jobs:
           # silences the "using latest" warning and keeps releases reproducible
           # against a known major line (no surprise v3 jump).
           version: "~> v2"
-          args: release --clean
+          args: release --clean --release-notes=${{ runner.temp }}/release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

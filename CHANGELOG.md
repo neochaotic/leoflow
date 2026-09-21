@@ -6,6 +6,8 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-09-21
+
 ### Added
 
 - **The UI refresh interval is settable from the chart
@@ -124,6 +126,23 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   behind TLS, which is every chart install.
 
 ### Fixed
+
+- **A GA release page carried none of the release.** The body was generated
+  from the commits since the previous tag, and a GA is cut from its own release
+  candidate, so the only commit between the two is the promotion itself. The
+  v0.4.7 page said one line, `release: promote v0.4.7 GA`, while `CHANGELOG.md`
+  held 35 entries for that same version: everything written for a human to read
+  stayed in a file, and the page most people reach from GitHub showed nothing.
+
+  The body is now composed from the changelog section for the tag, so a release
+  page says what the release did. A candidate falls back to `[Unreleased]`,
+  which is where its entries are. The commits are still one click away, as a
+  compare link.
+
+  The generated list was also keeping noise it meant to drop: the filters were
+  anchored as `^docs:`, `^test:` and `^chore:`, and every commit in this
+  repository is scoped, as in `docs(changelog):`, so none of the three ever
+  matched anything.
 
 - **Building and deploying in separate steps could name the same image two
   different ways** (#1227). A project that sets `registry.tag_strategy:

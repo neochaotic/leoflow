@@ -724,29 +724,13 @@ jobs:
       # made the skip unreachable for exactly those.
       - name: Gate heavy E2E on code changes
         id: gate
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "Not a pull_request event — running heavy k3d E2E."
-            exit 0
-          fi
-          # Full fetch of the base, not --depth=1: the checkout above is fetch-depth 0,
-          # and a depth-1 fetch marks the base's CURRENT tip as a shallow boundary. The
-          # PR merge ref was cut against the base as it was when the run was queued, so
-          # whenever the base advances during the run (a merge landing), the shallow tip
-          # has no path back to the merge ref's parent and `...` fails with "no merge
-          # base" — and a rerun reuses the same merge ref, so it fails again.
-          git fetch origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
-          FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
-          echo "Changed files:"; echo "$FILES"
-          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|website/|\.changes/|.*\.md$)'; then
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "docs/tooling-only change — skipping heavy k3d E2E."
-          else
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "Code change detected — running heavy k3d E2E."
-          fi
+        env:
+          # Through the environment, not interpolated into the command text:
+          # ${{ }} is substituted before the shell sees it, and git refnames
+          # permit ';', '$(' and backticks.
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: bash scripts/ci-heavy-gate.sh "$EVENT_NAME" "$BASE_REF"
       - if: steps.gate.outputs.run == 'true'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -822,29 +806,13 @@ jobs:
       # made the skip unreachable for exactly those.
       - name: Gate heavy E2E on code changes
         id: gate
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "Not a pull_request event — running heavy k3d E2E."
-            exit 0
-          fi
-          # Full fetch of the base, not --depth=1: the checkout above is fetch-depth 0,
-          # and a depth-1 fetch marks the base's CURRENT tip as a shallow boundary. The
-          # PR merge ref was cut against the base as it was when the run was queued, so
-          # whenever the base advances during the run (a merge landing), the shallow tip
-          # has no path back to the merge ref's parent and `...` fails with "no merge
-          # base" — and a rerun reuses the same merge ref, so it fails again.
-          git fetch origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
-          FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
-          echo "Changed files:"; echo "$FILES"
-          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|website/|\.changes/|.*\.md$)'; then
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "docs/tooling-only change — skipping heavy k3d E2E."
-          else
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "Code change detected — running heavy k3d E2E."
-          fi
+        env:
+          # Through the environment, not interpolated into the command text:
+          # ${{ }} is substituted before the shell sees it, and git refnames
+          # permit ';', '$(' and backticks.
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: bash scripts/ci-heavy-gate.sh "$EVENT_NAME" "$BASE_REF"
       - if: steps.gate.outputs.run == 'true'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -917,29 +885,13 @@ jobs:
       # made the skip unreachable for exactly those.
       - name: Gate heavy E2E on code changes
         id: gate
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "Not a pull_request event — running heavy k3d E2E."
-            exit 0
-          fi
-          # Full fetch of the base, not --depth=1: the checkout above is fetch-depth 0,
-          # and a depth-1 fetch marks the base's CURRENT tip as a shallow boundary. The
-          # PR merge ref was cut against the base as it was when the run was queued, so
-          # whenever the base advances during the run (a merge landing), the shallow tip
-          # has no path back to the merge ref's parent and `...` fails with "no merge
-          # base" — and a rerun reuses the same merge ref, so it fails again.
-          git fetch origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
-          FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
-          echo "Changed files:"; echo "$FILES"
-          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|website/|\.changes/|.*\.md$)'; then
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "docs/tooling-only change — skipping heavy k3d E2E."
-          else
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "Code change detected — running heavy k3d E2E."
-          fi
+        env:
+          # Through the environment, not interpolated into the command text:
+          # ${{ }} is substituted before the shell sees it, and git refnames
+          # permit ';', '$(' and backticks.
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: bash scripts/ci-heavy-gate.sh "$EVENT_NAME" "$BASE_REF"
       - if: steps.gate.outputs.run == 'true'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -1062,29 +1014,13 @@ jobs:
       # made the skip unreachable for exactly those.
       - name: Gate heavy E2E on code changes
         id: gate
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "Not a pull_request event — running heavy k3d E2E."
-            exit 0
-          fi
-          # Full fetch of the base, not --depth=1: the checkout above is fetch-depth 0,
-          # and a depth-1 fetch marks the base's CURRENT tip as a shallow boundary. The
-          # PR merge ref was cut against the base as it was when the run was queued, so
-          # whenever the base advances during the run (a merge landing), the shallow tip
-          # has no path back to the merge ref's parent and `...` fails with "no merge
-          # base" — and a rerun reuses the same merge ref, so it fails again.
-          git fetch origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
-          FILES=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
-          echo "Changed files:"; echo "$FILES"
-          if [ -n "$FILES" ] && ! echo "$FILES" | grep -qvE '^(docs/|spec/|test/load/|website/|\.changes/|.*\.md$)'; then
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "docs/tooling-only change — skipping heavy k3d E2E."
-          else
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "Code change detected — running heavy k3d E2E."
-          fi
+        env:
+          # Through the environment, not interpolated into the command text:
+          # ${{ }} is substituted before the shell sees it, and git refnames
+          # permit ';', '$(' and backticks.
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: bash scripts/ci-heavy-gate.sh "$EVENT_NAME" "$BASE_REF"
       - if: steps.gate.outputs.run == 'true'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:

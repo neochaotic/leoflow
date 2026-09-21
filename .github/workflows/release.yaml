@@ -62,11 +62,6 @@ jobs:
       # while CHANGELOG.md held 35 entries for it. This composes the body from
       # the section written for humans, and fails loudly rather than publishing
       # an empty one, which is indistinguishable from a good release.
-      - name: Compose the release notes from CHANGELOG.md
-        env:
-          TAG: ${{ github.ref_name }}
-        run: bash scripts/release-notes.sh "$TAG" > "${RUNNER_TEMP}/release-notes.md"
-
       # ── GoReleaser handles the build, packaging, signing, and release ──
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
@@ -75,9 +70,46 @@ jobs:
           # silences the "using latest" warning and keeps releases reproducible
           # against a known major line (no surprise v3 jump).
           version: "~> v2"
-          args: release --clean --release-notes=${{ runner.temp }}/release-notes.md
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── The release body, and proof that it reached the page ──
+      # v0.4.8 shipped with an EMPTY body. The notes were composed correctly
+      # (the script emits 17 entries for that tag and its self-test passes),
+      # handed to GoReleaser as --release-notes, and never appeared. The build
+      # was green throughout, because nothing downstream ever looked at the
+      # published page.
+      #
+      # So the body is set with `gh release edit`, which is ours and not a flag
+      # whose behaviour depends on whether another pipe is enabled, and then it
+      # is READ BACK. Composing the right notes is not the goal; the goal is a
+      # page that carries them, and only the read-back can tell those apart.
+      - name: Set the release body from CHANGELOG.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          bash scripts/release-notes.sh "$TAG" > "${RUNNER_TEMP}/release-notes.md"
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --notes-file "${RUNNER_TEMP}/release-notes.md"
+
+      - name: Verify the published release body carries the changelog
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          body="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body)"
+          bytes=$(printf '%s' "$body" | wc -c | tr -d ' ')
+          entries=$(printf '%s' "$body" | grep -c '^- ' || true)
+          sections=$(printf '%s' "$body" | grep -c '^### ' || true)
+          echo "published body: ${bytes} bytes, ${entries} entries, ${sections} sections"
+          if [ "${bytes:-0}" -lt 200 ] || [ "${entries:-0}" -lt 1 ] || [ "${sections:-0}" -lt 1 ]; then
+            echo "::error::the published release body does not carry the changelog (${bytes} bytes, ${entries} entries, ${sections} sections)"
+            exit 1
+          fi
 
   # ── Build + push leoflow-migrate (golang-migrate + Leoflow migrations)
   # The Helm chart's migration Job (#34/#48) defaults to

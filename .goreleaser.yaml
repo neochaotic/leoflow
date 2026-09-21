@@ -175,10 +175,15 @@ release:
   # prerelease suffix, but make it explicit.
   prerelease: auto
   name_template: "{{ .Tag }}"
-  # The body is composed by scripts/release-notes.sh and handed to GoReleaser
-  # with --release-notes, so no header, footer or generated changelog is
-  # configured here: --release-notes replaces all three, and config that no
-  # longer reaches the page is config someone will edit expecting it to.
+  # The body is not set here. GoReleaser creates the release, and a workflow
+  # step then writes the body with `gh release edit` from
+  # scripts/release-notes.sh and reads it back to prove it landed.
+  #
+  # It WAS handed to GoReleaser as --release-notes, and v0.4.8 shipped with an
+  # empty page: the flag was accepted, the notes were correct, and nothing
+  # appeared. Rather than chase which pipe consumes the flag under which
+  # config, the body is now written by a command whose effect can be read back,
+  # and the read-back is what fails the release.
   #
   # It used to be GoReleaser's commit list, and on a GA that list is empty by
   # construction: a GA is cut from its rc, so the only commit between the two

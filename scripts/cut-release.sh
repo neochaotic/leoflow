@@ -77,6 +77,8 @@ valid_version() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; }
 
 self_test() {
   local fail=0
+  # The real checkout, captured before any case overrides ROOT with a fixture.
+  local REPO_ROOT="$ROOT"
   _eq() { [ "$1" = "$2" ] || { echo "FAIL: $3: '$1' != '$2'"; fail=1; }; }
   # flake_verdict: the three answers, and the one that used to be missing.
   _eq "$(flake_verdict 'Error: toomanyrequests: Rate exceeded')" "flake"   "rate limit is a flake"
@@ -203,9 +205,21 @@ self_test() {
   # release, silently.
   local vt; vt="$(mktemp -d)"
   _versions() { printf '%s' "$1" >"$vt/versions.json"; }
-  _promote() { ( ROOT="$vt" && mkdir -p "$vt/website/scripts/ci" && cp "$vt/versions.json" "$vt/website/scripts/ci/versions.json" && promote_docs_version "$1" >/dev/null && cat "$vt/website/scripts/ci/versions.json" ); }
+  # promote_docs_version now renders website/hugo.toml too, so the fixture
+  # carries the renderer and a block for it to rewrite. Without them the
+  # function correctly returns 1 and every case below would fail for the wrong
+  # reason.
+  _fixture_docs() {
+    # REPO_ROOT, not ROOT: the callers override ROOT to point at the fixture
+    # before calling this, so reading ROOT here copies the file from the very
+    # directory being populated.
+    mkdir -p "$1/website/scripts/ci"
+    cp "$REPO_ROOT/website/scripts/ci/render-version-config.py" "$1/website/scripts/ci/"
+    printf '%s\n' '[params]' '  [[params.versions]]' '    version = "seed"' '    url = "https://example.invalid/"' > "$1/website/hugo.toml"
+  }
+  _promote() { ( ROOT="$vt" && _fixture_docs "$vt" && cp "$vt/versions.json" "$vt/website/scripts/ci/versions.json" && promote_docs_version "$1" >/dev/null && cat "$vt/website/scripts/ci/versions.json" ); }
 
-  _versions '{"versions":[{"id":"latest","ref":"v1.0.0","subpath":"","label":"latest","archived":false},{"id":"v1.0.0","ref":"v1.0.0","subpath":"v1.0.0","label":"v1.0.0","archived":false}]}'
+  _versions '{"root_url":"https://example.invalid/","versions":[{"id":"latest","ref":"v1.0.0","subpath":"","label":"latest","archived":false},{"id":"v1.0.0","ref":"v1.0.0","subpath":"v1.0.0","label":"v1.0.0","archived":false}]}'
   local out; out="$(_promote v2.0.0)"
   _eq "$(printf '%s' "$out" | jq -r '.versions[] | select(.id=="latest") | .ref')" "v2.0.0" "docs root repointed at the new GA"
   _eq "$(printf '%s' "$out" | jq -r '.versions[] | select(.id=="v1.0.0") | .archived')" "true" "the superseded GA is archived"
@@ -219,7 +233,7 @@ self_test() {
 
   # The outgoing GA may have no archive leg yet — three of them do not, because
   # no cut has ever run this. One must be created rather than silently skipped.
-  _versions '{"versions":[{"id":"latest","ref":"v1.0.0","subpath":"","label":"latest","archived":false},{"id":"dev","ref":"","subpath":"dev","label":"dev","archived":false}]}'
+  _versions '{"root_url":"https://example.invalid/","versions":[{"id":"latest","ref":"v1.0.0","subpath":"","label":"latest","archived":false},{"id":"dev","ref":"","subpath":"dev","label":"dev","archived":false}]}'
   out="$(_promote v2.0.0)"
   _eq "$(printf '%s' "$out" | jq -r '.versions[] | select(.id=="v1.0.0") | .subpath')" "v1.0.0" "an archive leg is created for an outgoing GA that had none"
   _eq "$(printf '%s' "$out" | jq -r '.versions[] | select(.id=="dev") | .ref')" "" "the dev leg is untouched"
@@ -231,12 +245,12 @@ self_test() {
   # checks there is exactly one. With dev first, the archive leg landed BEFORE
   # latest, and array order is the version dropdown's order
   # (render-version-config.py emits one [[params.versions]] per entry, in order).
-  _versions '{"versions":[{"id":"dev","ref":"","subpath":"dev","label":"dev","archived":false},{"id":"latest","ref":"v1.0.0","subpath":"","label":"latest","archived":false}]}'
+  _versions '{"root_url":"https://example.invalid/","versions":[{"id":"dev","ref":"","subpath":"dev","label":"dev","archived":false},{"id":"latest","ref":"v1.0.0","subpath":"","label":"latest","archived":false}]}'
   out="$(_promote v2.0.0)"
   _eq "$(printf '%s' "$out" | jq -r '[.versions[].id] | join(",")')" "dev,latest,v1.0.0" "the new leg lands after latest even when latest is not first"
 
   # Re-running a cut must not archive the version it is promoting.
-  _versions '{"versions":[{"id":"latest","ref":"v2.0.0","subpath":"","label":"latest","archived":false}]}'
+  _versions '{"root_url":"https://example.invalid/","versions":[{"id":"latest","ref":"v2.0.0","subpath":"","label":"latest","archived":false}]}'
   out="$(_promote v2.0.0)"
   _eq "$(printf '%s' "$out" | jq -r '.versions[] | select(.id=="latest") | .ref')" "v2.0.0" "promoting the current root is a no-op"
 
@@ -270,8 +284,8 @@ self_test() {
   # what makes the cases above blind to an exit, and the caller has no subshell.
   # If this regresses, --self-test aborts here; the EXIT trap below names it.
   local pdrc reached=0 oroot="$ROOT"
-  _versions '{"versions":[{"id":"latest","ref":"v1.0.0","subpath":"","label":"latest"},{"id":"latest","ref":"v1.0.1","subpath":"","label":"latest"}]}'
-  mkdir -p "$vt/website/scripts/ci" && cp "$vt/versions.json" "$vt/website/scripts/ci/versions.json"
+  _versions '{"root_url":"https://example.invalid/","versions":[{"id":"latest","ref":"v1.0.0","subpath":"","label":"latest"},{"id":"latest","ref":"v1.0.1","subpath":"","label":"latest"}]}'
+  _fixture_docs "$vt" && cp "$vt/versions.json" "$vt/website/scripts/ci/versions.json"
   # >&3: the trap runs in the redirection context of the command that exited,
   # and that command carries >/dev/null 2>&1 to keep its warn out of the
   # transcript — so a plain echo here lands in /dev/null and the abort is silent
@@ -388,7 +402,9 @@ self_test() {
       git clone -q "$pp/origin" "$pp/wt" && cd "$pp/wt" &&
       git config user.email t@example.invalid && git config user.name tester &&
       mkdir -p website/scripts/ci &&
-      printf '{"versions":[{"id":"latest","ref":"%s","subpath":"","label":"latest","archived":false}]}\n' "$1" \
+      cp "$REPO_ROOT/website/scripts/ci/render-version-config.py" website/scripts/ci/ &&
+      printf '%s\n' '[params]' '  [[params.versions]]' '    version = "seed"' '    url = "https://example.invalid/"' > website/hugo.toml &&
+      printf '{"root_url":"https://example.invalid/","versions":[{"id":"latest","ref":"%s","subpath":"","label":"latest","archived":false}]}\n' "$1" \
         >website/scripts/ci/versions.json &&
       git add -A && git commit -qm base && git push -q origin main &&
       git checkout -q -b operator-branch
@@ -438,6 +454,34 @@ self_test() {
   _eq "$(git -C "$pp/origin" show refs/heads/docs/promote-v2.0.0:website/scripts/ci/versions.json 2>/dev/null | jq -r '.versions[] | select(.id=="latest") | .ref')" \
     "v2.0.0" "and what it pushed is the repointed root"
   rm -rf "$pp"
+
+  # promote_docs_version must leave BOTH version menus agreeing, which is the
+  # only thing that matters about it: it rewrote versions.json alone and the
+  # gate failed the docs promotion PR of every GA, so the release shipped with
+  # its documentation root on the previous version. Asserting on the GATE, not
+  # on file contents, is deliberate: the generator and the checker are then
+  # bound to each other and neither can drift alone.
+  local dv; dv="$(mktemp -d)"
+  mkdir -p "$dv/website/scripts/ci"
+  cp "$ROOT/website/scripts/ci/render-version-config.py" "$dv/website/scripts/ci/"
+  cat > "$dv/website/scripts/ci/versions.json" <<'JSON'
+{
+  "root_url": "https://example.invalid/leoflow/",
+  "versions": [
+    {"id": "latest", "ref": "v9.9.8", "subpath": "", "label": "v9.9.8 (latest)", "archived": false},
+    {"id": "dev", "ref": "", "subpath": "dev", "label": "dev (main, unreleased)", "archived": false}
+  ]
+}
+JSON
+  printf '%s\n' '[params]' '  [[params.versions]]' '    version = "v9.9.8 (latest)"' '    url = "https://example.invalid/leoflow/"' \
+    '  [[params.versions]]' '    version = "dev (main, unreleased)"' '    url = "https://example.invalid/leoflow/dev/"' > "$dv/website/hugo.toml"
+  ( ROOT="$dv"; promote_docs_version v9.9.9 >/dev/null 2>&1 )
+  local menu_rc=0
+  bash "$ROOT/scripts/check-docs-version-menu.sh" "$dv/website/scripts/ci/versions.json" "$dv/website/hugo.toml" >/dev/null 2>&1 || menu_rc=$?
+  _eq "$menu_rc" "0" "promote_docs_version leaves both version menus agreeing"
+  _eq "$(grep -c 'v9.9.9 (latest)' "$dv/website/hugo.toml")" "1" "the hugo fallback names the new release"
+  _eq "$(grep -c '^    version = "v9.9.8"$' "$dv/website/hugo.toml")" "1" "and keeps the superseded one as an archived leg"
+  rm -rf "$dv"
 
   if [ "$fail" = 0 ]; then echo "self-test: PASS"; else echo "self-test: FAIL"; return 1; fi
 }
@@ -648,13 +692,15 @@ promote_docs_pr() { # <tag>
   # --cached --quiet below is then TRUE, so the failure came back as the log
   # line "docs: root already serves <tag>". A flat lie, return 0, and a dirty
   # tree left behind. Check the exit.
-  git -C "$ROOT" add website/scripts/ci/versions.json || { warn "docs promotion: could not stage versions.json"; _restore "$orig"; return 0; }
+  # Both menus, or the promotion PR ships one and leaves the other dirty in the
+  # operator's tree, which is how the gate failed every GA (#1242).
+  git -C "$ROOT" add website/scripts/ci/versions.json website/hugo.toml || { warn "docs promotion: could not stage the version menus"; _restore "$orig"; return 0; }
   if git -C "$ROOT" diff --cached --quiet -- website/scripts/ci/versions.json; then log "docs: root already serves $tag"; _restore "$orig"; return 0; fi
-  git -C "$ROOT" commit -q -m "docs: publish $tag at the documentation root" -- website/scripts/ci/versions.json || { warn "docs promotion: commit failed"; _restore "$orig"; return 0; }
+  git -C "$ROOT" commit -q -m "docs: publish $tag at the documentation root" -- website/scripts/ci/versions.json website/hugo.toml || { warn "docs promotion: commit failed"; _restore "$orig"; return 0; }
   git push -u origin "$branch" -q || { warn "docs promotion: push failed — open the PR by hand from $branch"; _restore "$orig"; return 0; }
   gh pr create --repo "$REPO" --base main --head "$branch" --label skip-changelog \
     --title "docs: publish $tag at the documentation root" \
-    --body "Repoints website/scripts/ci/versions.json's \`latest\` leg at $tag and archives the one it replaces. Opened by cut-release.sh after the tag was pushed — the deploy checks the tag out, so this cannot ride in the prepare commit." >/dev/null || { warn "docs promotion: gh pr create failed"; _restore "$orig"; return 0; }
+    --body "Repoints website/scripts/ci/versions.json's \`latest\` leg at $tag, archives the one it replaces, and renders the matching \`[[params.versions]]\` block into website/hugo.toml so check-docs-version-menu.sh agrees. Opened by cut-release.sh after the tag was pushed, because the deploy checks the tag out, so this cannot ride in the prepare commit." >/dev/null || { warn "docs promotion: gh pr create failed"; _restore "$orig"; return 0; }
   pr="$(gh pr view "$branch" --json number -q .number 2>/dev/null)"
   log "docs promotion PR #$pr — waiting for CI"
   # Its own budget: wait_sha_green restarts the clock per call, so the default
@@ -723,7 +769,22 @@ promote_docs_version() { # <tag>
     )' "$f" >"$tmp" || { rm -f "$tmp"; warn "rewriting versions.json failed"; return 1; }
   mv "$tmp" "$f" || { rm -f "$tmp"; warn "could not replace versions.json"; return 1; }
   chmod 644 "$f" 2>/dev/null || true
-  log "docs: root now built from $tag (archived $prev)"
+
+  # The menu lives in TWO files, and this used to rewrite one. versions.json
+  # drives the published Pages tree; the [[params.versions]] block in
+  # website/hugo.toml is the fallback a plain `hugo` build uses.
+  # check-docs-version-menu.sh reconciles them, so leaving hugo.toml behind
+  # failed the docs promotion PR of every GA, and while that PR sat unmerged
+  # the release was published with its documentation root still serving the
+  # PREVIOUS GA. v0.4.8 shipped into exactly that state (#1242).
+  #
+  # Rendered by the same script that renders the Pages overlay, from the same
+  # manifest, so the fallback cannot drift from what is published.
+  python3 "$ROOT/website/scripts/ci/render-version-config.py" \
+    --versions-file "$f" --sync-hugo-config "$ROOT/website/hugo.toml" >/dev/null ||
+    { warn "could not sync website/hugo.toml from versions.json"; return 1; }
+
+  log "docs: root now built from $tag (archived $prev), both menus rendered"
 }
 
 read_chart_version() { awk '/^version:/{print $2; exit}' "$CHART"; }

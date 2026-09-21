@@ -25,7 +25,24 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # lives one directory over. test/gcp/provision.sh and test/gcp/teardown.sh both
 # shipped with a passing self-test that this loop could not see.
 found=0 failed=0
-for f in "$ROOT"/scripts/*.sh $(find "$ROOT/test" -name '*.sh' -type f 2>/dev/null | sort); do
+# Discovery asks git what belongs to the repository, rather than walking the
+# filesystem. It used to be a hand-kept pair of directories, scripts/ and test/,
+# and the comment above already tells what that costs; it happened again when a
+# self-tested helper landed in website/scripts/ci/ and this gate could not see
+# it, so the self-test ran nowhere (#1242).
+#
+# Walking the filesystem instead was worse. It picked up a whole second copy of
+# the repository under .claude/worktrees/ and a 28,000-file virtualenv under
+# tmp/, taking the gate from 21 files to 28,696 and tripling its CPU time, and
+# the fix for that would have been another exclusion list.
+#
+# `git ls-files` has neither problem: a new directory joins by existing, and
+# nothing ignored, untracked or vendored is ever walked.
+_selftest_candidates() { # <extension>
+	git -C "$ROOT" ls-files -z "*.$1" 2>/dev/null | tr '\0' '\n' | sed "s|^|$ROOT/|" | sort
+}
+
+for f in $(_selftest_candidates sh); do
 	grep -qE '^self_test\(\)' "$f" || continue
 	found=$((found + 1))
 	if out="$(bash "$f" --self-test 2>&1)"; then
@@ -46,7 +63,7 @@ done
 # and the Python loop kept its scripts/ glob, so a self-tested Python helper
 # under test/ was discovered by nobody and its gate existed only in its author's
 # head. That asymmetry is the whole failure mode this file exists to prevent.
-for f in "$ROOT"/scripts/*.py $(find "$ROOT/test" -name '*.py' -type f 2>/dev/null | sort); do
+for f in $(_selftest_candidates py); do
 	[ -f "$f" ] || continue
 	grep -qE '^def self_test\(' "$f" || continue
 	found=$((found + 1))

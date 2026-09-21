@@ -128,8 +128,11 @@ enableGitInfo = true
       enable = false
 
   [[params.versions]]
-    version = "v0.4.7 (latest)"
+    version = "v0.4.8 (latest)"
     url = "https://neochaotic.github.io/leoflow/"
+  [[params.versions]]
+    version = "v0.4.7"
+    url = "https://neochaotic.github.io/leoflow/v0.4.7/"
   [[params.versions]]
     version = "v0.4.6"
     url = "https://neochaotic.github.io/leoflow/v0.4.6/"

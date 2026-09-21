@@ -6,7 +6,96 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **The UI refresh interval is settable from the chart
+  (`ui.autoRefreshIntervalSeconds`).** It was reported that the Pro UI feels far
+  slower to update than Lite, and it does: Pro polls every 30s and Lite every 1s,
+  a thirty-fold difference. The setting to change it already existed and was
+  documented, and the chart modelled nothing, so a Helm operator could reach it
+  only through `extraEnv`, which hides the behavior from anyone reading the
+  chart.
+
+  The chart omits the variable entirely when unset rather than rendering an empty
+  one, so the server's default stays in charge and nobody goes looking in the
+  chart for a number the chart did not choose.
+
+  **This exposes the choice; it does not change the default.** Copying Lite's 1s
+  would multiply request and query load by thirty per open tab, and Lite can
+  afford that only because it is one person against a local database. Choosing a
+  better default needs the cost of one refresh cycle measured, which is tracked
+  in [#1196](https://github.com/neochaotic/leoflow/issues/1196) along with the
+  question of whether polling is the right mechanism at all.
+
+- **A long-running resilience soak battery (`test/soak/`).** The gates we had
+  answer a different question: `test/e2e/` proves a path works once, `test/load/`
+  measures one cost at one instant, and `chaos-runtime.sh` injects a fault and
+  checks the recovery. None told us whether a control plane that has been
+  dispatching since Friday is still dispatching on Monday, or whether the cost of
+  a tick had started tracking the size of the history table rather than the
+  active set.
+
+  `make soak` runs a realistic scheduled workload (six DAG projects spanning the
+  `python`, `bash` and `airflow_operator` task types, with DuckDB generating the
+  data volume) against a dedicated local Postgres and asserts ten invariants on
+  every sample: wedge thresholds on `queued`/`scheduled`/`running`, scheduler
+  health, run-creation cadence per DAG, leader churn, retry budget, archived-
+  attempt state, and terminal-run consistency. (The archived-attempt check is
+  cheap and holds, but it is not an at-most-once proof: see `test/soak/README.md`
+  section 1 for exactly what it can and cannot catch.) Evidence is written
+  continuously
+  (`samples.jsonl` fsynced per record, `summary.md` and `verdict.json` rewritten
+  atomically every sample), so a harness that is killed still leaves a current
+  report.
+
+  `make soak-selftest` proves the assertions can fail: it injects a real 300 s
+  Postgres outage while declaring a 45 s window for it, and the run must exit
+  exactly 1 with recorded violations (exit 2, a harness that never ran, is a
+  failure of the self test, not a pass). Nothing is faked and no threshold is
+  relaxed.
+
+  Everything runs locally and costs nothing: no cloud, no cluster, no paid
+  service, and no public HTTP endpoint anywhere in the workload (the operator leg
+  points at a loopback fixture server, and CI enforces that). Bounded by a
+  wall-clock ceiling, a disk budget with a clean stop, and a watchdog. Long runs
+  are scheduled locally via `test/soak/schedule/install.sh`; CI runs only a
+  6-minute harness smoke, for the cost reasons documented in
+  `test/soak/README.md`.
+
+- **`auth.session_cookie_insecure`** (default `false`), the one escape hatch the
+  fix above needs. `Secure` is now decided by the server rather than by the
+  page's `location.protocol`, and a browser refuses a `Secure` cookie from a
+  plain-http origin that is not loopback, so a deployment served over plain http
+  to a real hostname would otherwise have been upgraded into a sign-in page that
+  posts valid credentials, gets a `200`, and lands back on itself. It cannot be
+  derived from the request: behind a TLS-terminating ingress the server sees
+  plain http while the browser sees https, so request-derived `Secure` would
+  strip it from the deployment that most needs it. Operator-scoped, `WARN` at
+  boot while it is on, and no Helm value on purpose.
+
+- **`auth.oidc.auto_redirect` starts the flow instead of showing the sign-in
+  page.** Off by default. Where an edge proxy has already authenticated the
+  session, or SSO is the only way in, that page was a screen to acknowledge for
+  nothing; a comparable tool against the same identity provider lands the user
+  inside with no visible login step.
+
+  **Signing out reaches the page, not the flow.** `logoutHandler` redirected to
+  the bare sign-in URL, which with auto-redirect on is itself a redirect to the
+  identity provider. Our sign-out does not end the IdP session, so a user who
+  signed out would be signed straight back in and the button would appear to do
+  nothing, and the more reliable the SSO setup is, the more completely it fails.
+
+  It is **suppressed on a refused sign-on**, and that guard is the feature. A
+  denial answers a redirect back to the sign-in page, so redirecting it onward
+  would bounce every refusal straight back to the identity provider: an infinite
+  loop with no surface left to read the error on. It is also suppressed by
+  `?local=1`, so a break-glass account can reach the password form when the
+  identity provider is the thing that is broken, without an operator editing
+  values and rolling out to get back in.
+
 ### Changed
+
+- **Changelog entries are now one file per pull request.** `make changelog` (a wrapper around [changie](https://changie.dev)) writes `.changes/unreleased/<slug>.yaml`, and the release cut folds every pending fragment into `CHANGELOG.md` under `## [Unreleased]`. Before this, every open PR edited the same `## [Unreleased]` lines in one file: merging any one of them made the rest dirty, each rebase cost a full CI cycle of around fifty-five checks, and resolving those conflicts by keeping both sides is how the section came to hold five headings for three kinds. Two fragments are two different files and cannot conflict. Editing `CHANGELOG.md` by hand still satisfies the guard. (#1200)
 
 - **The documentation version menu says which release you are reading.** The
   current release now appears as `v0.4.7 (latest)` rather than `latest`, and the
@@ -35,6 +124,29 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   behind TLS, which is every chart install.
 
 ### Fixed
+
+- **Building and deploying in separate steps could name the same image two
+  different ways** (#1227). A project that sets `registry.tag_strategy:
+  git_sha` had its image pushed under the DAG version by `leoflow compile
+  --build --push`, while `leoflow deploy` looked for it under the commit SHA,
+  because the build never consulted the strategy and the deploy did.
+
+  This only shows up when the two commands run separately, which is the normal
+  CI/CD shape: build in one job, deploy in another with `--skip-build`. A single
+  `leoflow deploy`, which does both, was never affected. With the default
+  strategy the two rules happen to agree, so the failure needed a non-default
+  setting as well.
+
+  The error made it worse by pointing elsewhere. It named the image it could not
+  find rather than the disagreement, which reads as a failed push and sends you
+  to check registry credentials that were never the problem.
+- **The release cut's dry run described a changelog it was no longer going to
+  produce.** On an rc it printed `changelog: unchanged`, which stopped being
+  true when the cut started folding the pending `.changes/unreleased/`
+  fragments into `[Unreleased]`. The plan now names how many fragments will be
+  folded and removed, on an rc and on a GA alike. A plan that understates what
+  a release will do is wrong in the one place someone reads before authorising
+  it.
 
 - **The first-run check said the system Python was fine and then setup
   downloaded a different one** (#1224). `leoflow doctor` and `leoflow setup
@@ -163,93 +275,6 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reaches. A claim that is neither shape is refused as `tenant_claim_shape`, so
   the audit log separates a value we cannot read from a tenant that is not
   allowed.
-
-### Added
-
-- **The UI refresh interval is settable from the chart
-  (`ui.autoRefreshIntervalSeconds`).** It was reported that the Pro UI feels far
-  slower to update than Lite, and it does: Pro polls every 30s and Lite every 1s,
-  a thirty-fold difference. The setting to change it already existed and was
-  documented, and the chart modelled nothing, so a Helm operator could reach it
-  only through `extraEnv`, which hides the behavior from anyone reading the
-  chart.
-
-  The chart omits the variable entirely when unset rather than rendering an empty
-  one, so the server's default stays in charge and nobody goes looking in the
-  chart for a number the chart did not choose.
-
-  **This exposes the choice; it does not change the default.** Copying Lite's 1s
-  would multiply request and query load by thirty per open tab, and Lite can
-  afford that only because it is one person against a local database. Choosing a
-  better default needs the cost of one refresh cycle measured, which is tracked
-  in [#1196](https://github.com/neochaotic/leoflow/issues/1196) along with the
-  question of whether polling is the right mechanism at all.
-
-- **A long-running resilience soak battery (`test/soak/`).** The gates we had
-  answer a different question: `test/e2e/` proves a path works once, `test/load/`
-  measures one cost at one instant, and `chaos-runtime.sh` injects a fault and
-  checks the recovery. None told us whether a control plane that has been
-  dispatching since Friday is still dispatching on Monday, or whether the cost of
-  a tick had started tracking the size of the history table rather than the
-  active set.
-
-  `make soak` runs a realistic scheduled workload (six DAG projects spanning the
-  `python`, `bash` and `airflow_operator` task types, with DuckDB generating the
-  data volume) against a dedicated local Postgres and asserts ten invariants on
-  every sample: wedge thresholds on `queued`/`scheduled`/`running`, scheduler
-  health, run-creation cadence per DAG, leader churn, retry budget, archived-
-  attempt state, and terminal-run consistency. (The archived-attempt check is
-  cheap and holds, but it is not an at-most-once proof: see `test/soak/README.md`
-  section 1 for exactly what it can and cannot catch.) Evidence is written
-  continuously
-  (`samples.jsonl` fsynced per record, `summary.md` and `verdict.json` rewritten
-  atomically every sample), so a harness that is killed still leaves a current
-  report.
-
-  `make soak-selftest` proves the assertions can fail: it injects a real 300 s
-  Postgres outage while declaring a 45 s window for it, and the run must exit
-  exactly 1 with recorded violations (exit 2, a harness that never ran, is a
-  failure of the self test, not a pass). Nothing is faked and no threshold is
-  relaxed.
-
-  Everything runs locally and costs nothing: no cloud, no cluster, no paid
-  service, and no public HTTP endpoint anywhere in the workload (the operator leg
-  points at a loopback fixture server, and CI enforces that). Bounded by a
-  wall-clock ceiling, a disk budget with a clean stop, and a watchdog. Long runs
-  are scheduled locally via `test/soak/schedule/install.sh`; CI runs only a
-  6-minute harness smoke, for the cost reasons documented in
-  `test/soak/README.md`.
-
-- **`auth.session_cookie_insecure`** (default `false`), the one escape hatch the
-  fix above needs. `Secure` is now decided by the server rather than by the
-  page's `location.protocol`, and a browser refuses a `Secure` cookie from a
-  plain-http origin that is not loopback, so a deployment served over plain http
-  to a real hostname would otherwise have been upgraded into a sign-in page that
-  posts valid credentials, gets a `200`, and lands back on itself. It cannot be
-  derived from the request: behind a TLS-terminating ingress the server sees
-  plain http while the browser sees https, so request-derived `Secure` would
-  strip it from the deployment that most needs it. Operator-scoped, `WARN` at
-  boot while it is on, and no Helm value on purpose.
-
-- **`auth.oidc.auto_redirect` starts the flow instead of showing the sign-in
-  page.** Off by default. Where an edge proxy has already authenticated the
-  session, or SSO is the only way in, that page was a screen to acknowledge for
-  nothing; a comparable tool against the same identity provider lands the user
-  inside with no visible login step.
-
-  **Signing out reaches the page, not the flow.** `logoutHandler` redirected to
-  the bare sign-in URL, which with auto-redirect on is itself a redirect to the
-  identity provider. Our sign-out does not end the IdP session, so a user who
-  signed out would be signed straight back in and the button would appear to do
-  nothing, and the more reliable the SSO setup is, the more completely it fails.
-
-  It is **suppressed on a refused sign-on**, and that guard is the feature. A
-  denial answers a redirect back to the sign-in page, so redirecting it onward
-  would bounce every refusal straight back to the identity provider: an infinite
-  loop with no surface left to read the error on. It is also suppressed by
-  `?local=1`, so a break-glass account can reach the password form when the
-  identity provider is the thing that is broken, without an operator editing
-  values and rolling out to get back in.
 
 ## [0.4.7] - 2026-09-19
 
